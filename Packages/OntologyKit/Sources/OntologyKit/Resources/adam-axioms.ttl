@@ -1,0 +1,319 @@
+@prefix understood: <https://understood.app/ontology#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix adam: <https://understood.app/adam/> .
+
+# Adam Personal Axioms — extracted and reformatted from adam-beliefs.ttl, adam-beliefs-bundle.ttl, and knowledge/adam-beliefs.ttl
+# Focus: strongest, most repeated beliefs that constrain AI behavior (guardrails for prompts, decisions, recommendations)
+# Format: formal Axiom with antecedent → consequent where possible. Confidence and evidence based on repetition across sources.
+# These should be used to constrain AI: always surface pattern interrupts, prioritize systems/momentum/capture, avoid regret triggers, etc.
+
+#################################################################
+# Concepts (extracted and normalized from beliefs)
+#################################################################
+
+<https://understood.app/ontology/concept/context-without-conviction> a understood:Concept ;
+  understood:label "Context without conviction" .
+
+<https://understood.app/ontology/concept/regret> a understood:Concept ;
+  understood:label "Regret" .
+
+<https://understood.app/ontology/concept/potential-slipping-away> a understood:Concept ;
+  understood:label "Potential slipping away" .
+
+<https://understood.app/ontology/concept/capture-first> a understood:Concept ;
+  understood:label "Capture first" .
+
+<https://understood.app/ontology/concept/structural-edge> a understood:Concept ;
+  understood:label "Structural edge / system" .
+
+<https://understood.app/ontology/concept/task-only> a understood:Concept ;
+  understood:label "Task-only approach" .
+
+<https://understood.app/ontology/concept/compute-over-cleverness> a understood:Concept ;
+  understood:label "Compute over cleverness" .
+
+<https://understood.app/ontology/concept/handcrafted-solution> a understood:Concept ;
+  understood:label "Handcrafted solution" .
+
+<https://understood.app/ontology/concept/anticipatory-anxiety> a understood:Concept ;
+  understood:label "Anticipatory anxiety" .
+
+<https://understood.app/ontology/concept/feelings-as-facts> a understood:Concept ;
+  understood:label "Treating feelings as facts" .
+
+<https://understood.app/ontology/concept/engagement> a understood:Concept ;
+  understood:label "Engagement" .
+
+<https://understood.app/ontology/concept/separate-analysis> a understood:Concept ;
+  understood:label "Separate analysis" .
+
+<https://understood.app/ontology/concept/insight> a understood:Concept ;
+  understood:label "Insight" .
+
+<https://understood.app/ontology/concept/momentum> a understood:Concept ;
+  understood:label "Momentum" .
+
+<https://understood.app/ontology/concept/stagnation> a understood:Concept ;
+  understood:label "Stagnation" .
+
+<https://understood.app/ontology/concept/cognitive-load> a understood:Concept ;
+  understood:label "Cognitive load" .
+
+<https://understood.app/ontology/concept/space-creation> a understood:Concept ;
+  understood:label "Creating space" .
+
+<https://understood.app/ontology/concept/judgment-export> a understood:Concept ;
+  understood:label "Exporting judgment (writing it down)" .
+
+<https://understood.app/ontology/concept/compounding> a understood:Concept ;
+  understood:label "Compounding effect" .
+
+<https://understood.app/ontology/concept/what-i-can-control> a understood:Concept ;
+  understood:label "What I can control / work on" .
+
+<https://understood.app/ontology/concept/energy-backward> a understood:Concept ;
+  understood:label "Energy moving backward" .
+
+<https://understood.app/ontology/concept/three-part-delegation> a understood:Concept ;
+  understood:label "Three-part delegation format (Intent, PreferredApproach, DoneCondition)" .
+
+<https://understood.app/ontology/concept/articulation> a understood:Concept ;
+  understood:label "Articulating something well" .
+
+<https://understood.app/ontology/concept/relationship-to-thing> a understood:Concept ;
+  understood:label "Relationship to the thing" .
+
+<https://understood.app/ontology/concept/assignment-create-desire> a understood:Concept ;
+  understood:label "Assignment to create desire" .
+
+<https://understood.app/ontology/concept/strong-judgment> a understood:Concept ;
+  understood:label "Strong judgment" .
+
+<https://understood.app/ontology/concept/vocabulary-gap> a understood:Concept ;
+  understood:label "Vocabulary gap" .
+
+<https://understood.app/ontology/concept/decision-ability> a understood:Concept ;
+  understood:label "Decision ability" .
+
+#################################################################
+# Axioms (reformatted with antecedent/consequent where possible)
+# Selected strongest/repeated: regret, potential capture, system vs task, compute, anxiety, momentum, capture-first, engagement, focus-control, delegation, etc.
+# These constrain AI: surface these in reasoning, recommendations, and self-checks.
+#################################################################
+
+# 1. Strongest repeated: Regret from lack of conviction (appears in connections and knowledge triples)
+<https://understood.app/ontology/axiom/regret-from-context> a understood:Axiom ;
+  understood:axiomId "regret-from-context" ;
+  understood:antecedent <https://understood.app/ontology/concept/context-without-conviction> ;
+  understood:antecedentLabel "Context without conviction" ;
+  understood:consequent <https://understood.app/ontology/concept/regret> ;
+  understood:consequentLabel "Regret" ;
+  understood:relationshipType "causes" ;
+  understood:confidence "0.9"^^xsd:decimal ;
+  understood:evidenceCount 3 ;
+  understood:status "confirmed" ;
+  understood:scope "personal" ;
+  understood:provenanceSource "adam-beliefs" .
+
+# 2. Pattern interrupt: Capture potential that would slip away (conn-012, conn-005, repeated in knowledge)
+<https://understood.app/ontology/axiom/capture-potential> a understood:Axiom ;
+  understood:axiomId "capture-potential" ;
+  understood:antecedent <https://understood.app/ontology/concept/potential-slipping-away> ;
+  understood:antecedentLabel "Potential that would slip away" ;
+  understood:consequent <https://understood.app/ontology/concept/capture-first> ;
+  understood:consequentLabel "Prioritize capture first" ;
+  understood:relationshipType "implies" ;
+  understood:confidence "0.85"^^xsd:decimal ;
+  understood:evidenceCount 4 ;
+  understood:status "confirmed" ;
+  understood:scope "personal" ;
+  understood:provenanceSource "adam-beliefs" .
+
+# 3. System vs task (conn-013, repeated)
+<https://understood.app/ontology/axiom/system-over-task> a understood:Axiom ;
+  understood:axiomId "system-over-task" ;
+  understood:antecedent <https://understood.app/ontology/concept/task-only> ;
+  understood:antecedentLabel "Task-only approach" ;
+  understood:consequent <https://understood.app/ontology/concept/structural-edge> ;
+  understood:consequentLabel "Build system / structural edge instead" ;
+  understood:relationshipType "prefer" ;
+  understood:confidence "0.9"^^xsd:decimal ;
+  understood:evidenceCount 3 ;
+  understood:status "confirmed" ;
+  understood:scope "personal" ;
+  understood:provenanceSource "adam-beliefs" .
+
+# 4. Compute over cleverness (conn-006, knowledge)
+<https://understood.app/ontology/axiom/compute-over-cleverness> a understood:Axiom ;
+  understood:axiomId "compute-over-cleverness" ;
+  understood:antecedent <https://understood.app/ontology/concept/handcrafted-solution> ;
+  understood:antecedentLabel "Handcrafted / clever manual solution" ;
+  understood:consequent <https://understood.app/ontology/concept/compute-over-cleverness> ;
+  understood:consequentLabel "Prefer compute / automation / pre-built" ;
+  understood:relationshipType "prefer" ;
+  understood:confidence "0.85"^^xsd:decimal ;
+  understood:evidenceCount 3 ;
+  understood:status "confirmed" ;
+  understood:scope "personal" ;
+  understood:provenanceSource "adam-beliefs" .
+
+# 5. Anticipatory anxiety is a lie (conn-009, knowledge)
+<https://understood.app/ontology/axiom/anxiety-is-lie> a understood:Axiom ;
+  understood:axiomId "anxiety-is-lie" ;
+  understood:antecedent <https://understood.app/ontology/concept/anticipatory-anxiety> ;
+  understood:antecedentLabel "Anticipatory anxiety" ;
+  understood:consequent <https://understood.app/ontology/concept/feelings-as-facts> ;
+  understood:consequentLabel "Do not treat as facts; proceed anyway" ;
+  understood:relationshipType "is" ;
+  understood:confidence "0.8"^^xsd:decimal ;
+  understood:evidenceCount 2 ;
+  understood:status "confirmed" ;
+  understood:scope "personal" ;
+  understood:provenanceSource "adam-beliefs" .
+
+# 6. Insights from engagement (conn-014)
+<https://understood.app/ontology/axiom/insight-from-engagement> a understood:Axiom ;
+  understood:axiomId "insight-from-engagement" ;
+  understood:antecedent <https://understood.app/ontology/concept/engagement> ;
+  understood:antecedentLabel "Engagement / doing the work" ;
+  understood:consequent <https://understood.app/ontology/concept/insight> ;
+  understood:consequentLabel "Insight emerges" ;
+  understood:relationshipType "produces" ;
+  understood:confidence "0.8"^^xsd:decimal ;
+  understood:evidenceCount 2 ;
+  understood:status "confirmed" ;
+  understood:scope "personal" ;
+  understood:provenanceSource "adam-beliefs" .
+
+# 7. Momentum as metric (conn-018, knowledge)
+<https://understood.app/ontology/axiom/momentum-metric> a understood:Axiom ;
+  understood:axiomId "momentum-metric" ;
+  understood:antecedent <https://understood.app/ontology/concept/momentum> ;
+  understood:antecedentLabel "Momentum" ;
+  understood:consequent <https://understood.app/ontology/concept/stagnation> ;
+  understood:consequentLabel "Avoid stagnation; momentum is primary signal" ;
+  understood:relationshipType "value" ;
+  understood:confidence "0.9"^^xsd:decimal ;
+  understood:evidenceCount 3 ;
+  understood:status "confirmed" ;
+  understood:scope "personal" ;
+  understood:provenanceSource "adam-beliefs" .
+
+# 8. Capture first, structure later (conn-010, knowledge)
+<https://understood.app/ontology/axiom/capture-before-structure> a understood:Axiom ;
+  understood:axiomId "capture-before-structure" ;
+  understood:antecedent <https://understood.app/ontology/concept/capture-first> ;
+  understood:antecedentLabel "Capture first" ;
+  understood:consequent <https://understood.app/ontology/concept/structural-edge> ;
+  understood:consequentLabel "Defer structuring" ;
+  understood:relationshipType "precedes" ;
+  understood:confidence "0.85"^^xsd:decimal ;
+  understood:evidenceCount 3 ;
+  understood:status "confirmed" ;
+  understood:scope "personal" ;
+  understood:provenanceSource "adam-beliefs" .
+
+# 9. Focus on what I can (conn-017, knowledge)
+<https://understood.app/ontology/axiom/focus-on-control> a understood:Axiom ;
+  understood:axiomId "focus-on-control" ;
+  understood:antecedent <https://understood.app/ontology/concept/what-i-can-control> ;
+  understood:antecedentLabel "What I can control" ;
+  understood:consequent <https://understood.app/ontology/concept/energy-backward> ;
+  understood:consequentLabel "Avoid energy backward; defer rest / out of control" ;
+  understood:relationshipType "prefer" ;
+  understood:confidence "0.8"^^xsd:decimal ;
+  understood:evidenceCount 2 ;
+  understood:status "confirmed" ;
+  understood:scope "personal" ;
+  understood:provenanceSource "adam-beliefs" .
+
+# 10. Delegation format (conn-004, knowledge)
+<https://understood.app/ontology/axiom/delegation-three-parts> a understood:Axiom ;
+  understood:axiomId "delegation-three-parts" ;
+  understood:antecedent <https://understood.app/ontology/concept/three-part-delegation> ;
+  understood:antecedentLabel "Delegation task" ;
+  understood:consequent <https://understood.app/ontology/concept/three-part-delegation> ;
+  understood:consequentLabel "Always use three sentences: Intent + PreferredApproach + DoneCondition" ;
+  understood:relationshipType "requires" ;
+  understood:confidence "0.9"^^xsd:decimal ;
+  understood:evidenceCount 2 ;
+  understood:status "confirmed" ;
+  understood:scope "personal" ;
+  understood:provenanceSource "adam-beliefs" .
+
+# 11. Articulation changes relationship (conn-008)
+<https://understood.app/ontology/axiom/articulation-changes-relationship> a understood:Axiom ;
+  understood:axiomId "articulation-changes-relationship" ;
+  understood:antecedent <https://understood.app/ontology/concept/articulation> ;
+  understood:antecedentLabel "Articulating something well" ;
+  understood:consequent <https://understood.app/ontology/concept/relationship-to-thing> ;
+  understood:consequentLabel "Changes relationship to it" ;
+  understood:relationshipType "transforms" ;
+  understood:confidence "0.75"^^xsd:decimal ;
+  understood:evidenceCount 2 ;
+  understood:status "confirmed" ;
+  understood:scope "personal" ;
+  understood:provenanceSource "adam-beliefs" .
+
+# 12. Judgment vs vocabulary (conn-016, knowledge) — do not let vocab limit decisions
+<https://understood.app/ontology/axiom/judgment-over-vocab> a understood:Axiom ;
+  understood:axiomId "judgment-over-vocab" ;
+  understood:antecedent <https://understood.app/ontology/concept/vocabulary-gap> ;
+  understood:antecedentLabel "Vocabulary gap" ;
+  understood:consequent <https://understood.app/ontology/concept/decision-ability> ;
+  understood:consequentLabel "Strong judgment enables good decisions regardless of vocab" ;
+  understood:relationshipType "does-not-limit" ;
+  understood:confidence "0.8"^^xsd:decimal ;
+  understood:evidenceCount 2 ;
+  understood:status "confirmed" ;
+  understood:scope "personal" ;
+  understood:provenanceSource "adam-beliefs" .
+
+# 13. Creating space reduces load (conn-002)
+<https://understood.app/ontology/axiom/space-reduces-load> a understood:Axiom ;
+  understood:axiomId "space-reduces-load" ;
+  understood:antecedent <https://understood.app/ontology/concept/space-creation> ;
+  understood:antecedentLabel "Creating space" ;
+  understood:consequent <https://understood.app/ontology/concept/cognitive-load> ;
+  understood:consequentLabel "Reduces cognitive load" ;
+  understood:relationshipType "reduces" ;
+  understood:confidence "0.75"^^xsd:decimal ;
+  understood:evidenceCount 2 ;
+  understood:status "confirmed" ;
+  understood:scope "personal" ;
+  understood:provenanceSource "adam-beliefs" .
+
+# 14. Exporting judgment compounds (conn-007)
+<https://understood.app/ontology/axiom/export-judgment-compounds> a understood:Axiom ;
+  understood:axiomId "export-judgment-compounds" ;
+  understood:antecedent <https://understood.app/ontology/concept/judgment-export> ;
+  understood:antecedentLabel "Ten minutes exporting judgment" ;
+  understood:consequent <https://understood.app/ontology/concept/compounding> ;
+  understood:consequentLabel "Compounds over time" ;
+  understood:relationshipType "leads-to" ;
+  understood:confidence "0.8"^^xsd:decimal ;
+  understood:evidenceCount 2 ;
+  understood:status "confirmed" ;
+  understood:scope "personal" ;
+  understood:provenanceSource "adam-beliefs" .
+
+# 15. Assignment to create desire (conn-001) — core identity for product/AI work
+<https://understood.app/ontology/axiom/create-desire-assignment> a understood:Axiom ;
+  understood:axiomId "create-desire-assignment" ;
+  understood:antecedent <https://understood.app/ontology/concept/assignment-create-desire> ;
+  understood:antecedentLabel "My assignment" ;
+  understood:consequent <https://understood.app/ontology/concept/assignment-create-desire> ;
+  understood:consequentLabel "Create desire (in products, recommendations, systems)" ;
+  understood:relationshipType "is" ;
+  understood:confidence "0.85"^^xsd:decimal ;
+  understood:evidenceCount 2 ;
+  understood:status "confirmed" ;
+  understood:scope "personal" ;
+  understood:provenanceSource "adam-beliefs" .
+
+# Note: Additional supporting beliefs from knowledge/adam-beliefs.ttl (aptitude + strategy) included where they reinforce constraints:
+# - Adam designed for UnderstoodApp; success bar = AdamTaste / AdamNaturalReaction
+# - Avoids outworking; builds simplest system that compounds
+# - Equates writing with thinking
+# - Prefers visual/scannable formats, edit existing, example before definition
+# These axioms are the primary guardrails for AI behavior in this profile.

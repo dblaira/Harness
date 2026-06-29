@@ -1,0 +1,300 @@
+@prefix understood: <https://understood.app/ontology#> .
+@prefix recall:     <https://understood.app/ontology/project-recall#> .
+@prefix owl:        <http://www.w3.org/2002/07/owl#> .
+@prefix rdf:        <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:       <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:        <http://www.w3.org/2001/XMLSchema#> .
+@prefix dct:        <http://purl.org/dc/terms/> .
+@prefix skos:       <http://www.w3.org/2004/02/skos/core#> .
+
+#################################################################
+#  Understood Suite — formal ontology document
+#  Authority: Understood data · Structure: Re_Call engine · Surfaces: SAVY + iOS apps
+#  Only confirmed + personal axioms govern prompts, graph projection, and RDF truth.
+#################################################################
+
+<https://understood.app/ontology> a owl:Ontology ;
+  dct:title "Understood Suite Ontology"@en ;
+  dct:description "Shared knowledge graph vocabulary for Understood, Re_Call, and SAVY."@en ;
+  owl:versionInfo "suite-v1" ;
+  owl:imports <https://understood.app/ontology/project-recall> .
+
+#################################################################
+#  Classes
+#################################################################
+
+understood:Axiom a owl:Class ;
+  rdfs:label "Axiom"@en ;
+  rdfs:comment "Human-confirmed causal rule: antecedent → consequent with evidence."@en .
+
+understood:Concept a owl:Class ;
+  rdfs:label "Concept"@en ;
+  rdfs:comment "Named condition or outcome referenced by axioms."@en .
+
+understood:LifeDomain a owl:Class ;
+  rdfs:subClassOf skos:Concept ;
+  rdfs:label "Life Domain"@en ;
+  rdfs:comment "One of 13 closed analytic domains in the personal ontology."@en .
+
+understood:Connection a owl:Class ;
+  rdfs:label "Connection"@en ;
+  rdfs:comment "Durable belief/principle captured as entry_type=connection."@en .
+
+understood:Entry a owl:Class ;
+  rdfs:label "Entry"@en ;
+  rdfs:comment "Journal capture row that may support axioms."@en .
+
+understood:RelationPolicy a owl:Class ;
+  rdfs:label "Relation Policy"@en ;
+  rdfs:comment "Semantic contract for an axiom relationship type."@en .
+
+#################################################################
+#  Object properties
+#################################################################
+
+understood:antecedent a owl:ObjectProperty ;
+  rdfs:domain understood:Axiom ;
+  rdfs:range understood:Concept .
+
+understood:consequent a owl:ObjectProperty ;
+  rdfs:domain understood:Axiom ;
+  rdfs:range understood:Concept .
+
+understood:supportedBy a owl:ObjectProperty ;
+  rdfs:domain understood:Axiom ;
+  rdfs:range understood:Entry ;
+  rdfs:comment "Evidence entry that supports or informed the axiom."@en .
+
+understood:inLifeDomain a owl:ObjectProperty ;
+  rdfs:range understood:LifeDomain .
+
+understood:relationshipPolicy a owl:ObjectProperty ;
+  rdfs:domain understood:Axiom ;
+  rdfs:range understood:RelationPolicy .
+
+#################################################################
+#  Datatype properties
+#################################################################
+
+understood:axiomId a owl:DatatypeProperty ; rdfs:domain understood:Axiom ; rdfs:range xsd:string .
+understood:label a owl:DatatypeProperty ; rdfs:range xsd:string .
+understood:relationshipType a owl:DatatypeProperty ; rdfs:range xsd:string .
+understood:confidence a owl:DatatypeProperty ; rdfs:range xsd:decimal .
+understood:evidenceCount a owl:DatatypeProperty ; rdfs:range xsd:integer .
+understood:status a owl:DatatypeProperty ; rdfs:range xsd:string .
+understood:scope a owl:DatatypeProperty ; rdfs:range xsd:string .
+understood:provenanceSource a owl:DatatypeProperty ; rdfs:range xsd:string .
+understood:connectionType a owl:DatatypeProperty ; rdfs:domain understood:Connection ; rdfs:range xsd:string .
+
+# vocabularyVersion: adam-beliefs-connections-v1
+
+# suiteGraph: https://understood.app/graph/personal
+
+# exportedAt: 2026-06-20T19:41:47.502Z
+
+@prefix understood: <https://understood.app/ontology#> .
+
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+<https://understood.app/ontology/domain/exercise> a understood:LifeDomain, skos:Concept ;
+  understood:label "Exercise" ;
+  skos:prefLabel "Exercise" ;
+  skos:narrower <https://understood.app/ontology/concept/cardio> ;
+  skos:narrower <https://understood.app/ontology/concept/strength> ;
+  skos:narrower <https://understood.app/ontology/concept/mobility> .
+
+<https://understood.app/ontology/domain/sleep> a understood:LifeDomain, skos:Concept ;
+  understood:label "Sleep" ;
+  skos:prefLabel "Sleep" ;
+  skos:narrower <https://understood.app/ontology/concept/duration> ;
+  skos:narrower <https://understood.app/ontology/concept/quality> ;
+  skos:narrower <https://understood.app/ontology/concept/recovery> .
+
+<https://understood.app/ontology/domain/nutrition> a understood:LifeDomain, skos:Concept ;
+  understood:label "Nutrition" ;
+  skos:prefLabel "Nutrition" ;
+  skos:narrower <https://understood.app/ontology/concept/meals> ;
+  skos:narrower <https://understood.app/ontology/concept/hydration> ;
+  skos:narrower <https://understood.app/ontology/concept/supplements> .
+
+<https://understood.app/ontology/domain/ambition> a understood:LifeDomain, skos:Concept ;
+  understood:label "Ambition" ;
+  skos:prefLabel "Ambition" ;
+  skos:narrower <https://understood.app/ontology/concept/goals> ;
+  skos:narrower <https://understood.app/ontology/concept/standards> ;
+  skos:narrower <https://understood.app/ontology/concept/momentum> .
+
+<https://understood.app/ontology/domain/health> a understood:LifeDomain, skos:Concept ;
+  understood:label "Health" ;
+  skos:prefLabel "Health" ;
+  skos:narrower <https://understood.app/ontology/concept/symptoms> ;
+  skos:narrower <https://understood.app/ontology/concept/care> ;
+  skos:narrower <https://understood.app/ontology/concept/constraints> .
+
+<https://understood.app/ontology/domain/work> a understood:LifeDomain, skos:Concept ;
+  understood:label "Work" ;
+  skos:prefLabel "Work" ;
+  skos:narrower <https://understood.app/ontology/concept/output> ;
+  skos:narrower <https://understood.app/ontology/concept/meetings> ;
+  skos:narrower <https://understood.app/ontology/concept/decisions> .
+
+<https://understood.app/ontology/domain/social> a understood:LifeDomain, skos:Concept ;
+  understood:label "Social" ;
+  skos:prefLabel "Social" ;
+  skos:narrower <https://understood.app/ontology/concept/family> ;
+  skos:narrower <https://understood.app/ontology/concept/friends> ;
+  skos:narrower <https://understood.app/ontology/concept/community> .
+
+<https://understood.app/ontology/domain/learning> a understood:LifeDomain, skos:Concept ;
+  understood:label "Learning" ;
+  skos:prefLabel "Learning" ;
+  skos:narrower <https://understood.app/ontology/concept/reading> ;
+  skos:narrower <https://understood.app/ontology/concept/practice> ;
+  skos:narrower <https://understood.app/ontology/concept/research> .
+
+<https://understood.app/ontology/domain/purchase> a understood:LifeDomain, skos:Concept ;
+  understood:label "Purchase" ;
+  skos:prefLabel "Purchase" ;
+  skos:narrower <https://understood.app/ontology/concept/needs> ;
+  skos:narrower <https://understood.app/ontology/concept/wants> ;
+  skos:narrower <https://understood.app/ontology/concept/subscriptions> .
+
+<https://understood.app/ontology/domain/belief> a understood:LifeDomain, skos:Concept ;
+  understood:label "Belief" ;
+  skos:prefLabel "Belief" ;
+  skos:narrower <https://understood.app/ontology/concept/principles> ;
+  skos:narrower <https://understood.app/ontology/concept/identity> ;
+  skos:narrower <https://understood.app/ontology/concept/worldview> .
+
+<https://understood.app/ontology/domain/affect> a understood:LifeDomain, skos:Concept ;
+  understood:label "Affect" ;
+  skos:prefLabel "Affect" ;
+  skos:narrower <https://understood.app/ontology/concept/mood> ;
+  skos:narrower <https://understood.app/ontology/concept/stress> ;
+  skos:narrower <https://understood.app/ontology/concept/energy> .
+
+<https://understood.app/ontology/domain/insight> a understood:LifeDomain, skos:Concept ;
+  understood:label "Insight" ;
+  skos:prefLabel "Insight" ;
+  skos:narrower <https://understood.app/ontology/concept/realization> ;
+  skos:narrower <https://understood.app/ontology/concept/pattern> ;
+  skos:narrower <https://understood.app/ontology/concept/decision> .
+
+<https://understood.app/ontology/domain/entertainment> a understood:LifeDomain, skos:Concept ;
+  understood:label "Entertainment" ;
+  skos:prefLabel "Entertainment" ;
+  skos:narrower <https://understood.app/ontology/concept/media> ;
+  skos:narrower <https://understood.app/ontology/concept/play> ;
+  skos:narrower <https://understood.app/ontology/concept/novelty> .
+
+<https://understood.app/ontology/connection/conn-001> a understood:Connection ;
+  understood:label "My assignment is to create desire" ;
+  understood:connectionType "process_anchor" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/learning> ;
+  .
+
+<https://understood.app/ontology/connection/conn-002> a understood:Connection ;
+  understood:label "Creating space reduces cognitive load" ;
+  understood:connectionType "validated_principle" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  .
+
+<https://understood.app/ontology/connection/conn-003> a understood:Connection ;
+  understood:label "What is context without conviction? Regret." ;
+  understood:connectionType "process_anchor" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  .
+
+<https://understood.app/ontology/connection/conn-004> a understood:Connection ;
+  understood:label "Delegation is three sentences" ;
+  understood:connectionType "process_anchor" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  .
+
+<https://understood.app/ontology/connection/conn-005> a understood:Connection ;
+  understood:label "Products fight potential slipping away" ;
+  understood:connectionType "validated_principle" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/learning> ;
+  .
+
+<https://understood.app/ontology/connection/conn-006> a understood:Connection ;
+  understood:label "Use compute over cleverness" ;
+  understood:connectionType "validated_principle" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  .
+
+<https://understood.app/ontology/connection/conn-007> a understood:Connection ;
+  understood:label "Ten minutes exporting judgment compounds" ;
+  understood:connectionType "validated_principle" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  .
+
+<https://understood.app/ontology/connection/conn-008> a understood:Connection ;
+  understood:label "Articulating something well changes relationship to it" ;
+  understood:connectionType "validated_principle" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  .
+
+<https://understood.app/ontology/connection/conn-009> a understood:Connection ;
+  understood:label "Anticipatory anxiety lies" ;
+  understood:connectionType "validated_principle" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  .
+
+<https://understood.app/ontology/connection/conn-010> a understood:Connection ;
+  understood:label "Capture first, structure later" ;
+  understood:connectionType "validated_principle" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  .
+
+<https://understood.app/ontology/connection/conn-011> a understood:Connection ;
+  understood:label "You do not outwork the problem" ;
+  understood:connectionType "validated_principle" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  .
+
+<https://understood.app/ontology/connection/conn-012> a understood:Connection ;
+  understood:label "Does this capture potential that would slip away?" ;
+  understood:connectionType "pattern_interrupt" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/learning> ;
+  .
+
+<https://understood.app/ontology/connection/conn-013> a understood:Connection ;
+  understood:label "Am I building a system or doing a task?" ;
+  understood:connectionType "pattern_interrupt" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  .
+
+<https://understood.app/ontology/connection/conn-014> a understood:Connection ;
+  understood:label "Insights emerge through engagement" ;
+  understood:connectionType "identity_anchor" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  .
+
+<https://understood.app/ontology/connection/conn-015> a understood:Connection ;
+  understood:label "Energy moves forward, not backward" ;
+  understood:connectionType "identity_anchor" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  .
+
+<https://understood.app/ontology/connection/conn-016> a understood:Connection ;
+  understood:label "Judgment strong, vocabulary gap" ;
+  understood:connectionType "identity_anchor" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  .
+
+<https://understood.app/ontology/connection/conn-017> a understood:Connection ;
+  understood:label "Work on what I can" ;
+  understood:connectionType "connection" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  .
+
+<https://understood.app/ontology/connection/conn-018> a understood:Connection ;
+  understood:label "Momentum is the metric that matters" ;
+  understood:connectionType "connection" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  .

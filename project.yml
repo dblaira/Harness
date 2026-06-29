@@ -1,0 +1,60 @@
+name: Harness
+options:
+  bundleIdPrefix: com.adamblair
+  deploymentTarget:
+    macOS: "14.0"
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+packages:
+  OntologyKit:
+    path: Packages/OntologyKit
+
+targets:
+  Harness:
+    type: application
+    supportedDestinations: [macOS, iOS]
+    deploymentTarget:
+      macOS: "14.0"
+      iOS: "17.0"
+    sources:
+      - Sources/Harness
+    dependencies:
+      - package: OntologyKit
+    info:
+      path: Generated/Info.plist
+      properties:
+        CFBundleDisplayName: Harness
+        LSApplicationCategoryType: public.app-category.productivity
+        UILaunchScreen:
+          UIColorName: ""
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.adamblair.Harness
+        CODE_SIGN_ENTITLEMENTS: Sources/Harness/Harness.entitlements
+        GENERATE_INFOPLIST_FILE: YES
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.9"
+        ENABLE_PREVIEWS: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        CODE_SIGNING_ALLOWED: NO
+
+  HarnessTests:
+    type: bundle.unit-test
+    supportedDestinations: [macOS, iOS]
+    sources:
+      - Tests/HarnessTests
+    dependencies:
+      - target: Harness
+      - package: OntologyKit
+
+schemes:
+  Harness:
+    build:
+      targets:
+        Harness: all
+    test:
+      targets:
+        - HarnessTests

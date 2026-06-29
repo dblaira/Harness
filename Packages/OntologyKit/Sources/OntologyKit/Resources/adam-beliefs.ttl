@@ -1,0 +1,122 @@
+# Adam personal connections — aligned to https://understood.app/ontology#
+# exportedAt: 2026-06-20T19:41:47.502Z
+# source: CONNECTION_ONTOLOGY_INTAKE_ITEMS (connections-calibration-001)
+
+@prefix understood: <https://understood.app/ontology#> .
+
+<https://understood.app/ontology/connection/conn-001> a understood:Connection ;
+  understood:label "My assignment is to create desire" ;
+  understood:connectionType "process_anchor" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/learning> ;
+  .
+
+<https://understood.app/ontology/connection/conn-002> a understood:Connection ;
+  understood:label "Creating space reduces cognitive load" ;
+  understood:connectionType "validated_principle" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  .
+
+<https://understood.app/ontology/connection/conn-003> a understood:Connection ;
+  understood:label "What is context without conviction? Regret." ;
+  understood:connectionType "process_anchor" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  .
+
+<https://understood.app/ontology/connection/conn-004> a understood:Connection ;
+  understood:label "Delegation is three sentences" ;
+  understood:connectionType "process_anchor" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  .
+
+<https://understood.app/ontology/connection/conn-005> a understood:Connection ;
+  understood:label "Products fight potential slipping away" ;
+  understood:connectionType "validated_principle" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/learning> ;
+  .
+
+<https://understood.app/ontology/connection/conn-006> a understood:Connection ;
+  understood:label "Use compute over cleverness" ;
+  understood:connectionType "validated_principle" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  .
+
+<https://understood.app/ontology/connection/conn-007> a understood:Connection ;
+  understood:label "Ten minutes exporting judgment compounds" ;
+  understood:connectionType "validated_principle" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  .
+
+<https://understood.app/ontology/connection/conn-008> a understood:Connection ;
+  understood:label "Articulating something well changes relationship to it" ;
+  understood:connectionType "validated_principle" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  .
+
+<https://understood.app/ontology/connection/conn-009> a understood:Connection ;
+  understood:label "Anticipatory anxiety lies" ;
+  understood:connectionType "validated_principle" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  .
+
+<https://understood.app/ontology/connection/conn-010> a understood:Connection ;
+  understood:label "Capture first, structure later" ;
+  understood:connectionType "validated_principle" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  .
+
+<https://understood.app/ontology/connection/conn-011> a understood:Connection ;
+  understood:label "You do not outwork the problem" ;
+  understood:connectionType "validated_principle" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  .
+
+<https://understood.app/ontology/connection/conn-012> a understood:Connection ;
+  understood:label "Does this capture potential that would slip away?" ;
+  understood:connectionType "pattern_interrupt" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/learning> ;
+  .
+
+<https://understood.app/ontology/connection/conn-013> a understood:Connection ;
+  understood:label "Am I building a system or doing a task?" ;
+  understood:connectionType "pattern_interrupt" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  .
+
+<https://understood.app/ontology/connection/conn-014> a understood:Connection ;
+  understood:label "Insights emerge through engagement" ;
+  understood:connectionType "identity_anchor" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  .
+
+<https://understood.app/ontology/connection/conn-015> a understood:Connection ;
+  understood:label "Energy moves forward, not backward" ;
+  understood:connectionType "identity_anchor" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  .
+
+<https://understood.app/ontology/connection/conn-016> a understood:Connection ;
+  understood:label "Judgment strong, vocabulary gap" ;
+  understood:connectionType "identity_anchor" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  .
+
+<https://understood.app/ontology/connection/conn-017> a understood:Connection ;
+  understood:label "Work on what I can" ;
+  understood:connectionType "connection" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  .
+
+<https://understood.app/ontology/connection/conn-018> a understood:Connection ;
+  understood:label "Momentum is the metric that matters" ;
+  understood:connectionType "connection" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  .
+
+<https://understood.app/ontology/connection/conn-019> a understood:Connection ;
+  understood:label "Adam prefers reusable systems over one-time wins. When there's a choice, build what compounds." ;
+  understood:connectionType "validated_principle" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/work> ;
+  .

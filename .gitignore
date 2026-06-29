@@ -1,0 +1,15 @@
+# Xcode / Swift
+build/
+.build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+
+# macOS
+.DS_Store
+
+# Secrets — never commit API keys
+*.env
+secrets.plist

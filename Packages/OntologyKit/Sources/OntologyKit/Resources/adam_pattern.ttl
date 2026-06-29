@@ -1,0 +1,166 @@
+@prefix : <http://nousresearch.com/adam-pattern#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# Ontology for The Adam Pattern - Core Operating System
+# Formal machine-readable representation for LLM enforcement
+
+:AdamPattern a owl:Class ;
+    rdfs:label "The Adam Pattern" ;
+    rdfs:comment "Reverse-engineered success architecture consisting of 8 steps with a core constraint rule. The strategy is identical regardless of goal." ;
+    :coreRule :IfICantSayICantPlay ;
+    :throughLine "You don't outwork the problem. You find the structural edge, build the simplest possible system around it, and let it compound." .
+
+# Axioms
+:SuccessArchitecture a owl:Class ;
+    rdfs:subClassOf :AdamPattern ;
+    rdfs:comment "The architecture is invariant across all goals." .
+
+:ObservationalZone a owl:Class ;
+    owl:equivalentClass [
+        a owl:Class ;
+        owl:unionOf ( :Step1 :Step2 :Step3 :Step4 )
+    ] ;
+    rdfs:comment "Steps 1-4 form the mandatory observational zone. No progression to execution steps without completion." .
+
+:ExecutionZone a owl:Class ;
+    owl:equivalentClass [
+        a owl:Class ;
+        owl:unionOf ( :Step5 :Step6 :Step7 :Step8 )
+    ] ;
+    rdfs:comment "Steps 5-8 are execution steps that follow only after observational zone is satisfied." .
+
+# Steps as Classes
+:Step a owl:Class ;
+    rdfs:label "Adam Pattern Step" .
+
+:Step1 a :Step ;
+    rdfs:label "Context" ;
+    :description "Accept reality" ;
+    :zone :ObservationalZone ;
+    :order 1 ;
+    :evidenceRequired true .
+
+:Step2 a :Step ;
+    rdfs:label "Circle" ;
+    :description "Watch before moving" ;
+    :zone :ObservationalZone ;
+    :order 2 ;
+    :evidenceRequired true .
+
+:Step3 a :Step ;
+    rdfs:label "Close the Gap" ;
+    :description "Get expertise for the specific gap" ;
+    :zone :ObservationalZone ;
+    :order 3 ;
+    :evidenceRequired true .
+
+:Step4 a :Step ;
+    rdfs:label "Choose Success" ;
+    :description "Set precise measurable targets" ;
+    :zone :ObservationalZone ;
+    :order 4 ;
+    :evidenceRequired true .
+
+:Step5 a :Step ;
+    rdfs:label "Code the Pattern" ;
+    :description "Build a simple repeatable system" ;
+    :zone :ExecutionZone ;
+    :order 5 ;
+    :requiresObservationalZone true .
+
+:Step6 a :Step ;
+    rdfs:label "Create Kill Switch" ;
+    :description "Define the kill switch" ;
+    :zone :ExecutionZone ;
+    :order 6 ;
+    :requiresObservationalZone true .
+
+:Step7 a :Step ;
+    rdfs:label "Clear Sign of Success" ;
+    :description "Look for the immediate signal" ;
+    :zone :ExecutionZone ;
+    :order 7 ;
+    :requiresObservationalZone true .
+
+:Step8 a :Step ;
+    rdfs:label "Compound" ;
+    :description "Don’t overwork the problem. Let results compound" ;
+    :zone :ExecutionZone ;
+    :order 8 ;
+    :requiresObservationalZone true .
+
+# Core Rule as Constraint (enforceable for LLMs)
+:IfICantSayICantPlay a sh:NodeShape ;
+    rdfs:label "If I can't say, I can't play" ;
+    sh:targetClass :AdamPattern ;
+    sh:property [
+        sh:path :currentStep ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:integer ;
+        sh:minInclusive 1 ;
+        sh:maxInclusive 8
+    ] ;
+    sh:sparql [
+        a sh:SPARQLConstraint ;
+        sh:message "If the user or agent feels ready to act but cannot explicitly state the current step number (1-8) with supporting evidence (especially for steps 1-4), they are still at Step 1 (Context). No execution actions permitted until step is named and evidence rated." ;
+        sh:select """
+            SELECT ?this WHERE {
+                ?this :currentStep ?step .
+                FILTER (?step > 1 && !EXISTS { ?this :evidenceForStep ?step })
+            }
+        """
+    ] ;
+    :enforcementRule "Before any action beyond pure observation or questioning, require the agent to elicit and confirm: (1) explicit step number, (2) evidence count or rating (1-10) for observational steps. If user claims readiness without being able to name the step, force return to Step 1." ;
+    :interpretation "If I feel ready, I'm probably at step 1." .
+
+# Properties
+:currentStep a owl:DatatypeProperty ;
+    rdfs:domain :AdamPattern ;
+    rdfs:range xsd:integer ;
+    rdfs:comment "Current active step in the pattern (1-8). Must be explicitly stated." .
+
+:evidenceForStep a owl:DatatypeProperty ;
+    rdfs:domain :AdamPattern ;
+    rdfs:range xsd:integer ;
+    rdfs:comment "Evidence rating (1-10) for the current step, required especially in observational zone." .
+
+:zone a owl:ObjectProperty ;
+    rdfs:domain :Step ;
+    rdfs:range :Zone .
+
+:Zone a owl:Class .
+
+:requiresObservationalZone a owl:DatatypeProperty ;
+    rdfs:domain :Step ;
+    rdfs:range xsd:boolean .
+
+:evidenceRequired a owl:DatatypeProperty ;
+    rdfs:domain :Step ;
+    rdfs:range xsd:boolean .
+
+# Axiom: Progression Constraint
+:ProgressionConstraint a owl:Class ;
+    rdfs:subClassOf [
+        a owl:Restriction ;
+        owl:onProperty :currentStep ;
+        owl:allValuesFrom [
+            a owl:Class ;
+            owl:oneOf ( :Step1 :Step2 :Step3 :Step4 :Step5 :Step6 :Step7 :Step8 )
+        ]
+    ] ;
+    rdfs:comment "Progression only allowed sequentially or with explicit evidence that prior steps are satisfied. Observational zone must be complete before execution zone." .
+
+# LLM Enforcement Axioms
+:LLMConstraint a owl:Class ;
+    rdfs:comment "This ontology is designed to be directly usable as system prompts or validation rules for LLMs acting as agents in the Adam Pattern." .
+
+:EnforceStepNaming a :LLMConstraint ;
+    rdfs:comment "Any LLM response must begin by confirming or eliciting the current step number before providing advice or taking action." .
+
+:ObservationalGate a :LLMConstraint ;
+    rdfs:comment "LLMs must not suggest execution steps (5-8) until user has provided evidence ratings >=7 for all of steps 1-4." .
