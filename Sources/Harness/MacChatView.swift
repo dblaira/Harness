@@ -28,9 +28,7 @@ struct MacChatView: View {
     // MARK: Sidebar — red lettering, faint hairline divider on the right edge.
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 1) {
-            Text("HARNESS")
-                .font(.system(.headline, design: .serif).weight(.bold))
-                .foregroundStyle(Theme.macRed)
+            PerLetterGradientTitle("HARNESS")
                 .padding(.bottom, 12)
 
             sidebarItem("New session", "plus")
@@ -88,12 +86,14 @@ struct MacChatView: View {
                     }
                 } label: {
                     HStack(spacing: 4) {
-                        Text(backend.rawValue).font(.system(size: 13))
                         Image(systemName: "chevron.up.chevron.down").font(.system(size: 9))
+                        Text(backend.rawValue).font(.system(size: 13))
                     }
-                    .foregroundStyle(Theme.macInk)
+                    .foregroundColor(Theme.macRed.opacity(0.85))
                 }
                 .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .tint(Theme.macRed.opacity(0.85))
                 .fixedSize()
             }
             .padding(.horizontal, 18).padding(.vertical, 12)
@@ -148,16 +148,24 @@ struct MacChatView: View {
 
             // Grey entry box
             HStack(spacing: 10) {
-                TextField("Type a message…", text: $draft, axis: .vertical)
-                    .textFieldStyle(.plain).foregroundStyle(Theme.macFaint)
+                TextField("", text: $draft, axis: .vertical)
+                    .textFieldStyle(.plain).foregroundStyle(Theme.macInk)
                     .font(.system(size: 13))
+                    .overlay(alignment: .leading) {
+                        if draft.isEmpty {
+                            Text("Type a message…")
+                                .font(.system(size: 13))
+                                .foregroundStyle(Theme.macFaint)
+                                .allowsHitTesting(false)
+                        }
+                    }
                     .padding(12)
                     .background(Theme.macEntry.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
                     .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.macHair, lineWidth: 1))
                     .onSubmit(send)
                 Button(action: send) {
                     Image(systemName: "arrow.up.circle.fill")
-                        .font(.title2).foregroundStyle(Theme.macRed.opacity(0.85))
+                        .font(.title2).foregroundStyle(Theme.macInk)
                 }
                 .buttonStyle(.plain)
                 .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty || thinking)
@@ -194,5 +202,30 @@ struct MacChatView: View {
         "Build the system, not the task.",
         "The Adam Pattern, step 1."
     ]
+}
+
+private struct PerLetterGradientTitle: View {
+    private let letters: [String]
+
+    init(_ text: String) {
+        self.letters = text.map(String.init)
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(letters.enumerated()), id: \.offset) { _, letter in
+                Text(letter)
+                    .font(.custom("PlayfairDisplay-Regular", size: 24).weight(.black))
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [Color(hex: 0x2A1B12), Color(hex: 0x5A3A22), Color(hex: 0x8A6A46)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+            }
+        }
+        .accessibilityLabel("HARNESS")
+    }
 }
 #endif

@@ -19,6 +19,8 @@ targets:
       iOS: "17.0"
     sources:
       - Sources/Harness
+      - path: Sources/Harness/Fonts
+        buildPhase: resources
     dependencies:
       - package: OntologyKit
     info:
