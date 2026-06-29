@@ -27,11 +27,11 @@ struct MacChatView: View {
 
     // MARK: Sidebar — red lettering, faint hairline divider on the right edge.
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 1) {
             Text("HARNESS")
-                .font(.system(.title3, design: .serif).weight(.bold))
+                .font(.system(.headline, design: .serif).weight(.bold))
                 .foregroundStyle(Theme.macRed)
-                .padding(.bottom, 18)
+                .padding(.bottom, 12)
 
             sidebarItem("New session", "plus")
             sidebarItem("My Rules", "checkmark.seal")
@@ -39,32 +39,33 @@ struct MacChatView: View {
             sidebarItem("The Pattern", "list.number")
 
             Text("RECENT")
-                .font(.caption2.weight(.bold)).tracking(1.5)
+                .font(.system(size: 9).weight(.bold)).tracking(1.5)
                 .foregroundStyle(Theme.macInk.opacity(0.4))
-                .padding(.top, 18).padding(.bottom, 4)
+                .padding(.top, 14).padding(.bottom, 2)
 
             ForEach(MacChatView.sampleTitles, id: \.self) { t in
                 Text(t)
-                    .font(.callout)
+                    .font(.system(size: 11))
                     .foregroundStyle(Theme.macRed.opacity(0.85))
                     .lineLimit(1)
-                    .padding(.vertical, 5)
+                    .padding(.vertical, 2)
             }
             Spacer()
         }
-        .padding(16)
-        .frame(width: 220, alignment: .leading)
+        .padding(14)
+        .frame(width: 188, alignment: .leading)
         .background(Theme.macBg)
         .overlay(Rectangle().fill(Theme.macHair).frame(width: 1), alignment: .trailing)
     }
 
     private func sidebarItem(_ label: String, _ icon: String) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: icon).foregroundStyle(Theme.macRed.opacity(0.7)).frame(width: 18)
-            Text(label).font(.system(.body).weight(.medium)).foregroundStyle(Theme.macRed)
+        HStack(spacing: 8) {
+            Image(systemName: icon).foregroundStyle(Theme.macRed.opacity(0.7))
+                .font(.system(size: 11)).frame(width: 14)
+            Text(label).font(.system(size: 12).weight(.medium)).foregroundStyle(Theme.macRed)
             Spacer()
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 3)
         .contentShape(Rectangle())
     }
 
@@ -81,11 +82,19 @@ struct MacChatView: View {
 
                 Spacer()
 
-                Picker("", selection: $backend) {
-                    ForEach(Backend.allCases) { Text($0.rawValue).tag($0) }
+                Menu {
+                    ForEach(Backend.allCases) { b in
+                        Button(b.rawValue) { backend = b }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(backend.rawValue).font(.system(size: 13))
+                        Image(systemName: "chevron.up.chevron.down").font(.system(size: 9))
+                    }
+                    .foregroundStyle(Theme.macInk)
                 }
-                .pickerStyle(.menu).tint(Theme.macInk).labelsHidden()
-                .frame(width: 130)
+                .menuStyle(.borderlessButton)
+                .fixedSize()
             }
             .padding(.horizontal, 18).padding(.vertical, 12)
             .overlay(Rectangle().fill(Theme.macHair).frame(height: 1), alignment: .bottom)
@@ -140,9 +149,10 @@ struct MacChatView: View {
             // Grey entry box
             HStack(spacing: 10) {
                 TextField("Type a message…", text: $draft, axis: .vertical)
-                    .textFieldStyle(.plain).foregroundStyle(Theme.macInk)
+                    .textFieldStyle(.plain).foregroundStyle(Theme.macFaint)
+                    .font(.system(size: 13))
                     .padding(12)
-                    .background(Theme.macEntry, in: RoundedRectangle(cornerRadius: 10))
+                    .background(Theme.macEntry.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
                     .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.macHair, lineWidth: 1))
                     .onSubmit(send)
                 Button(action: send) {

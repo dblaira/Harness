@@ -20,6 +20,7 @@ enum Theme {
     static let macEntry   = Color(hex: 0x2A2E35)  // grey entry box
     static let macHair    = Color(hex: 0x4A5568).opacity(0.4)  // faint grey hairline
     static let macRed     = Color(hex: 0xC8102E)  // sidebar lettering
+    static let macFaint   = Color(hex: 0x8A93A0).opacity(0.55) // very faint grey entry text
 }
 
 extension Color {
