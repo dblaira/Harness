@@ -1,0 +1,188 @@
+#if os(macOS)
+import SwiftUI
+import OntologyKit
+
+/// macOS-only chat surface. Deliberately low-contrast for a bright indoor
+/// screen and shoulder-surf privacy: navy everywhere, light-brown text,
+/// grey entry box, faint grey hairlines, red sidebar lettering. No white.
+struct MacChatView: View {
+    let ontology: Ontology
+    @State private var messages: [ChatMessage] = []
+    @State private var draft = ""
+    @State private var thinking = false
+    @State private var backend: Backend = .codex
+    @State private var apiKey = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] ?? ""
+    @State private var showSidebar = true
+
+    private let runner = AgentRunner()
+    private var system: String { ClaudeClient.systemPrompt(from: ontology) }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            if showSidebar { sidebar.transition(.move(edge: .leading)) }
+            conversation
+        }
+        .background(Theme.macBg.ignoresSafeArea())
+    }
+
+    // MARK: Sidebar — red lettering, faint hairline divider on the right edge.
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("HARNESS")
+                .font(.system(.title3, design: .serif).weight(.bold))
+                .foregroundStyle(Theme.macRed)
+                .padding(.bottom, 18)
+
+            sidebarItem("New session", "plus")
+            sidebarItem("My Rules", "checkmark.seal")
+            sidebarItem("Cause & Effect", "arrow.right.circle")
+            sidebarItem("The Pattern", "list.number")
+
+            Text("RECENT")
+                .font(.caption2.weight(.bold)).tracking(1.5)
+                .foregroundStyle(Theme.macInk.opacity(0.4))
+                .padding(.top, 18).padding(.bottom, 4)
+
+            ForEach(MacChatView.sampleTitles, id: \.self) { t in
+                Text(t)
+                    .font(.callout)
+                    .foregroundStyle(Theme.macRed.opacity(0.85))
+                    .lineLimit(1)
+                    .padding(.vertical, 5)
+            }
+            Spacer()
+        }
+        .padding(16)
+        .frame(width: 220, alignment: .leading)
+        .background(Theme.macBg)
+        .overlay(Rectangle().fill(Theme.macHair).frame(width: 1), alignment: .trailing)
+    }
+
+    private func sidebarItem(_ label: String, _ icon: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon).foregroundStyle(Theme.macRed.opacity(0.7)).frame(width: 18)
+            Text(label).font(.system(.body).weight(.medium)).foregroundStyle(Theme.macRed)
+            Spacer()
+        }
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+    }
+
+    // MARK: Conversation column
+    private var conversation: some View {
+        VStack(spacing: 0) {
+            // Top bar with sidebar toggle + model picker
+            HStack {
+                Button { withAnimation(.easeInOut(duration: 0.2)) { showSidebar.toggle() } } label: {
+                    Image(systemName: "sidebar.left")
+                        .font(.title3).foregroundStyle(Theme.macInk.opacity(0.8))
+                }
+                .buttonStyle(.plain)
+
+                Spacer()
+
+                Picker("", selection: $backend) {
+                    ForEach(Backend.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.menu).tint(Theme.macInk).labelsHidden()
+                .frame(width: 130)
+            }
+            .padding(.horizontal, 18).padding(.vertical, 12)
+            .overlay(Rectangle().fill(Theme.macHair).frame(height: 1), alignment: .bottom)
+
+            // Messages
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if messages.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Ask anything.")
+                                .font(.system(.title2, design: .serif).weight(.semibold))
+                                .foregroundStyle(Theme.macInk)
+                            Text("Constrained by your \(ontology.connections.count) rules + \(ontology.axioms.count) axioms via \(backend.rawValue). The reply names the rule it used.")
+                                .font(.callout).foregroundStyle(Theme.macInk.opacity(0.6))
+                        }
+                        .padding(.top, 8)
+                    }
+                    ForEach(messages) { m in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(m.fromMe ? "YOU" : backend.rawValue.uppercased())
+                                .font(.caption2.weight(.bold)).tracking(1.2)
+                                .foregroundStyle(Theme.macInk.opacity(0.45))
+                            Text(m.text)
+                                .font(.body).foregroundStyle(Theme.macInk)
+                                .textSelection(.enabled)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(14)
+                        .background(Theme.macEntry.opacity(m.fromMe ? 0.5 : 0.25),
+                                    in: RoundedRectangle(cornerRadius: 10))
+                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.macHair, lineWidth: 1))
+                    }
+                    if thinking {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("\(backend.rawValue) thinking…").foregroundStyle(Theme.macInk.opacity(0.5))
+                        }
+                    }
+                }
+                .padding(18)
+            }
+
+            if backend == .claude {
+                SecureField("API key", text: $apiKey)
+                    .textFieldStyle(.plain).foregroundStyle(Theme.macInk)
+                    .padding(10)
+                    .background(Theme.macEntry, in: RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
+                    .padding(.horizontal, 18)
+            }
+
+            // Grey entry box
+            HStack(spacing: 10) {
+                TextField("Type a message…", text: $draft, axis: .vertical)
+                    .textFieldStyle(.plain).foregroundStyle(Theme.macInk)
+                    .padding(12)
+                    .background(Theme.macEntry, in: RoundedRectangle(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.macHair, lineWidth: 1))
+                    .onSubmit(send)
+                Button(action: send) {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.title2).foregroundStyle(Theme.macRed.opacity(0.85))
+                }
+                .buttonStyle(.plain)
+                .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty || thinking)
+            }
+            .padding(.horizontal, 18).padding(.vertical, 14)
+            .overlay(Rectangle().fill(Theme.macHair).frame(height: 1), alignment: .top)
+        }
+        .background(Theme.macBg)
+    }
+
+    private func send() {
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        messages.append(ChatMessage(text: text, fromMe: true))
+        draft = ""
+        thinking = true
+        let chosen = backend
+        let key = apiKey.isEmpty ? nil : apiKey
+        Task {
+            do {
+                let reply = try await runner.run(backend: chosen, system: system, user: text, apiKey: key)
+                await MainActor.run { messages.append(ChatMessage(text: reply, fromMe: false)); thinking = false }
+            } catch {
+                await MainActor.run { messages.append(ChatMessage(text: "⚠️ \(error.localizedDescription)", fromMe: false)); thinking = false }
+            }
+        }
+    }
+
+    static let sampleTitles = [
+        "Plain answer first, always.",
+        "What creates the most excitement?",
+        "Notorious color scheme.",
+        "Momentum is the metric.",
+        "Build the system, not the task.",
+        "The Adam Pattern, step 1."
+    ]
+}
+#endif

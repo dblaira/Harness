@@ -38,7 +38,11 @@ struct ChatView: View {
                 }
                 .pickerStyle(.menu).tint(Theme.navy)
             }
+            #if os(iOS)
             .padding(.horizontal, 20).padding(.bottom, 14).padding(.top, 60)
+            #else
+            .padding(.horizontal, 20).padding(.vertical, 18)
+            #endif
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Theme.tan)
             .overlay(Rectangle().fill(Theme.red).frame(height: 3), alignment: .bottom)
@@ -123,7 +127,9 @@ struct ChatView: View {
         }
         .ignoresSafeArea(.container, edges: [.top, .bottom])
         .navigationTitle("New chat")
+        #if os(iOS)
         .toolbar(.hidden, for: .navigationBar)
+        #endif
     }
 
     // A Notorious-style card: kicker label, serif headline, red accent bar.

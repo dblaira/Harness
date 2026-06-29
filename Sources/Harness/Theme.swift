@@ -13,6 +13,13 @@ enum Theme {
     static let background = navy
     static let accent     = red
     static let surface    = paper
+
+    // macOS subtle palette — low-contrast, privacy-friendly indoors.
+    static let macBg      = Color(hex: 0x0E1B2A)  // navy everywhere
+    static let macInk     = Color(hex: 0xC9B79A)  // light brown text
+    static let macEntry   = Color(hex: 0x2A2E35)  // grey entry box
+    static let macHair    = Color(hex: 0x4A5568).opacity(0.4)  // faint grey hairline
+    static let macRed     = Color(hex: 0xC8102E)  // sidebar lettering
 }
 
 extension Color {
