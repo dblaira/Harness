@@ -14,7 +14,8 @@ struct ChatView: View {
     @State private var draft = ""
     @State private var thinking = false
     @State private var backend: Backend = ChatView.defaultBackend
-    @State private var apiKey = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] ?? ""
+    @State private var apiKey = ChatView.initialAPIKey()
+    @State private var hasConfiguredAPIKey = !ChatView.initialAPIKey().isEmpty
     @State private var mode: HarnessLaunchMode = .ask
     @State private var selectedQuickAction: HarnessQuickAction.ID?
     @State private var showingAttachmentMenu = false
@@ -49,6 +50,7 @@ struct ChatView: View {
                     draft: $draft,
                     backend: $backend,
                     apiKey: $apiKey,
+                    hasConfiguredAPIKey: hasConfiguredAPIKey,
                     thinking: thinking,
                     mode: mode,
                     onAttach: { showingAttachmentMenu = true },
@@ -83,11 +85,29 @@ struct ChatView: View {
     private func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !thinking else { return }
+        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if backend == .claude && trimmedKey.isEmpty {
+            ledgerStatus = "Claude API key required"
+            return
+        }
+
+        if backend == .claude && !hasConfiguredAPIKey {
+            do {
+                try APIKeyStore.saveClaudeKey(trimmedKey)
+                apiKey = trimmedKey
+                hasConfiguredAPIKey = true
+                ledgerStatus = "Claude key saved locally"
+            } catch {
+                ledgerStatus = error.localizedDescription
+                return
+            }
+        }
+
         messages.append(ChatMessage(text: text, fromMe: true))
         draft = ""
         thinking = true
         let chosen = backend
-        let key = apiKey.isEmpty ? nil : apiKey
+        let key = trimmedKey.isEmpty ? nil : trimmedKey
         let service = HarnessRunService(ledger: ledger)
         Task {
             do {
@@ -126,6 +146,14 @@ struct ChatView: View {
         .claude
         #else
         .codex
+        #endif
+    }
+
+    private static func initialAPIKey() -> String {
+        #if os(iOS)
+        APIKeyStore.loadClaudeKey() ?? ""
+        #else
+        ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] ?? APIKeyStore.loadClaudeKey() ?? ""
         #endif
     }
 }
@@ -329,6 +357,7 @@ private struct HarnessComposer: View {
     @Binding var backend: Backend
     @Binding var apiKey: String
 
+    let hasConfiguredAPIKey: Bool
     let thinking: Bool
     let mode: HarnessLaunchMode
     let onAttach: () -> Void
@@ -349,7 +378,7 @@ private struct HarnessComposer: View {
                 .textInputAutocapitalization(.sentences)
                 #endif
 
-            if backend == .claude && apiKey.isEmpty {
+            if needsClaudeKey {
                 SecureField("Claude API key", text: $apiKey)
                     .textFieldStyle(.plain)
                     .font(.system(size: 14, weight: .semibold))
@@ -389,7 +418,13 @@ private struct HarnessComposer: View {
     }
 
     private var sendDisabled: Bool {
-        thinking || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        thinking ||
+            draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            (needsClaudeKey && apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    private var needsClaudeKey: Bool {
+        backend == .claude && !hasConfiguredAPIKey
     }
 }
 
