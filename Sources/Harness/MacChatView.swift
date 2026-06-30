@@ -76,24 +76,38 @@ struct MacChatView: View {
 
     private var skillsList: some View {
         VStack(alignment: .leading, spacing: 6) {
-            skillRow("ontology-steward", "checkmark.seal")
-            skillRow("vault-search", "doc.text.magnifyingglass")
-            skillRow("graph-trace", "point.3.connected.trianglepath.dotted")
-            skillRow("repo-context", "folder")
+            ForEach(model.toolGroups) { group in
+                Text(group.title.uppercased())
+                    .font(.system(size: 8).weight(.bold))
+                    .tracking(1.4)
+                    .foregroundStyle(Theme.macInk.opacity(0.42))
+                    .padding(.top, group.id == model.toolGroups.first?.id ? 0 : 6)
+
+                ForEach(group.tools) { tool in
+                    skillRow(tool)
+                }
+            }
         }
         .padding(.leading, 2)
     }
 
-    private func skillRow(_ title: String, _ icon: String) -> some View {
+    private func skillRow(_ tool: WorkbenchTool) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: icon)
+            Image(systemName: tool.icon)
                 .frame(width: 14)
                 .foregroundStyle(Theme.macInk.opacity(0.45))
-            Text(title)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(tool.title)
+                    .lineLimit(1)
+                Text(tool.detail)
+                    .font(.system(size: 9))
+                    .foregroundStyle(Theme.macInk.opacity(0.42))
+                    .lineLimit(1)
+            }
                 .lineLimit(1)
             Spacer()
             Circle()
-                .fill(Theme.macRed.opacity(0.75))
+                .fill(tool.state.tint)
                 .frame(width: 6, height: 6)
         }
         .font(.system(size: 11))
@@ -322,7 +336,12 @@ struct MacChatView: View {
         Group {
             if let detail = model.selectedDetail, !detail.authorityHits.isEmpty {
                 ForEach(detail.authorityHits) { hit in
-                    inspectorBlock(title: hit.subject, subtitle: hit.source, body: "\(hit.predicate)\n\(hit.object)\n\n\(hit.queryTrace)")
+                    inspectorBlock(
+                        title: hit.subject,
+                        subtitle: "\(hit.authorityLevel.rawValue) - \(hit.source) - score \(hit.score.formatted(.number.precision(.fractionLength(2))))",
+                        body: "\(hit.predicate)\n\(hit.object)\n\n\(hit.queryTrace)",
+                        status: "accepted"
+                    )
                 }
             } else {
                 emptyInspectorText("No accepted graph authority selected yet.")
@@ -334,7 +353,12 @@ struct MacChatView: View {
         Group {
             if let detail = model.selectedDetail, !detail.memoryHits.isEmpty {
                 ForEach(detail.memoryHits) { hit in
-                    inspectorBlock(title: hit.source, subtitle: "supporting - score \(hit.score.formatted(.number.precision(.fractionLength(2))))", body: hit.excerpt)
+                    inspectorBlock(
+                        title: hit.source,
+                        subtitle: "\(hit.authorityLevel.rawValue), not graph authority - score \(hit.score.formatted(.number.precision(.fractionLength(2))))",
+                        body: "\(hit.reasonSelected)\n\n\(hit.excerpt)",
+                        status: "supporting"
+                    )
                 }
             } else {
                 emptyInspectorText("Supporting memory appears here after graph authority is checked.")
@@ -346,10 +370,20 @@ struct MacChatView: View {
         Group {
             if let detail = model.selectedDetail {
                 ForEach(detail.traceEvents) { event in
-                    inspectorBlock(title: event.stage.rawValue, subtitle: event.createdAt.formatted(date: .omitted, time: .standard), body: event.message)
+                    inspectorBlock(
+                        title: event.stage.rawValue,
+                        subtitle: event.createdAt.formatted(date: .omitted, time: .standard),
+                        body: event.message,
+                        status: "trace"
+                    )
                 }
                 ForEach(detail.evalResults) { result in
-                    inspectorBlock(title: result.checkName, subtitle: result.passed ? "passed" : "needs review", body: result.detail)
+                    inspectorBlock(
+                        title: result.checkName,
+                        subtitle: result.passed ? "passed" : "needs review",
+                        body: result.detail,
+                        status: result.passed ? "passed" : "review"
+                    )
                 }
             } else {
                 emptyInspectorText("Run trace and eval checks appear here.")
@@ -361,7 +395,7 @@ struct MacChatView: View {
         Group {
             if let detail = model.selectedDetail, !detail.memoryCandidates.isEmpty {
                 ForEach(detail.memoryCandidates) { candidate in
-                    inspectorBlock(title: candidate.status.rawValue, subtitle: "candidate memory", body: candidate.proposedClaim)
+                    candidateBlock(candidate, validations: detail.validationResults.filter { $0.candidateId == candidate.id })
                 }
             } else {
                 emptyInspectorText("No candidate memory for this run.")
@@ -377,12 +411,71 @@ struct MacChatView: View {
             .padding(.top, 8)
     }
 
-    private func inspectorBlock(title: String, subtitle: String, body: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+    private func candidateBlock(_ candidate: MemoryCandidate, validations: [ValidationResult]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            inspectorBlock(
+                title: candidate.status.rawValue,
+                subtitle: "candidate memory - \(candidate.createdAt.formatted(date: .abbreviated, time: .shortened))",
+                body: candidateBody(candidate, validations: validations),
+                status: candidate.status.rawValue
+            )
+
+            HStack(spacing: 8) {
+                candidateButton("Suggested", state: .suggested, candidate: candidate)
+                candidateButton("Review", state: .candidate, candidate: candidate)
+                candidateButton("Reject", state: .rejected, candidate: candidate)
+            }
+        }
+    }
+
+    private func candidateButton(_ title: String, state: CandidateState, candidate: MemoryCandidate) -> some View {
+        Button {
+            model.markCandidate(candidate, as: state)
+        } label: {
             Text(title)
-                .font(.system(size: 12).weight(.semibold))
-                .foregroundStyle(Theme.macInk)
-                .lineLimit(2)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(candidate.status == state ? Theme.macBg : Theme.macInk.opacity(0.76))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+                .background(candidate.status == state ? Theme.macInk : Theme.macEntry.opacity(0.28), in: RoundedRectangle(cornerRadius: 7))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.macHair, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func candidateBody(_ candidate: MemoryCandidate, validations: [ValidationResult]) -> String {
+        var sections = [
+            "Evidence:\n\(candidate.evidenceText)",
+            "Proposed claim:\n\(candidate.proposedClaim)"
+        ]
+        if let graph = candidate.proposedGraph, !graph.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            sections.append("Proposed graph:\n\(graph)")
+        } else {
+            sections.append("Proposed graph:\nnone")
+        }
+        if !validations.isEmpty {
+            let validationText = validations
+                .map { "\($0.kind): \($0.passed ? "passed" : "not passed") - \($0.detail)" }
+                .joined(separator: "\n")
+            sections.append("Validation:\n\(validationText)")
+        } else if let validationResult = candidate.validationResult {
+            sections.append("Review:\n\(validationResult)")
+        }
+        return sections.joined(separator: "\n\n")
+    }
+
+    private func inspectorBlock(title: String, subtitle: String, body: String, status: String? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(title)
+                    .font(.system(size: 12).weight(.semibold))
+                    .foregroundStyle(Theme.macInk)
+                    .lineLimit(2)
+                Spacer(minLength: 8)
+                if let status {
+                    statusBadge(status)
+                }
+            }
             Text(subtitle)
                 .font(.caption2)
                 .foregroundStyle(Theme.macInk.opacity(0.46))
@@ -397,6 +490,29 @@ struct MacChatView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.macEntry.opacity(0.24), in: RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
+    }
+
+    private func statusBadge(_ status: String) -> some View {
+        Text(status)
+            .font(.system(size: 9).weight(.bold))
+            .foregroundStyle(Theme.macInk.opacity(0.75))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(Theme.macEntry.opacity(0.34), in: Capsule())
+            .overlay(Capsule().stroke(Theme.macHair, lineWidth: 1))
+    }
+}
+
+private extension WorkbenchToolState {
+    var tint: Color {
+        switch self {
+        case .available:
+            return Theme.macRed.opacity(0.85)
+        case .readOnly:
+            return Theme.macInk.opacity(0.62)
+        case .planned:
+            return Theme.macFaint
+        }
     }
 }
 
