@@ -8,7 +8,9 @@ GitHub: `https://github.com/dblaira/Harness`
 
 Current branch: `main`
 
-Current state: PR #1 was merged into `main` and local `main` was pulled cleanly. The latest merged commit is `d591645`.
+Current state: PR #1 was merged into `main`, the handoff was committed, and local `main` was pushed cleanly. The latest `main` commit before `codex/workbench-run-spine` is `7c4bc33`.
+
+Follow-on branch: `codex/workbench-run-spine` is implementing the macOS run-detail spine, candidate review status controls, and first-pass skills/plugins/tools inventory.
 
 ## Plain Summary
 
@@ -156,14 +158,13 @@ Do not commit:
 
 The next Codex thread should start from `main` and focus on one of these:
 
-1. Add a tiny "new run" path that saves a full ledger record from UI input.
-2. Wire the macOS right pane to real run detail data.
-3. Add a real candidate review flow.
-4. Add a first-class skills/plugins/tools inventory surface inspired by the Hermes macOS layout.
-5. Wire the iOS quick actions to real behavior.
-6. Add actual attachment/photo/file import behind the plus button.
-7. Add voice/speak behavior.
-8. Prepare TestFlight distribution.
+1. If `codex/workbench-run-spine` is not merged yet, review and merge that PR first.
+2. Add real candidate promotion: proposed Turtle, SHACL validation, SPARQL proof, and explicit accepted-graph write path.
+3. Wire the iOS quick actions to real behavior.
+4. Add actual attachment/photo/file import behind the plus button.
+5. Add voice/speak behavior.
+6. Make the skills/plugins/tools inventory dynamic after the static workbench surface is approved.
+7. Prepare TestFlight distribution.
 
 ## Suggested First Command In A New Codex Thread
 
