@@ -18,9 +18,9 @@ struct ChatView: View {
     @State private var mode: HarnessLaunchMode = .ask
     @State private var selectedQuickAction: HarnessQuickAction.ID?
     @State private var showingAttachmentMenu = false
-
-    private let runner = AgentRunner()
-    private var system: String { ClaudeClient.systemPrompt(from: ontology) }
+    @State private var ledger = ChatView.makeLedger()
+    @State private var latestRunDetail: HarnessRunDetail?
+    @State private var ledgerStatus = "Ledger ready"
 
     var body: some View {
         ZStack {
@@ -33,7 +33,9 @@ struct ChatView: View {
                 HarnessConversationStage(
                     messages: messages,
                     backend: backend,
-                    thinking: thinking
+                    thinking: thinking,
+                    latestRunDetail: latestRunDetail,
+                    ledgerStatus: ledgerStatus
                 )
 
                 HarnessQuickActionCarousel(
@@ -85,19 +87,36 @@ struct ChatView: View {
         thinking = true
         let chosen = backend
         let key = apiKey.isEmpty ? nil : apiKey
+        let service = HarnessRunService(ledger: ledger)
         Task {
             do {
-                let reply = try await runner.run(backend: chosen, system: system, user: text, apiKey: key)
+                let detail = try await service.createRun(
+                    prompt: text,
+                    ontology: ontology,
+                    backend: AgentRunnerBackendAdapter(backend: chosen, apiKey: key)
+                )
+                let reply = detail.messages.last { $0.role == .assistant }?.text ?? detail.run.finalAnswer
                 await MainActor.run {
                     messages.append(ChatMessage(text: reply, fromMe: false))
+                    latestRunDetail = detail
+                    ledgerStatus = detail.run.success ? "Trace saved" : "Backend failed; trace saved"
                     thinking = false
                 }
             } catch {
                 await MainActor.run {
                     messages.append(ChatMessage(text: "Error: \(error.localizedDescription)", fromMe: false))
+                    ledgerStatus = error.localizedDescription
                     thinking = false
                 }
             }
+        }
+    }
+
+    private static func makeLedger() -> RunLedgerStore {
+        do {
+            return try RunLedgerStore.applicationDefault()
+        } catch {
+            return try! RunLedgerStore.inMemory()
         }
     }
 }
@@ -165,6 +184,8 @@ private struct HarnessConversationStage: View {
     let messages: [ChatMessage]
     let backend: Backend
     let thinking: Bool
+    let latestRunDetail: HarnessRunDetail?
+    let ledgerStatus: String
 
     var body: some View {
         ZStack {
@@ -189,6 +210,10 @@ private struct HarnessConversationStage: View {
                         .padding(.horizontal, 18)
                         .padding(.top, 6)
                     }
+
+                    if let latestRunDetail {
+                        HarnessRunStatusStrip(detail: latestRunDetail, status: ledgerStatus)
+                    }
                 }
                 .padding(.horizontal, 14)
                 .padding(.top, 28)
@@ -197,6 +222,24 @@ private struct HarnessConversationStage: View {
             .scrollIndicators(.hidden)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct HarnessRunStatusStrip: View {
+    let detail: HarnessRunDetail
+    let status: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Label("\(detail.authorityHits.count)", systemImage: "point.3.connected.trianglepath.dotted")
+            Label("\(detail.memoryHits.count)", systemImage: "archivebox")
+            Label(status, systemImage: detail.run.success ? "checkmark.seal" : "exclamationmark.triangle")
+            Spacer(minLength: 0)
+        }
+        .font(.system(size: 12, weight: .semibold))
+        .foregroundStyle(Theme.iosMuted)
+        .padding(.horizontal, 18)
+        .padding(.top, 6)
     }
 }
 
