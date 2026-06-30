@@ -13,6 +13,7 @@ final class MacWorkbenchModel: ObservableObject {
     @Published var isRunning = false
     @Published var status = "Ledger ready"
     @Published var searchText = ""
+    @Published var selectedTool: WorkbenchTool?
     let toolGroups = WorkbenchToolGroup.defaults
 
     private let ledger: RunLedgerStore
@@ -66,6 +67,11 @@ final class MacWorkbenchModel: ObservableObject {
         draft = ""
         searchText = ""
         status = "New session"
+    }
+
+    func selectTool(_ tool: WorkbenchTool) {
+        selectedTool = tool
+        status = "\(tool.title): \(tool.state.rawValue)"
     }
 
     func markCandidate(_ candidate: MemoryCandidate, as status: CandidateState) {
@@ -224,28 +230,108 @@ struct WorkbenchToolGroup: Identifiable, Equatable {
             id: "authority",
             title: "Authority",
             tools: [
-                WorkbenchTool(title: "Ontology steward", icon: "checkmark.seal", state: .available, detail: "accepted graph"),
-                WorkbenchTool(title: "Graph trace", icon: "point.3.connected.trianglepath.dotted", state: .available, detail: "query proof"),
-                WorkbenchTool(title: "Candidate review", icon: "tray.and.arrow.up", state: .readOnly, detail: "no promotion")
+                WorkbenchTool(
+                    title: "Ontology steward",
+                    icon: "checkmark.seal",
+                    state: .available,
+                    detail: "accepted graph",
+                    summary: "Retrieves accepted ontology facts before model execution.",
+                    permission: "Read-only bundled Turtle graph.",
+                    provenance: "Authority hits are recorded on each run."
+                ),
+                WorkbenchTool(
+                    title: "Graph trace",
+                    icon: "point.3.connected.trianglepath.dotted",
+                    state: .available,
+                    detail: "query proof",
+                    summary: "Shows the local query trace behind accepted graph hits.",
+                    permission: "Read-only run inspection.",
+                    provenance: "Trace text is saved in the run ledger."
+                ),
+                WorkbenchTool(
+                    title: "Candidate review",
+                    icon: "tray.and.arrow.up",
+                    state: .readOnly,
+                    detail: "no promotion",
+                    summary: "Marks suggested memory for review, rejection, or graph-review preparation.",
+                    permission: "Can update candidate status; cannot accept graph authority.",
+                    provenance: "Candidate status changes persist in the ledger."
+                )
             ]
         ),
         WorkbenchToolGroup(
             id: "context",
             title: "Context",
             tools: [
-                WorkbenchTool(title: "Vault search", icon: "doc.text.magnifyingglass", state: .readOnly, detail: "supporting memory"),
-                WorkbenchTool(title: "Repo context", icon: "folder", state: .available, detail: "local files"),
-                WorkbenchTool(title: "Run ledger", icon: "clock.arrow.circlepath", state: .available, detail: "SQLite trace")
+                WorkbenchTool(
+                    title: "Vault search",
+                    icon: "doc.text.magnifyingglass",
+                    state: .readOnly,
+                    detail: "supporting memory",
+                    summary: "Finds local notes as supporting memory after authority retrieval.",
+                    permission: "Read-only markdown, text, and Turtle files.",
+                    provenance: "Memory hits are labeled supporting, not accepted."
+                ),
+                WorkbenchTool(
+                    title: "Repo context",
+                    icon: "folder",
+                    state: .available,
+                    detail: "local files",
+                    summary: "Keeps Harness project docs and source files visible to retrieval.",
+                    permission: "Read-only project context for this surface.",
+                    provenance: "Source file paths are shown in memory cards."
+                ),
+                WorkbenchTool(
+                    title: "Run ledger",
+                    icon: "clock.arrow.circlepath",
+                    state: .available,
+                    detail: "SQLite trace",
+                    summary: "Persists prompts, replies, authority, memory, evals, traces, and candidates.",
+                    permission: "Writes local Application Support ledger records.",
+                    provenance: "Every saved run has a prompt packet hash."
+                )
             ]
         ),
         WorkbenchToolGroup(
             id: "backends",
             title: "Backends",
             tools: [
-                WorkbenchTool(title: "Codex", icon: "terminal", state: .available, detail: "local CLI"),
-                WorkbenchTool(title: "Grok", icon: "sparkles", state: .available, detail: "local CLI"),
-                WorkbenchTool(title: "Claude", icon: "cloud", state: .available, detail: "API key"),
-                WorkbenchTool(title: "Hermes local", icon: "shippingbox", state: .planned, detail: "planned")
+                WorkbenchTool(
+                    title: "Codex",
+                    icon: "terminal",
+                    state: .available,
+                    detail: "local CLI",
+                    summary: "Routes model packets to the local Codex CLI on macOS.",
+                    permission: "Uses existing CLI authentication.",
+                    provenance: "Backend metadata records local-cli invocation."
+                ),
+                WorkbenchTool(
+                    title: "Grok",
+                    icon: "sparkles",
+                    state: .available,
+                    detail: "local CLI",
+                    summary: "Routes model packets to the local Grok CLI on macOS.",
+                    permission: "Uses existing CLI authentication.",
+                    provenance: "Backend metadata records local-cli invocation."
+                ),
+                WorkbenchTool(
+                    title: "Claude",
+                    icon: "cloud",
+                    state: .available,
+                    detail: "API key",
+                    summary: "Routes model packets to Claude through the configured API key.",
+                    permission: "Uses environment or entered Anthropic API key.",
+                    provenance: "Backend metadata records https-api invocation."
+                ),
+                WorkbenchTool(
+                    title: "Hermes local",
+                    icon: "shippingbox",
+                    state: .planned,
+                    detail: "planned",
+                    summary: "Reserved for a future local Hermes agent workspace bridge.",
+                    permission: "No execution or permissions wired yet.",
+                    provenance: "Displayed as roadmap inventory only."
+                )
             ]
         )
     ]
@@ -257,13 +343,28 @@ struct WorkbenchTool: Identifiable, Equatable {
     let icon: String
     let state: WorkbenchToolState
     let detail: String
+    let summary: String
+    let permission: String
+    let provenance: String
 
-    init(id: String? = nil, title: String, icon: String, state: WorkbenchToolState, detail: String) {
+    init(
+        id: String? = nil,
+        title: String,
+        icon: String,
+        state: WorkbenchToolState,
+        detail: String,
+        summary: String,
+        permission: String,
+        provenance: String
+    ) {
         self.id = id ?? title.lowercased().replacingOccurrences(of: " ", with: "-")
         self.title = title
         self.icon = icon
         self.state = state
         self.detail = detail
+        self.summary = summary
+        self.permission = permission
+        self.provenance = provenance
     }
 }
 

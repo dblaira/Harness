@@ -33,6 +33,7 @@ struct MacChatView: View {
 
             sidebarLabel("Skills & Tools", "wrench.and.screwdriver")
             skillsList
+            selectedToolCard
 
             TextField("Search sessions...", text: $model.searchText)
                 .textFieldStyle(.plain)
@@ -92,26 +93,63 @@ struct MacChatView: View {
     }
 
     private func skillRow(_ tool: WorkbenchTool) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: tool.icon)
-                .frame(width: 14)
-                .foregroundStyle(Theme.macInk.opacity(0.45))
-            VStack(alignment: .leading, spacing: 1) {
-                Text(tool.title)
+        Button {
+            model.selectTool(tool)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: tool.icon)
+                    .frame(width: 14)
+                    .foregroundStyle(Theme.macInk.opacity(0.45))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(tool.title)
+                        .lineLimit(1)
+                    Text(tool.detail)
+                        .font(.system(size: 9))
+                        .foregroundStyle(Theme.macInk.opacity(0.42))
+                        .lineLimit(1)
+                }
                     .lineLimit(1)
-                Text(tool.detail)
-                    .font(.system(size: 9))
-                    .foregroundStyle(Theme.macInk.opacity(0.42))
-                    .lineLimit(1)
+                Spacer()
+                Circle()
+                    .fill(tool.state.tint)
+                    .frame(width: 6, height: 6)
             }
-                .lineLimit(1)
-            Spacer()
-            Circle()
-                .fill(tool.state.tint)
-                .frame(width: 6, height: 6)
+            .padding(.vertical, 2)
+            .padding(.horizontal, 4)
+            .background(model.selectedTool?.id == tool.id ? Theme.macEntry.opacity(0.32) : Color.clear, in: RoundedRectangle(cornerRadius: 6))
         }
+        .buttonStyle(.plain)
         .font(.system(size: 11))
         .foregroundStyle(Theme.macInk.opacity(0.72))
+    }
+
+    private var selectedToolCard: some View {
+        Group {
+            if let tool = model.selectedTool {
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack(spacing: 8) {
+                        Image(systemName: tool.icon)
+                            .frame(width: 14)
+                        Text(tool.title)
+                            .font(.system(size: 12).weight(.semibold))
+                        Spacer()
+                        Text(tool.state.rawValue)
+                            .font(.system(size: 8).weight(.bold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(Theme.macEntry.opacity(0.36), in: Capsule())
+                    }
+                    Text(tool.summary)
+                    Text(tool.permission)
+                    Text(tool.provenance)
+                }
+                .font(.system(size: 10))
+                .foregroundStyle(Theme.macInk.opacity(0.68))
+                .padding(10)
+                .background(Theme.macEntry.opacity(0.22), in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
+            }
+        }
     }
 
     private func sidebarLabel(_ title: String, _ icon: String) -> some View {
