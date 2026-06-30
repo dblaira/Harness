@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Harness — Research Brief</title>
+<style>
+  :root{
+    --paper:#f4efe6; --ink:#1c1a17; --muted:#6b635a;
+    --navy:#14213a; --red:#9c2a2a; --blue:#2f4cdd; --tan:#d9c39a;
+    --card:#fffdf8; --line:#e2d8c6;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);
+    font:17px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+  .wrap{max-width:880px;margin:0 auto;padding:0 22px 90px;}
+  h1,h2,h3,.serif{font-family:Georgia,"Times New Roman",serif;}
+  /* Hero */
+  header.hero{background:var(--navy);color:var(--paper);margin-bottom:0;
+    padding:54px 22px 40px;border-bottom:4px solid var(--red);}
+  header.hero .inner{max-width:880px;margin:0 auto;}
+  header.hero h1{font-size:54px;margin:0;letter-spacing:.5px;}
+  header.hero .sub{color:var(--tan);font-size:18px;margin-top:8px;letter-spacing:3px;text-transform:uppercase;}
+  header.hero p{color:#cdd3e0;max-width:620px;margin:18px 0 0;font-size:16px;}
+  /* TOC */
+  .toc{background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:20px 26px;margin:34px 0;box-shadow:0 1px 0 #fff inset;}
+  .toc h4{margin:0 0 10px;font:600 13px/1 sans-serif;letter-spacing:2px;text-transform:uppercase;color:var(--muted);}
+  .toc ol{margin:0;padding-left:20px;columns:2;column-gap:34px;}
+  .toc a{color:var(--navy);text-decoration:none;}
+  .toc a:hover{text-decoration:underline;}
+  /* Chapters */
+  section{margin:54px 0 0;}
+  .chno{font:600 13px/1 sans-serif;letter-spacing:3px;text-transform:uppercase;color:var(--red);}
+  h2{font-size:32px;margin:6px 0 4px;}
+  h2 + .lead{color:var(--muted);font-size:18px;margin:0 0 18px;}
+  .redrule{width:64px;height:3px;background:var(--red);border:0;margin:14px 0 22px;}
+  h3{font-size:21px;margin:30px 0 6px;}
+  p{margin:12px 0;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:22px 26px;margin:20px 0;}
+  .pill{display:inline-block;background:var(--tan);color:#4a3c20;font:600 12px/1 sans-serif;
+    padding:6px 11px;border-radius:20px;margin:0 6px 6px 0;letter-spacing:.5px;}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+  @media(max-width:680px){.grid2{grid-template-columns:1fr}.toc ol{columns:1}}
+  .mem{border-left:4px solid var(--blue);background:var(--card);padding:14px 18px;border-radius:0 10px 10px 0;margin:12px 0;}
+  .mem b{color:var(--navy);}
+  blockquote{margin:18px 0;padding:14px 20px;background:#efe7d7;border-radius:10px;
+    font-family:Georgia,serif;font-style:italic;color:#403a31;border-left:4px solid var(--tan);}
+  figure{margin:24px 0;text-align:center;}
+  figcaption{font-size:13px;color:var(--muted);margin-top:8px;font-style:italic;}
+  .takeaway{background:var(--navy);color:var(--paper);border-radius:12px;padding:20px 26px;margin:22px 0;}
+  .takeaway b{color:var(--tan);}
+  a.src{color:var(--blue);}
+  .map-row{display:flex;gap:14px;align-items:flex-start;padding:12px 0;border-bottom:1px solid var(--line);}
+  .map-row:last-child{border-bottom:0;}
+  .map-row .has{flex:0 0 200px;font-weight:600;color:var(--navy);}
+  .next{counter-reset:step;list-style:none;padding:0;}
+  .next li{position:relative;padding:10px 0 10px 44px;border-bottom:1px solid var(--line);}
+  .next li:before{counter-increment:step;content:counter(step);position:absolute;left:0;top:9px;
+    width:28px;height:28px;background:var(--red);color:#fff;border-radius:50%;
+    display:grid;place-items:center;font:700 14px/1 sans-serif;}
+  footer{margin-top:60px;padding-top:22px;border-top:1px solid var(--line);color:var(--muted);font-size:14px;}
+  .note{font-size:14px;color:var(--muted);background:#efe7d7;border-radius:8px;padding:10px 14px;display:inline-block;}
+</style>
+</head>
+<body>
+<header class="hero">
+  <div class="inner">
+    <div class="sub">Research Brief</div>
+    <h1>Harness</h1>
+    <p>A plain-language synthesis of the two videos on agent harness architecture & memory systems — mapped onto the iOS/macOS app you're building for your Hermes agent.</p>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="note">📄 Source transcripts pulled in full via the firecrawl CLI. Both videos are by <b>Sean's AI Stories / AutoManus</b>.</div>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ol>
+      <li><a href="#big">The big idea: harness = the reins</a></li>
+      <li><a href="#memory">The four kinds of memory</a></li>
+      <li><a href="#gate">The consolidation gate</a></li>
+      <li><a href="#loop">The agent loop & guardrails</a></li>
+      <li><a href="#ops">LLMOps: the self-improving loop</a></li>
+      <li><a href="#map">How this maps to your app</a></li>
+      <li><a href="#next">Where to go next</a></li>
+    </ol>
+  </nav>
+
+  <!-- 1 -->
+  <section id="big">
+    <div class="chno">Chapter 1</div>
+    <h2>The big idea: a harness is the reins</h2>
+    <p class="lead">An LLM is a brilliant horse that knows everything about the world and nothing about you.</p>
+    <hr class="redrule">
+    <p>The core metaphor from the harness video: a large language model is an incredibly powerful <b>horse</b>. It can run anywhere — but without reins it'll throw you, or wander off. A <b>harness</b> is the set of tools you wrap around the model so it goes where <i>you</i> want, with less randomness.</p>
+    <p>Everything else in this brief — memory, loops, guardrails, evals — is just a piece of that harness.</p>
+
+    <figure>
+      <svg viewBox="0 0 760 240" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+        <rect x="0" y="0" width="760" height="240" fill="none"/>
+        <!-- input -->
+        <rect x="20" y="95" width="130" height="50" rx="10" fill="#fffdf8" stroke="#d9c39a" stroke-width="2"/>
+        <text x="85" y="118" text-anchor="middle" font-size="13" fill="#6b635a">User prompt</text>
+        <text x="85" y="135" text-anchor="middle" font-size="11" fill="#9c2a2a">+ chat + system</text>
+        <!-- arrow -->
+        <line x1="150" y1="120" x2="210" y2="120" stroke="#14213a" stroke-width="2" marker-end="url(#a)"/>
+        <!-- working memory -->
+        <rect x="210" y="80" width="160" height="80" rx="12" fill="#14213a"/>
+        <text x="290" y="112" text-anchor="middle" font-size="14" fill="#d9c39a" font-weight="700">Working memory</text>
+        <text x="290" y="132" text-anchor="middle" font-size="11" fill="#cdd3e0">(the context "RAM")</text>
+        <!-- LLM horse -->
+        <circle cx="470" cy="120" r="48" fill="#9c2a2a"/>
+        <text x="470" y="116" text-anchor="middle" font-size="13" fill="#fff" font-weight="700">LLM</text>
+        <text x="470" y="134" text-anchor="middle" font-size="20">🐎</text>
+        <line x1="370" y1="120" x2="418" y2="120" stroke="#14213a" stroke-width="2" marker-end="url(#a)"/>
+        <!-- reply -->
+        <line x1="518" y1="120" x2="600" y2="120" stroke="#14213a" stroke-width="2" marker-end="url(#a)"/>
+        <rect x="600" y="95" width="130" height="50" rx="10" fill="#2f4cdd"/>
+        <text x="665" y="125" text-anchor="middle" font-size="14" fill="#fff" font-weight="700">Reply</text>
+        <!-- harness label -->
+        <rect x="195" y="40" width="345" height="160" rx="16" fill="none" stroke="#d9c39a" stroke-width="2" stroke-dasharray="6 5"/>
+        <text x="367" y="32" text-anchor="middle" font-size="13" fill="#6b635a" font-weight="700" letter-spacing="2">⟵ THE HARNESS ⟶</text>
+        <defs><marker id="a" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#14213a"/></marker></defs>
+      </svg>
+      <figcaption>One "agent run": prompt → working memory → the LLM → reply. The dashed box is what you build.</figcaption>
+    </figure>
+    <div class="takeaway"><b>Takeaway.</b> You're not building a chatbot. You're building the <i>reins</i> — the structure around the model that makes it predictable, personal, and useful.</div>
+  </section>
+
+  <!-- 2 -->
+  <section id="memory">
+    <div class="chno">Chapter 2</div>
+    <h2>The four kinds of memory</h2>
+    <p class="lead">A bare LLM call is ephemeral — the session is wiped unless you save it. Memory is how you fix that.</p>
+    <hr class="redrule">
+    <p>The working memory gets enriched by three durable memory types (four if you count working memory itself). Knowing the difference is the whole game:</p>
+
+    <div class="mem"><b>Working memory</b> — the live context window: your prompt, the current chat history, and the system prompt. Fast, but <i>ephemeral</i>: gone when the session ends.</div>
+    <div class="mem"><b>Procedural memory</b> — <i>how</i> the agent should behave: rules, habits, skills. Usually a plain <code>SKILL.md</code> file. ("If the customer is angry, apologize first.")</div>
+    <div class="mem"><b>Semantic memory</b> — durable <i>facts</i> and the user profile. Who you are, what your product is. Stored in a vector database, fetched with RAG.</div>
+    <div class="mem"><b>Episodic memory</b> — a dated <i>log</i> of past chats and events on a timeline. "What were the last 10 conversations with this customer?"</div>
+
+    <h3>How retrieval works (RAG, top-K)</h3>
+    <p>You never dump the whole database into the model — too expensive, too slow, and context windows top out (~1M tokens). Instead, text is turned into vectors (lists of numbers), and a <b>similarity search</b> grabs only the <b>top-K</b> most relevant pieces. If K = 5, you fetch the 5 best-matching facts for this question.</p>
+    <blockquote>"You don't want the entire 2,000 messages. You want the 20 that are exactly relevant to what you want."</blockquote>
+  </section>
+
+  <!-- 3 -->
+  <section id="gate">
+    <div class="chno">Chapter 3</div>
+    <h2>The consolidation gate</h2>
+    <p class="lead">The trick most people miss — and why ChatGPT's memory stays short but always current.</p>
+    <hr class="redrule">
+    <p>Every reply gets appended to the episodic log, so that log explodes over time. You don't want to RAG that giant log on every turn. So you add a <b>gate</b>: only after N chats pile up (say 20, or 100) does a <b>cheaper summarizer agent</b> distill those events into a handful of durable facts, which it writes into semantic memory.</p>
+
+    <figure>
+      <svg viewBox="0 0 760 270" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+        <!-- reply -->
+        <rect x="20" y="20" width="130" height="44" rx="10" fill="#2f4cdd"/>
+        <text x="85" y="47" text-anchor="middle" font-size="13" fill="#fff" font-weight="700">Each reply</text>
+        <line x1="85" y1="64" x2="85" y2="100" stroke="#14213a" stroke-width="2" marker-end="url(#b)"/>
+        <!-- episodic -->
+        <rect x="20" y="100" width="220" height="64" rx="10" fill="#fffdf8" stroke="#d9c39a" stroke-width="2"/>
+        <text x="130" y="128" text-anchor="middle" font-size="13" fill="#14213a" font-weight="700">Episodic memory</text>
+        <text x="130" y="147" text-anchor="middle" font-size="11" fill="#6b635a">dated log — grows forever</text>
+        <!-- gate -->
+        <line x1="240" y1="132" x2="310" y2="132" stroke="#14213a" stroke-width="2" marker-end="url(#b)"/>
+        <polygon points="310,132 360,102 410,132 360,162" fill="#9c2a2a"/>
+        <text x="360" y="129" text-anchor="middle" font-size="11" fill="#fff" font-weight="700">GATE</text>
+        <text x="360" y="144" text-anchor="middle" font-size="9" fill="#f4d9d9">every N chats</text>
+        <!-- summarizer -->
+        <line x1="410" y1="132" x2="470" y2="132" stroke="#14213a" stroke-width="2" marker-end="url(#b)"/>
+        <rect x="470" y="106" width="120" height="52" rx="10" fill="#14213a"/>
+        <text x="530" y="129" text-anchor="middle" font-size="12" fill="#d9c39a" font-weight="700">Summarizer</text>
+        <text x="530" y="145" text-anchor="middle" font-size="10" fill="#cdd3e0">(cheap model)</text>
+        <!-- semantic -->
+        <line x1="590" y1="132" x2="640" y2="132" stroke="#14213a" stroke-width="2" marker-end="url(#b)"/>
+        <rect x="600" y="180" width="140" height="56" rx="10" fill="#fffdf8" stroke="#2f4cdd" stroke-width="2"/>
+        <text x="670" y="205" text-anchor="middle" font-size="12" fill="#14213a" font-weight="700">Semantic memory</text>
+        <text x="670" y="222" text-anchor="middle" font-size="10" fill="#6b635a">distilled durable facts</text>
+        <path d="M640,132 Q670,150 670,178" fill="none" stroke="#14213a" stroke-width="2" marker-end="url(#b)"/>
+        <text x="360" y="205" text-anchor="middle" font-size="13" fill="#6b635a" font-style="italic">"distill into facts"</text>
+        <defs><marker id="b" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#14213a"/></marker></defs>
+      </svg>
+      <figcaption>The gate keeps the fast memory small while the facts stay up to date.</figcaption>
+    </figure>
+    <div class="takeaway"><b>Takeaway.</b> Two-tier memory: an append-only episodic log (cheap to write) + a small distilled semantic store (cheap to read). The gate + summarizer is the bridge between them.</div>
+  </section>
+
+  <!-- 4 -->
+  <section id="loop">
+    <div class="chno">Chapter 4</div>
+    <h2>The agent loop & end-loop guardrails</h2>
+    <p class="lead">Agents don't answer once — they call tools repeatedly until the job is done. The danger is they never stop.</p>
+    <hr class="redrule">
+    <p>Give the horse full power and it might loop forever, or never know when "good enough" is reached. <b>Loop engineering</b> is deciding when to stop. The <b>end-loop guardrails</b> are the stop conditions: task complete, or a checkpoint where the agent confirms with you first.</p>
+
+    <figure>
+      <svg viewBox="0 0 700 250" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+        <rect x="270" y="20" width="160" height="48" rx="10" fill="#14213a"/>
+        <text x="350" y="49" text-anchor="middle" font-size="13" fill="#d9c39a" font-weight="700">Think / plan</text>
+        <path d="M430,44 Q560,44 560,120" fill="none" stroke="#14213a" stroke-width="2" marker-end="url(#c)"/>
+        <rect x="470" y="120" width="180" height="48" rx="10" fill="#fffdf8" stroke="#d9c39a" stroke-width="2"/>
+        <text x="560" y="143" text-anchor="middle" font-size="13" fill="#14213a" font-weight="700">Call a tool</text>
+        <text x="560" y="159" text-anchor="middle" font-size="10" fill="#6b635a">CRM · Stripe · calendar</text>
+        <path d="M470,150 Q350,150 350,196" fill="none" stroke="#14213a" stroke-width="2" marker-end="url(#c)"/>
+        <polygon points="280,196 350,170 420,196 350,222" fill="#9c2a2a"/>
+        <text x="350" y="196" text-anchor="middle" font-size="11" fill="#fff" font-weight="700">Done?</text>
+        <text x="350" y="210" text-anchor="middle" font-size="9" fill="#f4d9d9">guardrail</text>
+        <path d="M280,196 Q150,196 150,44 L268,44" fill="none" stroke="#9c2a2a" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#cr)"/>
+        <text x="150" y="125" text-anchor="middle" font-size="11" fill="#9c2a2a" font-weight="700">No → loop</text>
+        <path d="M420,196 Q540,196 540,220" fill="none" stroke="#2f4cdd" stroke-width="2" marker-end="url(#cb)"/>
+        <rect x="470" y="215" width="160" height="30" rx="8" fill="#2f4cdd"/>
+        <text x="550" y="235" text-anchor="middle" font-size="12" fill="#fff" font-weight="700">Yes → reply</text>
+        <defs>
+          <marker id="c" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#14213a"/></marker>
+          <marker id="cr" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#9c2a2a"/></marker>
+          <marker id="cb" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#2f4cdd"/></marker>
+        </defs>
+      </svg>
+      <figcaption>Plan → call tool → check the guardrail → loop or reply.</figcaption>
+    </figure>
+    <p>His real-world example: a Claude Code hook that <b>sends you a notification</b> when the agent is blocked on a permission — so the loop pausing for your input never silently wastes 25 minutes.</p>
+  </section>
+
+  <!-- 5 -->
+  <section id="ops">
+    <div class="chno">Chapter 5</div>
+    <h2>LLMOps: the self-improving loop</h2>
+    <p class="lead">You can't improve what you can't see. Trace every run, score it, diagnose, ship a fix.</p>
+    <hr class="redrule">
+    <div class="grid2">
+      <div class="card"><b>1 · Trace</b><p style="margin:8px 0 0">Record a tree of every run: what was asked, what was retrieved, how many tool calls, latency, tokens. (LangFuse / LangSmith.)</p></div>
+      <div class="card"><b>2 · Evaluate</b><p style="margin:8px 0 0">Was it <i>good</i> and <i>healthy</i>? Use an LLM-as-judge for quality + hard metrics for latency/cost.</p></div>
+      <div class="card"><b>3 · Diagnose</b><p style="margin:8px 0 0">Why did it break? Meeting never scheduled? Latency 20s instead of 2ms? Working memory too big?</p></div>
+      <div class="card"><b>4 · Ship</b><p style="margin:8px 0 0">Small fix → new prompt / model config / retrieval params. Deep bug → fix, re-run, re-trace, re-eval.</p></div>
+    </div>
+    <div class="takeaway"><b>Takeaway.</b> The harness + this feedback loop = a system that <b>self-evolves</b> over time instead of staying frozen at v1.</div>
+  </section>
+
+  <!-- 6 -->
+  <section id="map">
+    <div class="chno">Chapter 6</div>
+    <h2>How this maps to <span class="serif">Harness</span></h2>
+    <p class="lead">Your mockup is already gesturing at several of these pieces. Here's the alignment.</p>
+    <hr class="redrule">
+    <div class="card">
+      <div class="map-row"><div class="has">"Rules + axioms" that the<br>reply must cite</div><div>= <b>Procedural memory</b> (your <code>SKILL.md</code> layer) + an <b>end-loop guardrail</b> that forces the model to name the rule it used.</div></div>
+      <div class="map-row"><div class="has">Recent Sessions / pinned</div><div>= <b>Episodic memory</b> — the dated log of past conversations.</div></div>
+      <div class="map-row"><div class="has">"Codex" model selector</div><div>= the <b>configurable model</b> knob — and an opening to wire a <i>cheaper</i> model for the summarizer.</div></div>
+      <div class="map-row"><div class="has">A chat that "knows you"</div><div>= <b>Semantic memory</b>: your durable profile + axioms, retrieved via RAG.</div></div>
+      <div class="map-row"><div class="has">Not yet visible</div><div>= the <b>consolidation gate</b>, the <b>summarizer agent</b>, and <b>tracing/eval</b>. These are the next architectural layers.</div></div>
+    </div>
+    <p><span class="pill">Procedural</span><span class="pill">Semantic</span><span class="pill">Episodic</span><span class="pill">Consolidation gate</span><span class="pill">Tool loop</span><span class="pill">Guardrails</span><span class="pill">Tracing / eval</span></p>
+  </section>
+
+  <!-- 7 -->
+  <section id="next">
+    <div class="chno">Chapter 7</div>
+    <h2>Where to go next</h2>
+    <hr class="redrule">
+    <ul class="next">
+      <li><b>Review the "Hermes agent authorization set up" session.</b> I found a SAVY-iOS session on disk that mentions Hermes — say the word and I'll fold its authorization details into this picture.</li>
+      <li><b>Decide the storage spine.</b> Two-tier memory needs a place to live: a vector store for semantic/episodic + a plain file layer for procedural skills. (SwiftData locally? A Supabase/Postgres + pgvector backend for sync across iOS + macOS?)</li>
+      <li><b>Define the consolidation gate.</b> Pick N (chats before distill) and which cheap model summarizes.</li>
+      <li><b>Make the guardrail concrete.</b> "The reply names the rule it used" is a great, testable first guardrail — bake it into the system prompt + an eval check.</li>
+      <li><b>Add tracing early.</b> Even a simple local trace log per run pays off the moment you start tuning.</li>
+    </ul>
+  </section>
+
+  <footer>
+    <p><b>Sources</b><br>
+    ① <a class="src" href="https://youtu.be/GrNbuWWJYiI">AI Agent Harness &amp; Loop Engineering in 19 Min</a> — Sean's AI Stories / AutoManus<br>
+    ② <a class="src" href="https://youtu.be/mY3bR9qjZr4">AI Agent Memory System in 12 Min</a> — Sean's AI Stories / AutoManus<br>
+    Repo: <a class="src" href="https://github.com/dblaira/Harness">github.com/dblaira/Harness</a></p>
+    <p>Transcripts scraped in full with the firecrawl CLI · Brief generated for Adam Blair · 2026-06-30</p>
+  </footer>
+
+</div>
+</body>
+</html>

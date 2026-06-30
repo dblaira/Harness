@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Harness — Research Brief</title>
+<style>
+  :root{
+    --paper:#f4efe6; --ink:#1c1a17; --muted:#6b635a;
+    --navy:#14213a; --red:#9c2a2a; --blue:#2f4cdd; --tan:#d9c39a;
+    --green:#2f6b4f; --card:#fffdf8; --line:#e2d8c6;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);
+    font:17px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+  .wrap{max-width:880px;margin:0 auto;padding:0 22px 90px;}
+  h1,h2,h3,.serif{font-family:Georgia,"Times New Roman",serif;}
+  header.hero{background:var(--navy);color:var(--paper);padding:54px 22px 40px;border-bottom:4px solid var(--red);}
+  header.hero .inner{max-width:880px;margin:0 auto;}
+  header.hero h1{font-size:54px;margin:0;letter-spacing:.5px;}
+  header.hero .sub{color:var(--tan);font-size:18px;margin-top:8px;letter-spacing:3px;text-transform:uppercase;}
+  header.hero p{color:#cdd3e0;max-width:640px;margin:18px 0 0;font-size:16px;}
+  .toc{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 26px;margin:34px 0;}
+  .toc h4{margin:0 0 10px;font:600 13px/1 sans-serif;letter-spacing:2px;text-transform:uppercase;color:var(--muted);}
+  .toc ol{margin:0;padding-left:20px;columns:2;column-gap:34px;}
+  .toc a{color:var(--navy);text-decoration:none;}
+  .toc a:hover{text-decoration:underline;}
+  section{margin:54px 0 0;}
+  .chno{font:600 13px/1 sans-serif;letter-spacing:3px;text-transform:uppercase;color:var(--red);}
+  h2{font-size:32px;margin:6px 0 4px;}
+  h2 + .lead{color:var(--muted);font-size:18px;margin:0 0 18px;}
+  .redrule{width:64px;height:3px;background:var(--red);border:0;margin:14px 0 22px;}
+  h3{font-size:21px;margin:30px 0 6px;}
+  p{margin:12px 0;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:22px 26px;margin:20px 0;}
+  .pill{display:inline-block;background:var(--tan);color:#4a3c20;font:600 12px/1 sans-serif;padding:6px 11px;border-radius:20px;margin:0 6px 6px 0;letter-spacing:.5px;}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+  @media(max-width:680px){.grid2{grid-template-columns:1fr}.toc ol{columns:1}}
+  .mem{border-left:4px solid var(--blue);background:var(--card);padding:14px 18px;border-radius:0 10px 10px 0;margin:12px 0;}
+  .mem.det{border-left-color:var(--green);}
+  .mem b{color:var(--navy);}
+  blockquote{margin:18px 0;padding:14px 20px;background:#efe7d7;border-radius:10px;font-family:Georgia,serif;font-style:italic;color:#403a31;border-left:4px solid var(--tan);}
+  figure{margin:24px 0;text-align:center;}
+  figcaption{font-size:13px;color:var(--muted);margin-top:8px;font-style:italic;}
+  .takeaway{background:var(--navy);color:var(--paper);border-radius:12px;padding:20px 26px;margin:22px 0;}
+  .takeaway b{color:var(--tan);}
+  .takeaway.green{background:var(--green);}
+  a.src{color:var(--blue);}
+  .map-row{display:flex;gap:14px;align-items:flex-start;padding:12px 0;border-bottom:1px solid var(--line);}
+  .map-row:last-child{border-bottom:0;}
+  .map-row .has{flex:0 0 210px;font-weight:600;color:var(--navy);}
+  .next{counter-reset:step;list-style:none;padding:0;}
+  .next li{position:relative;padding:10px 0 10px 44px;border-bottom:1px solid var(--line);}
+  .next li:before{counter-increment:step;content:counter(step);position:absolute;left:0;top:9px;width:28px;height:28px;background:var(--red);color:#fff;border-radius:50%;display:grid;place-items:center;font:700 14px/1 sans-serif;}
+  footer{margin-top:60px;padding-top:22px;border-top:1px solid var(--line);color:var(--muted);font-size:14px;}
+  .note{font-size:14px;color:var(--muted);background:#efe7d7;border-radius:8px;padding:10px 14px;display:inline-block;}
+  table.tbl{width:100%;border-collapse:collapse;margin:18px 0;font-size:15px;}
+  table.tbl th{text-align:left;background:var(--navy);color:var(--paper);padding:9px 12px;font:600 13px/1.3 sans-serif;}
+  table.tbl td{padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top;}
+  table.tbl tr:nth-child(even) td{background:#faf6ee;}
+  code{background:#ece3d2;border-radius:4px;padding:1px 6px;font-size:14px;}
+  .status{display:inline-block;font:600 11px/1 sans-serif;padding:5px 9px;border-radius:5px;letter-spacing:.5px;text-transform:uppercase;}
+  .status.live{background:#dcebe2;color:var(--green);}
+  .status.plan{background:#e7e2f5;color:#4b3fa8;}
+  .legend span{margin-right:16px;font-size:13px;color:var(--muted);}
+  .dot{display:inline-block;width:11px;height:11px;border-radius:50%;vertical-align:middle;margin-right:5px;}
+</style>
+</head>
+<body>
+<header class="hero">
+  <div class="inner">
+    <div class="sub">Research Brief · v2</div>
+    <h1>Harness</h1>
+    <p>The harness &amp; memory patterns from the two videos — now joined with <b>your own</b> Understood ontology and knowledge-graph as the deterministic spine, and reframed around your real intent: Harness as the central command deck for all your agents.</p>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="note">📄 Video transcripts via firecrawl CLI · Ontology &amp; KG read from your Obsidian <code>Main</code> vault and <code>~/.hermes</code> (read-only, no secrets touched).</div>
+
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ol>
+      <li><a href="#intent">Your intent: the command deck</a></li>
+      <li><a href="#big">Harness = the reins</a></li>
+      <li><a href="#memory">The four kinds of memory</a></li>
+      <li><a href="#gate">The consolidation gate</a></li>
+      <li><a href="#loop">The agent loop &amp; guardrails</a></li>
+      <li><a href="#ops">LLMOps: the self-improving loop</a></li>
+      <li><a href="#det">The deterministic layer (your KG)</a></li>
+      <li><a href="#stack">Two layers, stacked</a></li>
+      <li><a href="#map">Harness as command deck</a></li>
+      <li><a href="#next">Where to go next</a></li>
+    </ol>
+  </nav>
+
+  <!-- 0 INTENT -->
+  <section id="intent">
+    <div class="chno">Chapter 0 · Your intent</div>
+    <h2>The command deck</h2>
+    <p class="lead">In your words, translated into a design statement.</p>
+    <hr class="redrule">
+    <p>You're not building "an app with a chatbot." You're tired of the sprawl — Claude Code, Codex, Hermes, open-claw, each with its own tools, skills, plugins, and MCP servers — useful but scattered enough to be confusing. You have the hardware, the time, and AI help; you want <b>one Apple-native place</b> where the skills, plugins, MCP connections, and agents all live, and that the others connect <i>into</i> when useful.</p>
+    <blockquote>"I have my own app called Harness… it's the lead point for apps like Hermes agent and Claude/Codex/open-claw… my central building hub that these others can connect to whenever I find it useful."</blockquote>
+    <p>So the design north star for this whole brief is: <b>Harness is the orchestrator.</b> The LLM agents are interchangeable horses; the videos teach you the reins (memory + loops + ops); and your <b>Understood knowledge graph is the deterministic spine</b> that keeps every horse true to <i>your</i> meaning.</p>
+  </section>
+
+  <!-- 1 -->
+  <section id="big">
+    <div class="chno">Chapter 1</div>
+    <h2>The big idea: a harness is the reins</h2>
+    <p class="lead">An LLM is a brilliant horse that knows everything about the world and nothing about you.</p>
+    <hr class="redrule">
+    <p>A large language model is a powerful <b>horse</b> — it can run anywhere, but without reins it throws you or wanders. A <b>harness</b> is the tooling you wrap around it so it goes where <i>you</i> want, with less randomness. Memory, loops, guardrails, evals, and your knowledge graph are all pieces of that harness.</p>
+    <figure>
+      <svg viewBox="0 0 760 240" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+        <rect x="20" y="95" width="130" height="50" rx="10" fill="#fffdf8" stroke="#d9c39a" stroke-width="2"/>
+        <text x="85" y="118" text-anchor="middle" font-size="13" fill="#6b635a">User prompt</text>
+        <text x="85" y="135" text-anchor="middle" font-size="11" fill="#9c2a2a">+ chat + system</text>
+        <line x1="150" y1="120" x2="210" y2="120" stroke="#14213a" stroke-width="2" marker-end="url(#a)"/>
+        <rect x="210" y="80" width="160" height="80" rx="12" fill="#14213a"/>
+        <text x="290" y="112" text-anchor="middle" font-size="14" fill="#d9c39a" font-weight="700">Working memory</text>
+        <text x="290" y="132" text-anchor="middle" font-size="11" fill="#cdd3e0">(the context "RAM")</text>
+        <circle cx="470" cy="120" r="48" fill="#9c2a2a"/>
+        <text x="470" y="116" text-anchor="middle" font-size="13" fill="#fff" font-weight="700">LLM</text>
+        <text x="470" y="134" text-anchor="middle" font-size="20">🐎</text>
+        <line x1="370" y1="120" x2="418" y2="120" stroke="#14213a" stroke-width="2" marker-end="url(#a)"/>
+        <line x1="518" y1="120" x2="600" y2="120" stroke="#14213a" stroke-width="2" marker-end="url(#a)"/>
+        <rect x="600" y="95" width="130" height="50" rx="10" fill="#2f4cdd"/>
+        <text x="665" y="125" text-anchor="middle" font-size="14" fill="#fff" font-weight="700">Reply</text>
+        <rect x="195" y="40" width="345" height="160" rx="16" fill="none" stroke="#d9c39a" stroke-width="2" stroke-dasharray="6 5"/>
+        <text x="367" y="32" text-anchor="middle" font-size="13" fill="#6b635a" font-weight="700" letter-spacing="2">⟵ THE HARNESS ⟶</text>
+        <defs><marker id="a" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#14213a"/></marker></defs>
+      </svg>
+      <figcaption>One "agent run": prompt → working memory → the LLM → reply. The dashed box is what you build.</figcaption>
+    </figure>
+  </section>
+
+  <!-- 2 -->
+  <section id="memory">
+    <div class="chno">Chapter 2</div>
+    <h2>The four kinds of memory</h2>
+    <p class="lead">A bare LLM call is ephemeral — the session is wiped unless you save it.</p>
+    <hr class="redrule">
+    <div class="mem"><b>Working memory</b> — the live context window: prompt + chat history + system prompt. Fast, but gone when the session ends.</div>
+    <div class="mem"><b>Procedural memory</b> — <i>how</i> the agent behaves: rules, habits, skills. Usually a plain <code>SKILL.md</code>.</div>
+    <div class="mem"><b>Semantic memory</b> — durable <i>facts</i> &amp; user profile. Vector DB, fetched with RAG.</div>
+    <div class="mem"><b>Episodic memory</b> — a dated <i>log</i> of past chats &amp; events on a timeline.</div>
+    <h3>Retrieval = RAG, top-K</h3>
+    <p>Never dump the whole DB into the model — too costly, too slow, context tops out (~1M tokens). Text becomes vectors; a similarity search grabs only the <b>top-K</b> most relevant pieces.</p>
+    <blockquote>"You don't want the entire 2,000 messages. You want the 20 that are exactly relevant."</blockquote>
+  </section>
+
+  <!-- 3 -->
+  <section id="gate">
+    <div class="chno">Chapter 3</div>
+    <h2>The consolidation gate</h2>
+    <p class="lead">Why ChatGPT's memory stays short but always current.</p>
+    <hr class="redrule">
+    <p>Every reply appends to the episodic log, so it explodes. You don't RAG that giant log each turn — you add a <b>gate</b>: after N chats, a <b>cheaper summarizer agent</b> distills events into a handful of durable facts written to semantic memory.</p>
+    <figure>
+      <svg viewBox="0 0 760 250" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+        <rect x="20" y="20" width="130" height="44" rx="10" fill="#2f4cdd"/>
+        <text x="85" y="47" text-anchor="middle" font-size="13" fill="#fff" font-weight="700">Each reply</text>
+        <line x1="85" y1="64" x2="85" y2="100" stroke="#14213a" stroke-width="2" marker-end="url(#b)"/>
+        <rect x="20" y="100" width="220" height="64" rx="10" fill="#fffdf8" stroke="#d9c39a" stroke-width="2"/>
+        <text x="130" y="128" text-anchor="middle" font-size="13" fill="#14213a" font-weight="700">Episodic memory</text>
+        <text x="130" y="147" text-anchor="middle" font-size="11" fill="#6b635a">dated log — grows forever</text>
+        <line x1="240" y1="132" x2="310" y2="132" stroke="#14213a" stroke-width="2" marker-end="url(#b)"/>
+        <polygon points="310,132 360,102 410,132 360,162" fill="#9c2a2a"/>
+        <text x="360" y="129" text-anchor="middle" font-size="11" fill="#fff" font-weight="700">GATE</text>
+        <text x="360" y="144" text-anchor="middle" font-size="9" fill="#f4d9d9">every N chats</text>
+        <line x1="410" y1="132" x2="470" y2="132" stroke="#14213a" stroke-width="2" marker-end="url(#b)"/>
+        <rect x="470" y="106" width="120" height="52" rx="10" fill="#14213a"/>
+        <text x="530" y="129" text-anchor="middle" font-size="12" fill="#d9c39a" font-weight="700">Summarizer</text>
+        <text x="530" y="145" text-anchor="middle" font-size="10" fill="#cdd3e0">(cheap model)</text>
+        <line x1="590" y1="132" x2="640" y2="132" stroke="#14213a" stroke-width="2" marker-end="url(#b)"/>
+        <rect x="600" y="180" width="140" height="56" rx="10" fill="#fffdf8" stroke="#2f4cdd" stroke-width="2"/>
+        <text x="670" y="205" text-anchor="middle" font-size="12" fill="#14213a" font-weight="700">Semantic memory</text>
+        <text x="670" y="222" text-anchor="middle" font-size="10" fill="#6b635a">distilled durable facts</text>
+        <path d="M640,132 Q670,150 670,178" fill="none" stroke="#14213a" stroke-width="2" marker-end="url(#b)"/>
+        <text x="360" y="205" text-anchor="middle" font-size="13" fill="#6b635a" font-style="italic">"distill into facts"</text>
+        <defs><marker id="b" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#14213a"/></marker></defs>
+      </svg>
+      <figcaption>The gate keeps the fast memory small while the facts stay up to date.</figcaption>
+    </figure>
+  </section>
+
+  <!-- 4 -->
+  <section id="loop">
+    <div class="chno">Chapter 4</div>
+    <h2>The agent loop &amp; end-loop guardrails</h2>
+    <p class="lead">Agents call tools repeatedly until the job is done. The danger is they never stop.</p>
+    <hr class="redrule">
+    <p><b>Loop engineering</b> is deciding when to stop. The <b>end-loop guardrails</b> are the stop conditions: task complete, or a checkpoint where the agent confirms with you first.</p>
+    <figure>
+      <svg viewBox="0 0 700 250" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+        <rect x="270" y="20" width="160" height="48" rx="10" fill="#14213a"/>
+        <text x="350" y="49" text-anchor="middle" font-size="13" fill="#d9c39a" font-weight="700">Think / plan</text>
+        <path d="M430,44 Q560,44 560,120" fill="none" stroke="#14213a" stroke-width="2" marker-end="url(#c)"/>
+        <rect x="470" y="120" width="180" height="48" rx="10" fill="#fffdf8" stroke="#d9c39a" stroke-width="2"/>
+        <text x="560" y="143" text-anchor="middle" font-size="13" fill="#14213a" font-weight="700">Call a tool</text>
+        <text x="560" y="159" text-anchor="middle" font-size="10" fill="#6b635a">CRM · Stripe · calendar</text>
+        <path d="M470,150 Q350,150 350,196" fill="none" stroke="#14213a" stroke-width="2" marker-end="url(#c)"/>
+        <polygon points="280,196 350,170 420,196 350,222" fill="#9c2a2a"/>
+        <text x="350" y="196" text-anchor="middle" font-size="11" fill="#fff" font-weight="700">Done?</text>
+        <text x="350" y="210" text-anchor="middle" font-size="9" fill="#f4d9d9">guardrail</text>
+        <path d="M280,196 Q150,196 150,44 L268,44" fill="none" stroke="#9c2a2a" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#cr)"/>
+        <text x="150" y="125" text-anchor="middle" font-size="11" fill="#9c2a2a" font-weight="700">No → loop</text>
+        <path d="M420,196 Q540,196 540,220" fill="none" stroke="#2f4cdd" stroke-width="2" marker-end="url(#cb)"/>
+        <rect x="470" y="215" width="160" height="30" rx="8" fill="#2f4cdd"/>
+        <text x="550" y="235" text-anchor="middle" font-size="12" fill="#fff" font-weight="700">Yes → reply</text>
+        <defs>
+          <marker id="c" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#14213a"/></marker>
+          <marker id="cr" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#9c2a2a"/></marker>
+          <marker id="cb" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#2f4cdd"/></marker>
+        </defs>
+      </svg>
+      <figcaption>Plan → call tool → check the guardrail → loop or reply.</figcaption>
+    </figure>
+    <p>His real example: a Claude Code hook that <b>notifies you</b> when the agent is blocked on a permission — so a paused loop never silently wastes 25 minutes.</p>
+  </section>
+
+  <!-- 5 -->
+  <section id="ops">
+    <div class="chno">Chapter 5</div>
+    <h2>LLMOps: the self-improving loop</h2>
+    <p class="lead">You can't improve what you can't see. Trace, score, diagnose, ship.</p>
+    <hr class="redrule">
+    <div class="grid2">
+      <div class="card"><b>1 · Trace</b><p style="margin:8px 0 0">Record a tree per run: what was asked, what was retrieved, tool calls, latency, tokens. (LangFuse / LangSmith.)</p></div>
+      <div class="card"><b>2 · Evaluate</b><p style="margin:8px 0 0">Good &amp; healthy? LLM-as-judge for quality + hard metrics for latency/cost.</p></div>
+      <div class="card"><b>3 · Diagnose</b><p style="margin:8px 0 0">Why did it break? Tool too slow? Working memory too big? Retrieval unnecessary?</p></div>
+      <div class="card"><b>4 · Ship</b><p style="margin:8px 0 0">Small fix → new prompt / config / retrieval params. Deep bug → fix, re-run, re-trace, re-eval.</p></div>
+    </div>
+  </section>
+
+  <!-- 6 DETERMINISTIC -->
+  <section id="det">
+    <div class="chno">Chapter 6 · Your work</div>
+    <h2>The deterministic layer: Understood</h2>
+    <p class="lead">The videos cover the <i>probabilistic</i> half. You already built the <i>deterministic</i> half — a knowledge graph that gates the model before it speaks.</p>
+    <hr class="redrule">
+    <p>The Understood ontology is a <b>two-layer meaning system</b> designed to give an AI personal context <i>without</i> letting it invent facts or pass your beliefs off as universal truth.</p>
+    <div class="mem det"><b>Layer 1 — Personal axioms.</b> Your beliefs &amp; causal rules as <code>antecedent → consequent</code> with confidence and evidence links, organized into 13 life domains. Authority: <b>human review only</b>, never silent AI mutation.</div>
+    <div class="mem det"><b>Layer 2 — Public guardrails.</b> Formal standards (BFO + Common Core Ontologies, schema.org) so personal beliefs aren't treated as universal truth and stay portable across apps.</div>
+
+    <h3>The graph is the rails — and it decides <i>before</i> the LLM</h3>
+    <p>This is the load-bearing idea, and it's the deterministic mirror of the video's probabilistic loop: a rule engine reads the graph and decides what's allowed <b>first</b>; the LLM only gets to phrase the result and <b>must cite the rules that fired</b>. It can't make facts up.</p>
+    <figure>
+      <svg viewBox="0 0 760 250" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+        <rect x="20" y="100" width="130" height="50" rx="10" fill="#fffdf8" stroke="#d9c39a" stroke-width="2"/>
+        <text x="85" y="122" text-anchor="middle" font-size="12" fill="#6b635a">User signal</text>
+        <text x="85" y="139" text-anchor="middle" font-size="10" fill="#9c2a2a">question / rating</text>
+        <line x1="150" y1="125" x2="200" y2="125" stroke="#2f6b4f" stroke-width="2" marker-end="url(#d)"/>
+        <rect x="200" y="92" width="170" height="66" rx="12" fill="#2f6b4f"/>
+        <text x="285" y="118" text-anchor="middle" font-size="13" fill="#fff" font-weight="700">Rule engine</text>
+        <text x="285" y="136" text-anchor="middle" font-size="10" fill="#cfe6d9">reads graph · no LLM</text>
+        <line x1="370" y1="125" x2="420" y2="125" stroke="#2f6b4f" stroke-width="2" marker-end="url(#d)"/>
+        <rect x="420" y="92" width="150" height="66" rx="12" fill="#14213a"/>
+        <text x="495" y="114" text-anchor="middle" font-size="12" fill="#d9c39a" font-weight="700">graphTrace</text>
+        <text x="495" y="132" text-anchor="middle" font-size="10" fill="#cdd3e0">which rules fired</text>
+        <text x="495" y="147" text-anchor="middle" font-size="9" fill="#9bb0c9">[decision made here]</text>
+        <line x1="570" y1="125" x2="615" y2="125" stroke="#14213a" stroke-width="2" marker-end="url(#d)"/>
+        <rect x="615" y="92" width="125" height="66" rx="12" fill="#9c2a2a"/>
+        <text x="677" y="115" text-anchor="middle" font-size="12" fill="#fff" font-weight="700">LLM voice</text>
+        <text x="677" y="133" text-anchor="middle" font-size="9" fill="#f4d9d9">phrases only ·</text>
+        <text x="677" y="146" text-anchor="middle" font-size="9" fill="#f4d9d9">must cite trace</text>
+        <text x="380" y="200" text-anchor="middle" font-size="12" fill="#6b635a" font-style="italic">"Rule used: X · Data: Y · Evidence: Z" — surfaced to you</text>
+        <defs><marker id="d" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#2f6b4f"/></marker></defs>
+      </svg>
+      <figcaption>Deterministic decision first; the LLM is downstream and accountable to the trace.</figcaption>
+    </figure>
+
+    <h3>How meaning gets into the graph (the steward pipeline)</h3>
+    <p>Nothing enters the canonical graph silently. New meaning starts as a <b>Semantic Candidate</b> and must pass gates before promotion — you are the steward.</p>
+    <figure>
+      <svg viewBox="0 0 760 120" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+        <g fill="#14213a">
+        <rect x="8" y="40" width="120" height="44" rx="8" fill="#fffdf8" stroke="#d9c39a" stroke-width="2"/>
+        <text x="68" y="60" text-anchor="middle" font-weight="700">Vault note</text>
+        <text x="68" y="75" text-anchor="middle" fill="#6b635a">journal / belief</text>
+        <rect x="158" y="40" width="120" height="44" rx="8" fill="#fffdf8" stroke="#d9c39a" stroke-width="2"/>
+        <text x="218" y="60" text-anchor="middle" font-weight="700">Candidate</text>
+        <text x="218" y="75" text-anchor="middle" fill="#6b635a">TTL + review .md</text>
+        <rect x="308" y="40" width="120" height="44" rx="8" fill="#fffdf8" stroke="#d9c39a" stroke-width="2"/>
+        <text x="368" y="60" text-anchor="middle" font-weight="700">Validate</text>
+        <text x="368" y="75" text-anchor="middle" fill="#6b635a">Turtle + SHACL</text>
+        <rect x="458" y="40" width="120" height="44" rx="8" fill="#9c2a2a"/>
+        <text x="518" y="60" text-anchor="middle" fill="#fff" font-weight="700">Adam approves</text>
+        <text x="518" y="75" text-anchor="middle" fill="#f4d9d9">human gate</text>
+        <rect x="608" y="40" width="140" height="44" rx="8" fill="#2f6b4f"/>
+        <text x="678" y="60" text-anchor="middle" fill="#fff" font-weight="700">Accepted graph</text>
+        <text x="678" y="75" text-anchor="middle" fill="#cfe6d9">append-only · Fuseki</text>
+        </g>
+        <g stroke="#14213a" stroke-width="2" marker-end="url(#e)" fill="none">
+        <line x1="128" y1="62" x2="156" y2="62"/><line x1="278" y1="62" x2="306" y2="62"/>
+        <line x1="428" y1="62" x2="456" y2="62"/><line x1="578" y1="62" x2="606" y2="62"/></g>
+        <defs><marker id="e" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#14213a"/></marker></defs>
+      </svg>
+      <figcaption>Candidate → validate → human approval → append-only accepted graph. No auto-promotion.</figcaption>
+    </figure>
+
+    <h3>What's running today vs. what's designed</h3>
+    <p>Two honest views came out of the research — the <b>vision</b> in your vault docs, and the <b>implementation</b> actually on disk in <code>~/.hermes</code>. Worth keeping straight so Harness builds on what exists.</p>
+    <table class="tbl">
+      <tr><th>Piece</th><th>Status</th><th>Detail</th></tr>
+      <tr><td>Accepted graph</td><td><span class="status live">Live</span></td><td>~334k triples in <code>accepted-alignment-graph.ttl</code>; append-only</td></tr>
+      <tr><td>Candidate + SHACL validation</td><td><span class="status live">Live</span></td><td>43 alignment batches; <code>understood-kg validate</code> via Docker/Jena <code>riot</code> + SHACL shapes</td></tr>
+      <tr><td>SPARQL query service</td><td><span class="status live">Live</span></td><td>Apache Jena Fuseki at <code>localhost:3030</code></td></tr>
+      <tr><td><code>understood-kg</code> CLI + dashboard</td><td><span class="status live">Live</span></td><td>propose / validate / review-queue / lookup; HTTP "Seeing Surface" dashboard at <code>localhost:8765</code></td></tr>
+      <tr><td>Daily semantic queue</td><td><span class="status live">Live</span></td><td>cron scans new notes, drafts ≤5 candidates/run; never promotes</td></tr>
+      <tr><td>Hermes consults graph</td><td><span class="status live">Live</span></td><td>steward skill: call <code>understood-kg lookup</code> before claims; propose only, never rewrite</td></tr>
+      <tr><td><code>graphTrace</code> on every reply</td><td><span class="status plan">Designed</span></td><td>JSON {matchedRuleIds, sourceTriple, rankingMethod} — wiring into app responses pending</td></tr>
+      <tr><td>n3 runtime + Postgres/Supabase axioms, RLS, SAVY/Re_Call</td><td><span class="status plan">Designed</span></td><td>app-side architecture from the vault docs; not the local runtime yet</td></tr>
+    </table>
+    <div class="takeaway green"><b>Takeaway.</b> Your deterministic layer is genuinely built and running locally as a human-in-the-loop RDF workflow. The gap to close is the <b>app surface</b>: exposing <code>graphTrace</code> and the candidate queue inside Harness.</div>
+  </section>
+
+  <!-- 7 STACK -->
+  <section id="stack">
+    <div class="chno">Chapter 7</div>
+    <h2>Two layers, stacked</h2>
+    <p class="lead">The single most useful picture: where the videos' world meets yours.</p>
+    <hr class="redrule">
+    <figure>
+      <svg viewBox="0 0 760 300" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+        <rect x="60" y="20" width="640" height="56" rx="10" fill="#9c2a2a"/>
+        <text x="380" y="44" text-anchor="middle" font-size="15" fill="#fff" font-weight="700">Harness — the command deck (iOS / macOS)</text>
+        <text x="380" y="63" text-anchor="middle" font-size="11" fill="#f4d9d9">orchestrates agents · holds skills, plugins, MCP · shows the trace</text>
+        <line x1="380" y1="76" x2="380" y2="96" stroke="#14213a" stroke-width="2"/>
+        <rect x="60" y="96" width="640" height="64" rx="10" fill="#2f4cdd"/>
+        <text x="380" y="121" text-anchor="middle" font-size="14" fill="#fff" font-weight="700">Probabilistic layer — recall (from the videos)</text>
+        <text x="380" y="140" text-anchor="middle" font-size="11" fill="#dfe4fb">working · procedural · semantic · episodic memory · RAG top-K · consolidation gate · loops</text>
+        <line x1="380" y1="160" x2="380" y2="180" stroke="#14213a" stroke-width="2"/>
+        <rect x="60" y="180" width="640" height="64" rx="10" fill="#2f6b4f"/>
+        <text x="380" y="205" text-anchor="middle" font-size="14" fill="#fff" font-weight="700">Deterministic layer — rails (your Understood KG)</text>
+        <text x="380" y="224" text-anchor="middle" font-size="11" fill="#cfe6d9">two-layer ontology · accepted graph · SHACL · graphTrace · human-stewarded promotion</text>
+        <text x="380" y="270" text-anchor="middle" font-size="12" fill="#6b635a" font-style="italic">Recall finds what's relevant. The rails decide what's allowed — and make every answer cite its source.</text>
+      </svg>
+      <figcaption>Memory makes the agent <i>knowledgeable</i>; the graph makes it <i>accountable to you</i>.</figcaption>
+    </figure>
+  </section>
+
+  <!-- 8 MAP -->
+  <section id="map">
+    <div class="chno">Chapter 8</div>
+    <h2>Harness as command deck</h2>
+    <p class="lead">Mapping your intent and your mockup onto concrete pieces.</p>
+    <hr class="redrule">
+    <div class="card">
+      <div class="map-row"><div class="has">"Rules + axioms" the reply cites</div><div>= <b>graphTrace</b> surfaced in the UI. This is the single highest-leverage first feature: show "which rule fired, and why" <i>before</i> any LLM copy.</div></div>
+      <div class="map-row"><div class="has">"Codex" model selector</div><div>= the <b>interchangeable horse</b>. Route a task to Claude Code, Codex, Hermes, or a cheap local model — Harness stays the deck above all of them.</div></div>
+      <div class="map-row"><div class="has">Recent Sessions / pinned</div><div>= <b>episodic memory</b>, unified across every agent instead of siloed per-tool.</div></div>
+      <div class="map-row"><div class="has">A chat that "knows you"</div><div>= <b>semantic memory</b> (recall) gated by the <b>accepted graph</b> (rails).</div></div>
+      <div class="map-row"><div class="has">Skills / plugins / MCP sprawl</div><div>= the problem Harness exists to solve: <b>one registry</b> for skills, plugins, and MCP connections that any connected agent can draw from.</div></div>
+      <div class="map-row"><div class="has">The "Seeing Surface" dashboard</div><div>= an existing <code>localhost:8765</code> view to port into native SwiftUI: pending candidates, accepted-graph health, class gravity.</div></div>
+    </div>
+    <p><span class="pill">Orchestrator</span><span class="pill">graphTrace UI</span><span class="pill">Unified memory</span><span class="pill">Skill/MCP registry</span><span class="pill">Candidate review</span><span class="pill">Deterministic rails</span><span class="pill">Model routing</span></p>
+  </section>
+
+  <!-- 9 NEXT -->
+  <section id="next">
+    <div class="chno">Chapter 9</div>
+    <h2>Where to go next</h2>
+    <hr class="redrule">
+    <ul class="next">
+      <li><b>Pick the connection model.</b> Harness ↔ <code>~/.hermes</code>: the macOS app can shell out to <code>understood-kg</code> and read the accepted graph / Fuseki directly; iOS needs a small local service or sync. Decide the boundary first — it shapes everything.</li>
+      <li><b>Ship graphTrace as the first real feature.</b> "Show me why" on a single answer — render <code>matchedRuleIds</code> + source triple + evidence. It's the soul of the whole system and the most demoable.</li>
+      <li><b>Port the Seeing Surface dashboard</b> to native SwiftUI by reading the existing <code>/api/summary</code> JSON. Cheap win, immediately useful.</li>
+      <li><b>Define the agent-routing contract.</b> One job spec → any backend (Claude Code / Codex / Hermes / local). This is what makes Harness the deck and not just another client.</li>
+      <li><b>Unify the skill / MCP registry.</b> One place to register skills, plugins, MCP servers; agents inherit from it instead of each keeping its own.</li>
+      <li><b>Centralize authorization (deferred).</b> Authorize once in Harness instead of re-wiring every agent — this is the deck's real plumbing and the frustration that started it all. The original Hermes setup chat lives in Claude.ai (not retrievable on this Mac); when you're ready, reconstruct the model from <code>~/.hermes</code> config or paste that chat.</li>
+      <li><b>Optional:</b> wire firecrawl as a native MCP (<code>firecrawl setup mcp</code>) so research like this is one tool call next time.</li>
+    </ul>
+  </section>
+
+  <footer>
+    <p><b>Sources</b><br>
+    ① <a class="src" href="https://youtu.be/GrNbuWWJYiI">AI Agent Harness &amp; Loop Engineering in 19 Min</a> · ② <a class="src" href="https://youtu.be/mY3bR9qjZr4">AI Agent Memory System in 12 Min</a> — Sean's AI Stories / AutoManus<br>
+    Your work: Understood Suite — Knowledge Graph Authority &amp; Ontology Handoff (Obsidian <code>Main</code> vault); <code>~/.hermes/ontology-steward/understood_kg.py</code>, <code>dashboard_server.py</code>, <code>understood-kg</code> CLI; accepted graph at <code>~/Documents/Main/Ontology/Alignment/accepted-alignment-graph.ttl</code>.<br>
+    Repo: <a class="src" href="https://github.com/dblaira/Harness">github.com/dblaira/Harness</a></p>
+    <p>Video transcripts via firecrawl CLI · Ontology &amp; KG read read-only, no secrets · Brief for Adam Blair · 2026-06-30</p>
+  </footer>
+
+</div>
+</body>
+</html>

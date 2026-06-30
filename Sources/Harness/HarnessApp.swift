@@ -13,7 +13,7 @@ struct HarnessApp: App {
         WindowGroup("The Adam Pattern") {
             #if os(macOS)
             MacChatView(ontology: ontology)
-                .frame(minWidth: 720, idealWidth: 820, minHeight: 560, idealHeight: 720)
+                .frame(minWidth: 1100, idealWidth: 1240, minHeight: 680, idealHeight: 780)
                 .task(loadOntologyIfNeeded)
             #else
             ChatView(ontology: ontology)
@@ -21,7 +21,7 @@ struct HarnessApp: App {
             #endif
         }
         #if os(macOS)
-        .windowResizability(.contentSize)
+        .windowResizability(.contentMinSize)
         #endif
     }
 
