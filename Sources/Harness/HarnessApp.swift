@@ -4,7 +4,8 @@ import CoreText
 
 @main
 struct HarnessApp: App {
-    private let ontology = OntologyLoader.load()
+    @State private var ontology = Ontology.empty
+    @State private var ontologyLoaded = false
 
     init() { Self.registerFonts() }
 
@@ -13,13 +14,26 @@ struct HarnessApp: App {
             #if os(macOS)
             MacChatView(ontology: ontology)
                 .frame(minWidth: 720, idealWidth: 820, minHeight: 560, idealHeight: 720)
+                .task(loadOntologyIfNeeded)
             #else
             ChatView(ontology: ontology)
+                .task(loadOntologyIfNeeded)
             #endif
         }
         #if os(macOS)
         .windowResizability(.contentSize)
         #endif
+    }
+
+    private func loadOntologyIfNeeded() async {
+        guard !ontologyLoaded else { return }
+        let loaded = await Task.detached(priority: .userInitiated) {
+            OntologyLoader.load()
+        }.value
+        await MainActor.run {
+            ontology = loaded
+            ontologyLoaded = true
+        }
     }
 
     /// Register bundled Playfair Display so Font.custom can find it.

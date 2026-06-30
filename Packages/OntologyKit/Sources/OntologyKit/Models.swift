@@ -35,6 +35,9 @@ public struct Ontology: Sendable {
     public let axioms: [Axiom]
     public let pattern: [PatternStep]
 
+    /// Lightweight startup value so UI can draw before bundled graph parsing finishes.
+    public static let empty = Ontology(connections: [], axioms: [], pattern: OntologyLoader.adamPattern)
+
     /// Pattern-interrupt questions Adam wants surfaced during decisions.
     public var patternInterrupts: [Connection] {
         connections.filter { $0.connectionType == "pattern_interrupt" }
