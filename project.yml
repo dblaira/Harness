@@ -49,8 +49,11 @@ targets:
     sources:
       - Tests/HarnessTests
     dependencies:
-      - target: Harness
       - package: OntologyKit
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGNING_ALLOWED: NO
 
 schemes:
   Harness:
