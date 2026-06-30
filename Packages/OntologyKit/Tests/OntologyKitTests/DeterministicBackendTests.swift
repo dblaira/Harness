@@ -159,6 +159,69 @@ import Testing
     #expect(persistedText.contains("[REDACTED_SECRET]"))
 }
 
+@Test func directoryMemoryPrefersProjectDocsOverGenericLibraryNotes() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("HarnessMemoryRetrieverTests-\(UUID().uuidString)", isDirectory: true)
+    let docs = root.appendingPathComponent("Docs", isDirectory: true)
+    let books = root.appendingPathComponent("ibooks", isDirectory: true)
+    try FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: books, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    try """
+    Harness run ledger memory says graph-backed answers should separate accepted graph authority from supporting memory.
+    Candidate review must not promote model guesses into accepted graph authority.
+    """.write(to: docs.appendingPathComponent("harness-memory.md"), atomically: true, encoding: .utf8)
+
+    try """
+    A general book note mentions graph backed model guesses and memory but is not project context.
+    """.write(to: books.appendingPathComponent("book-note.md"), atomically: true, encoding: .utf8)
+
+    let retriever = DirectoryMemoryRetriever(roots: [root], maxFiles: 20)
+    let hits = try await retriever.retrieve(
+        prompt: "Remember that I prefer graph-backed answers before model guesses.",
+        limit: 2
+    )
+
+    #expect(hits.first?.source.contains("Docs/harness-memory.md") == true)
+    #expect(hits.first?.reasonSelected.contains("project-context") == true)
+    #expect(hits.allSatisfy { !$0.source.contains("/ibooks/") })
+}
+
+@Test func directoryMemorySkipsHiddenBuildAndPackageArtifacts() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("HarnessMemorySkipTests-\(UUID().uuidString)", isDirectory: true)
+    let build = root.appendingPathComponent("build", isDirectory: true)
+    let hidden = root.appendingPathComponent(".cache", isDirectory: true)
+    let docs = root.appendingPathComponent("Docs", isDirectory: true)
+    try FileManager.default.createDirectory(at: build, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: hidden, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    try "graph backed memory from a build artifact".write(
+        to: build.appendingPathComponent("artifact.md"),
+        atomically: true,
+        encoding: .utf8
+    )
+    try "graph backed memory from a hidden cache".write(
+        to: hidden.appendingPathComponent("cache.md"),
+        atomically: true,
+        encoding: .utf8
+    )
+    try "graph backed memory from Harness docs".write(
+        to: docs.appendingPathComponent("memory.md"),
+        atomically: true,
+        encoding: .utf8
+    )
+
+    let retriever = DirectoryMemoryRetriever(roots: [root], maxFiles: 20)
+    let hits = try await retriever.retrieve(prompt: "graph backed memory", limit: 5)
+
+    #expect(hits.count == 1)
+    #expect(hits.first?.source.contains("Docs/memory.md") == true)
+}
+
 private struct StaticMemoryRetriever: SupportingMemoryRetrieving {
     let hit: MemoryHit?
 
