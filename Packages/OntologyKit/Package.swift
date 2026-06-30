@@ -7,9 +7,15 @@ let package = Package(
     products: [
         .library(name: "OntologyKit", targets: ["OntologyKit"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/groue/GRDB.swift.git", from: "6.0.0")
+    ],
     targets: [
         .target(
             name: "OntologyKit",
+            dependencies: [
+                .product(name: "GRDB", package: "GRDB.swift")
+            ],
             resources: [.process("Resources")]
         ),
         .testTarget(

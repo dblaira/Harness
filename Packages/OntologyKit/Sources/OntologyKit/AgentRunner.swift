@@ -4,7 +4,7 @@ import Foundation
 /// Instead of copying expiring OAuth tokens, shell out to the CLIs Adam already
 /// pays for (Codex = ChatGPT sub, Grok = xAI sub). They manage their own auth +
 /// refresh, so the app never has to re-authenticate or store a secret.
-public enum Backend: String, CaseIterable, Identifiable, Sendable {
+public enum Backend: String, CaseIterable, Identifiable, Sendable, Codable {
     case codex   = "Codex"      // ChatGPT subscription
     case grok    = "Grok"       // xAI subscription
     case claude  = "Claude API" // direct API key (optional)

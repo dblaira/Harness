@@ -64,6 +64,9 @@ schemes:
     build:
       targets:
         Harness: all
+    run:
+      config: Debug
+      debugEnabled: false
     test:
       targets:
         - HarnessTests
