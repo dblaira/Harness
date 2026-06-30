@@ -66,6 +66,48 @@ import Testing
     #expect(detail.memoryCandidates.first?.status != .accepted)
 }
 
+@Test func candidateStatusUpdatesPersistWithoutPromotingAuthority() async throws {
+    let ontology = OntologyLoader.load()
+    let ledger = try RunLedgerStore.inMemory()
+    let backend = StaticBackendAdapter(
+        metadata: .init(backend: .claude, modelName: "test-claude", invocationMethod: "unit-test"),
+        answer: "Plain answer first.\n\nRule: none"
+    )
+    let service = HarnessRunService(
+        ledger: ledger,
+        authorityRetriever: OntologyAuthorityRetriever(),
+        memoryRetriever: StaticMemoryRetriever(hit: nil)
+    )
+
+    let detail = try await service.createRun(
+        prompt: "Remember that candidate memories require review before graph promotion.",
+        ontology: ontology,
+        backend: backend
+    )
+    let candidate = try #require(detail.memoryCandidates.first)
+
+    try await ledger.updateCandidateStatus(
+        id: candidate.id,
+        status: .candidate,
+        validationResult: "Marked for review."
+    )
+    let candidateReview = try #require(try await ledger.runDetail(id: detail.run.id))
+    #expect(candidateReview.memoryCandidates.first?.status == .candidate)
+    #expect(candidateReview.memoryCandidates.first?.validationResult == "Marked for review.")
+    #expect(candidateReview.authorityHits.allSatisfy { $0.authorityLevel == .accepted })
+
+    try await ledger.updateCandidateStatus(
+        id: candidate.id,
+        status: .rejected,
+        validationResult: "Rejected from review."
+    )
+    let rejectedReview = try #require(try await ledger.runDetail(id: detail.run.id))
+    #expect(rejectedReview.memoryCandidates.first?.status == .rejected)
+    #expect(rejectedReview.memoryCandidates.first?.validationResult == "Rejected from review.")
+    #expect(rejectedReview.authorityHits.allSatisfy { $0.authorityLevel == .accepted })
+    #expect(rejectedReview.memoryCandidates.first?.status != .accepted)
+}
+
 @Test func runLedgerPersistsSearchableRunDetail() async throws {
     let ontology = OntologyLoader.load()
     let ledger = try RunLedgerStore.inMemory()
