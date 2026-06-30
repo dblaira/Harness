@@ -13,7 +13,7 @@ struct ChatView: View {
     @State private var messages: [ChatMessage] = []
     @State private var draft = ""
     @State private var thinking = false
-    @State private var backend: Backend = .codex
+    @State private var backend: Backend = ChatView.defaultBackend
     @State private var apiKey = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] ?? ""
     @State private var mode: HarnessLaunchMode = .ask
     @State private var selectedQuickAction: HarnessQuickAction.ID?
@@ -48,6 +48,7 @@ struct ChatView: View {
                 HarnessComposer(
                     draft: $draft,
                     backend: $backend,
+                    apiKey: $apiKey,
                     thinking: thinking,
                     mode: mode,
                     onAttach: { showingAttachmentMenu = true },
@@ -118,6 +119,14 @@ struct ChatView: View {
         } catch {
             return try! RunLedgerStore.inMemory()
         }
+    }
+
+    private static var defaultBackend: Backend {
+        #if os(iOS)
+        .claude
+        #else
+        .codex
+        #endif
     }
 }
 
@@ -318,6 +327,7 @@ private struct HarnessQuickActionCarousel: View {
 private struct HarnessComposer: View {
     @Binding var draft: String
     @Binding var backend: Backend
+    @Binding var apiKey: String
 
     let thinking: Bool
     let mode: HarnessLaunchMode
@@ -338,6 +348,18 @@ private struct HarnessComposer: View {
                 #if os(iOS)
                 .textInputAutocapitalization(.sentences)
                 #endif
+
+            if backend == .claude && apiKey.isEmpty {
+                SecureField("Claude API key", text: $apiKey)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.iosText)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(Theme.iosControlActive, in: RoundedRectangle(cornerRadius: 14))
+                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.iosHair, lineWidth: 1))
+                    .apiKeyEntryBehavior()
+            }
 
             HStack(spacing: 8) {
                 CircleIconButton(systemName: "plus", accessibilityLabel: "Add", size: 46, action: onAttach)
@@ -376,7 +398,7 @@ private struct BackendMenuPill: View {
 
     var body: some View {
         Menu {
-            ForEach(Backend.allCases) { candidate in
+            ForEach(Backend.phoneVisibleCases) { candidate in
                 Button {
                     backend = candidate
                 } label: {
@@ -398,6 +420,29 @@ private struct BackendMenuPill: View {
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
+    }
+}
+
+private extension Backend {
+    static var phoneVisibleCases: [Backend] {
+        #if os(iOS)
+        [.claude]
+        #else
+        Backend.allCases
+        #endif
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func apiKeyEntryBehavior() -> some View {
+        #if os(iOS)
+        self
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+        #else
+        self
+        #endif
     }
 }
 
