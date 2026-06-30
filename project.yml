@@ -45,6 +45,7 @@ targets:
         "CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]": NO
         "CODE_SIGN_STYLE[sdk=iphoneos*]": Automatic
         "CODE_SIGN_IDENTITY[sdk=iphoneos*]": Apple Development
+        "DEVELOPMENT_TEAM[sdk=iphoneos*]": 7FKUS5M5QS
 
   HarnessTests:
     type: bundle.unit-test
