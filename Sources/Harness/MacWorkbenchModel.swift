@@ -103,6 +103,55 @@ final class MacWorkbenchModel: ObservableObject {
         }
     }
 
+    func prepareCandidateForGraphReview(_ candidate: MemoryCandidate) {
+        let proposedGraph = CandidateGraphDraftBuilder().draft(for: candidate)
+        let draftCandidate = MemoryCandidate(
+            id: candidate.id,
+            runId: candidate.runId,
+            sourceRunIds: candidate.sourceRunIds,
+            evidenceText: candidate.evidenceText,
+            proposedClaim: candidate.proposedClaim,
+            proposedGraph: proposedGraph,
+            status: .candidate,
+            validationResult: candidate.validationResult,
+            createdAt: candidate.createdAt
+        )
+        let validation = TurtleCandidateValidator().validate(candidate: draftCandidate)
+        guard validation.passed else {
+            status = validation.detail
+            return
+        }
+
+        let selectedRunId = selectedDetail?.run.id
+        let ledger = ledger
+        Task {
+            do {
+                try await ledger.updateCandidateReview(
+                    id: candidate.id,
+                    status: .validated,
+                    proposedGraph: proposedGraph,
+                    validationResult: "Ready for graph review. Not accepted authority."
+                )
+                let detail: HarnessRunDetail?
+                if let selectedRunId {
+                    detail = try await ledger.runDetail(id: selectedRunId)
+                } else {
+                    detail = nil
+                }
+                await MainActor.run {
+                    if let detail {
+                        self.selectedDetail = detail
+                    }
+                    self.status = "Candidate ready for graph review."
+                }
+            } catch {
+                await MainActor.run {
+                    self.status = error.localizedDescription
+                }
+            }
+        }
+    }
+
     func send() {
         let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, !isRunning else { return }

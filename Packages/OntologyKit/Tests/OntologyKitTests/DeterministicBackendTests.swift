@@ -108,6 +108,56 @@ import Testing
     #expect(rejectedReview.memoryCandidates.first?.status != .accepted)
 }
 
+@Test func candidateGraphDraftCanBeMarkedValidatedWithoutAcceptedPromotion() async throws {
+    let ontology = OntologyLoader.load()
+    let ledger = try RunLedgerStore.inMemory()
+    let backend = StaticBackendAdapter(
+        metadata: .init(backend: .claude, modelName: "test-claude", invocationMethod: "unit-test"),
+        answer: "Plain answer first.\n\nRule: none"
+    )
+    let service = HarnessRunService(
+        ledger: ledger,
+        authorityRetriever: OntologyAuthorityRetriever(),
+        memoryRetriever: StaticMemoryRetriever(hit: nil)
+    )
+
+    let detail = try await service.createRun(
+        prompt: "Remember that graph claims need explicit review before promotion.",
+        ontology: ontology,
+        backend: backend
+    )
+    let candidate = try #require(detail.memoryCandidates.first)
+    let proposedGraph = CandidateGraphDraftBuilder().draft(for: candidate)
+    let validation = TurtleCandidateValidator().validate(candidate: MemoryCandidate(
+        id: candidate.id,
+        runId: candidate.runId,
+        sourceRunIds: candidate.sourceRunIds,
+        evidenceText: candidate.evidenceText,
+        proposedClaim: candidate.proposedClaim,
+        proposedGraph: proposedGraph,
+        status: .candidate,
+        validationResult: candidate.validationResult,
+        createdAt: candidate.createdAt
+    ))
+
+    #expect(validation.passed)
+
+    try await ledger.updateCandidateReview(
+        id: candidate.id,
+        status: .validated,
+        proposedGraph: proposedGraph,
+        validationResult: "Ready for graph review. Not accepted authority."
+    )
+    let loaded = try #require(try await ledger.runDetail(id: detail.run.id))
+    let loadedCandidate = try #require(loaded.memoryCandidates.first)
+
+    #expect(loadedCandidate.status == .validated)
+    #expect(loadedCandidate.proposedGraph?.contains("urn:harness:proposedClaim") == true)
+    #expect(loadedCandidate.validationResult == "Ready for graph review. Not accepted authority.")
+    #expect(loaded.authorityHits.allSatisfy { $0.authorityLevel == .accepted })
+    #expect(loadedCandidate.status != .accepted)
+}
+
 @Test func runLedgerPersistsSearchableRunDetail() async throws {
     let ontology = OntologyLoader.load()
     let ledger = try RunLedgerStore.inMemory()

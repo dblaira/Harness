@@ -100,10 +100,18 @@ public actor RunLedgerStore {
     }
 
     public func updateCandidateStatus(id: String, status: CandidateState, validationResult: String?) throws {
+        try updateCandidateReview(id: id, status: status, proposedGraph: nil, validationResult: validationResult)
+    }
+
+    public func updateCandidateReview(id: String, status: CandidateState, proposedGraph: String?, validationResult: String?) throws {
         try dbQueue.write { db in
             try db.execute(
-                sql: "UPDATE memory_candidates SET status = ?, validationResult = ? WHERE id = ?",
-                arguments: [status.rawValue, validationResult, id]
+                sql: """
+                UPDATE memory_candidates
+                SET status = ?, proposedGraph = COALESCE(?, proposedGraph), validationResult = ?
+                WHERE id = ?
+                """,
+                arguments: [status.rawValue, proposedGraph, validationResult, id]
             )
         }
     }

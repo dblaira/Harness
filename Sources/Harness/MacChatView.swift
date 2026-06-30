@@ -425,6 +425,23 @@ struct MacChatView: View {
                 candidateButton("Review", state: .candidate, candidate: candidate)
                 candidateButton("Reject", state: .rejected, candidate: candidate)
             }
+
+            Button {
+                model.prepareCandidateForGraphReview(candidate)
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "doc.badge.gearshape")
+                    Text(candidate.status == .validated ? "Ready for Graph Review" : "Prepare Graph")
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(candidate.status == .validated ? Theme.macBg : Theme.macInk.opacity(0.78))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 7)
+                .background(candidate.status == .validated ? Theme.macInk : Theme.macEntry.opacity(0.28), in: RoundedRectangle(cornerRadius: 7))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.macHair, lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .disabled(candidate.status == .rejected)
         }
     }
 
