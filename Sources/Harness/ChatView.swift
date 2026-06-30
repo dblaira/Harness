@@ -347,21 +347,34 @@ private struct HarnessComposer: View {
 
                 Spacer(minLength: 6)
 
-                CircleIconButton(systemName: "mic", accessibilityLabel: "Voice", size: 46, action: onSpeak)
+                if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    CircleIconButton(systemName: "mic", accessibilityLabel: "Voice", size: 46, action: onSpeak)
 
-                Button(action: onSpeak) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "waveform")
-                            .font(.system(size: 18, weight: .bold))
-                        Text("Speak")
-                            .font(.system(size: 19, weight: .bold))
-                            .lineLimit(1)
+                    Button(action: onSpeak) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "waveform")
+                                .font(.system(size: 18, weight: .bold))
+                            Text("Speak")
+                                .font(.system(size: 19, weight: .bold))
+                                .lineLimit(1)
+                        }
+                        .foregroundStyle(Theme.iosBackground)
+                        .frame(width: 116, height: 50)
+                        .background(Color.white, in: Capsule())
                     }
-                    .foregroundStyle(Theme.iosBackground)
-                    .frame(width: 116, height: 50)
-                    .background(Color.white, in: Capsule())
+                    .buttonStyle(.plain)
+                } else {
+                    Button(action: onSubmit) {
+                        Image(systemName: thinking ? "hourglass" : "arrow.up")
+                            .font(.system(size: 22, weight: .black))
+                            .foregroundStyle(Theme.iosBackground)
+                            .frame(width: 50, height: 50)
+                            .background(Theme.iosText, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(thinking)
+                    .accessibilityLabel("Send")
                 }
-                .buttonStyle(.plain)
             }
         }
         .padding(14)
