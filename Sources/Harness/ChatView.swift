@@ -341,9 +341,11 @@ private struct HarnessRunStatusStrip: View {
 private struct HarnessWatermark: View {
     var body: some View {
         Image("HarnessWatermark")
+            .renderingMode(.template)
             .resizable()
             .scaledToFit()
-        .accessibilityHidden(true)
+            .foregroundStyle(Theme.iosSand)
+            .accessibilityHidden(true)
     }
 }
 
