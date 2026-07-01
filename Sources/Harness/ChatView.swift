@@ -22,6 +22,7 @@ struct ChatView: View {
     @State private var ledger = ChatView.makeLedger()
     @State private var latestRunDetail: HarnessRunDetail?
     @State private var ledgerStatus = "Ledger ready"
+    @FocusState private var composerFocused: Bool
 
     var body: some View {
         ZStack {
@@ -38,13 +39,19 @@ struct ChatView: View {
                     latestRunDetail: latestRunDetail,
                     ledgerStatus: ledgerStatus
                 )
+                .onTapGesture {
+                    composerFocused = false
+                }
 
-                HarnessQuickActionCarousel(
-                    actions: HarnessQuickAction.defaults,
-                    selectedID: selectedQuickAction,
-                    onSelect: selectQuickAction
-                )
-                .padding(.bottom, 14)
+                if messages.isEmpty && !composerFocused {
+                    HarnessQuickActionCarousel(
+                        actions: HarnessQuickAction.defaults,
+                        selectedID: selectedQuickAction,
+                        onSelect: selectQuickAction
+                    )
+                    .padding(.bottom, 14)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
 
                 HarnessComposer(
                     draft: $draft,
@@ -56,11 +63,14 @@ struct ChatView: View {
                     onAttach: { showingAttachmentMenu = true },
                     onSpeak: beginVoice,
                     onSaveAPIKey: { _ = saveClaudeKey() },
-                    onSubmit: send
+                    onSubmit: send,
+                    focus: $composerFocused
                 )
                 .padding(.horizontal, 10)
                 .padding(.bottom, 10)
             }
+            .animation(.snappy(duration: 0.22), value: messages.isEmpty)
+            .animation(.snappy(duration: 0.22), value: composerFocused)
         }
         .preferredColorScheme(.dark)
         .confirmationDialog("Add", isPresented: $showingAttachmentMenu, titleVisibility: .visible) {
@@ -86,6 +96,7 @@ struct ChatView: View {
     private func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !thinking else { return }
+        composerFocused = false
         let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         if backend == .claude && trimmedKey.isEmpty {
             ledgerStatus = "Claude API key required"
@@ -256,35 +267,56 @@ private struct HarnessConversationStage: View {
                 .frame(width: 168, height: 194)
                 .opacity(messages.isEmpty ? 0.45 : 0.14)
 
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(messages) { message in
-                        HarnessMessageBubble(message: message, backend: backend)
-                    }
-
-                    if thinking {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text("\(backend.rawValue) thinking")
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(Theme.iosMuted)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        ForEach(messages) { message in
+                            HarnessMessageBubble(message: message, backend: backend)
                         }
-                        .padding(.horizontal, 18)
-                        .padding(.top, 6)
-                    }
 
-                    if let latestRunDetail {
-                        HarnessRunStatusStrip(detail: latestRunDetail, status: ledgerStatus)
+                        if thinking {
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                    .controlSize(.small)
+                                Text("\(backend.rawValue) thinking")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundStyle(Theme.iosMuted)
+                            }
+                            .padding(.horizontal, 18)
+                            .padding(.top, 6)
+                        }
+
+                        if let latestRunDetail {
+                            HarnessRunStatusStrip(detail: latestRunDetail, status: ledgerStatus)
+                        }
+
+                        Color.clear
+                            .frame(height: 1)
+                            .id("conversation-bottom")
                     }
+                    .padding(.horizontal, 14)
+                    .padding(.top, 12)
+                    .padding(.bottom, 18)
                 }
-                .padding(.horizontal, 14)
-                .padding(.top, 28)
-                .padding(.bottom, 34)
+                .scrollIndicators(.hidden)
+                #if os(iOS)
+                .scrollDismissesKeyboard(.interactively)
+                #endif
+                .onChange(of: messages.count) { _ in
+                    scrollToBottom(proxy)
+                }
+                .onChange(of: thinking) { _ in
+                    scrollToBottom(proxy)
+                }
             }
-            .scrollIndicators(.hidden)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func scrollToBottom(_ proxy: ScrollViewProxy) {
+        withAnimation(.easeOut(duration: 0.22)) {
+            proxy.scrollTo("conversation-bottom", anchor: .bottom)
+        }
     }
 }
 
@@ -390,6 +422,7 @@ private struct HarnessComposer: View {
     let onSpeak: () -> Void
     let onSaveAPIKey: () -> Void
     let onSubmit: () -> Void
+    let focus: FocusState<Bool>.Binding
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -401,6 +434,7 @@ private struct HarnessComposer: View {
                 .submitLabel(.send)
                 .onSubmit(onSubmit)
                 .disabled(thinking)
+                .focused(focus)
                 #if os(iOS)
                 .textInputAutocapitalization(.sentences)
                 #endif
