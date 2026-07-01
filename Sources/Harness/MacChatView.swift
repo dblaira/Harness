@@ -23,7 +23,7 @@ struct MacChatView: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 14) {
-            PerLetterGradientTitle("HARNESS")
+            OutlinedHarnessTitle("HARNESS")
                 .padding(.bottom, 4)
 
             Button(action: model.newSession) {
@@ -588,28 +588,41 @@ private struct MacHarnessWatermark: View {
     }
 }
 
-private struct PerLetterGradientTitle: View {
-    private let letters: [String]
+private struct OutlinedHarnessTitle: View {
+    private let text: String
+    private let outlineOffsets: [CGSize] = [
+        CGSize(width: -0.65, height: -0.65),
+        CGSize(width: 0, height: -0.75),
+        CGSize(width: 0.65, height: -0.65),
+        CGSize(width: -0.75, height: 0),
+        CGSize(width: 0.75, height: 0),
+        CGSize(width: -0.65, height: 0.65),
+        CGSize(width: 0, height: 0.75),
+        CGSize(width: 0.65, height: 0.65)
+    ]
 
     init(_ text: String) {
-        self.letters = text.map(String.init)
+        self.text = text
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            ForEach(Array(letters.enumerated()), id: \.offset) { _, letter in
-                Text(letter)
-                    .font(.custom("PlayfairDisplay-Regular", size: 24).weight(.black))
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [Color(hex: 0x2A1B12), Color(hex: 0x5A3A22), Color(hex: 0x8A6A46)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
+        ZStack {
+            ForEach(Array(outlineOffsets.enumerated()), id: \.offset) { _, offset in
+                titleText
+                    .foregroundStyle(Theme.macInk.opacity(0.72))
+                    .offset(x: offset.width, y: offset.height)
             }
+
+            titleText
+                .foregroundStyle(Theme.macBg)
         }
-        .accessibilityLabel("HARNESS")
+        .accessibilityLabel(text)
+    }
+
+    private var titleText: some View {
+        Text(text)
+            .font(.custom("PlayfairDisplay-Regular", size: 24).weight(.black))
+            .tracking(0)
     }
 }
 #endif
