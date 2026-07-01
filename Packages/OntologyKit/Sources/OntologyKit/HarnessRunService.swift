@@ -27,7 +27,12 @@ public struct HarnessRunService: Sendable {
         self.redactor = redactor
     }
 
-    public func createRun(prompt: String, ontology: Ontology, backend: any ModelBackendAdapter) async throws -> HarnessRunDetail {
+    public func createRun(
+        prompt: String,
+        ontology: Ontology,
+        backend: any ModelBackendAdapter,
+        includeRawContrast: Bool = false
+    ) async throws -> HarnessRunDetail {
         let runId = UUID().uuidString
         var trace: [TraceEvent] = [
             TraceEvent(runId: runId, stage: .createRun, message: "Created local Harness run.")
@@ -64,8 +69,23 @@ public struct HarnessRunService: Sendable {
         }
         let duration = Date().timeIntervalSince(start)
 
+        let rawResponse: BackendResponse?
+        if includeRawContrast {
+            let rawPacket = PromptPacketBuilder.makeRawPacket(prompt: prompt)
+            do {
+                rawResponse = try await backend.execute(packet: rawPacket)
+                trace.append(TraceEvent(runId: runId, stage: .rawModelExecution, message: "Raw LLM contrast call completed without graph or memory context."))
+            } catch {
+                rawResponse = BackendResponse(text: "Raw contrast failed: \(error.localizedDescription)", tokenCount: nil, cost: nil)
+                trace.append(TraceEvent(runId: runId, stage: .rawModelExecution, message: "Raw LLM contrast call failed: \(error.localizedDescription)"))
+            }
+        } else {
+            rawResponse = nil
+        }
+
         let redactedPrompt = redactor.redact(prompt)
         let redactedAnswer = redactor.redact(response.text)
+        let redactedRawAnswer = rawResponse.map { redactor.redact($0.text) }
         let evalResults = evaluator.evaluate(
             answer: redactedAnswer,
             authorityHits: authorityHits,
@@ -99,10 +119,13 @@ public struct HarnessRunService: Sendable {
             deviceName: DeviceIdentity.currentName(),
             createdAt: Date()
         )
-        let messages = [
+        var messages = [
             HarnessMessage(runId: runId, role: .user, text: redactedPrompt),
             HarnessMessage(runId: runId, role: .assistant, text: redactedAnswer)
         ]
+        if let redactedRawAnswer {
+            messages.append(HarnessMessage(runId: runId, role: .raw, text: redactedRawAnswer))
+        }
 
         let detail = HarnessRunDetail(
             run: run,

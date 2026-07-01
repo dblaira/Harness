@@ -17,6 +17,7 @@ public enum CandidateState: String, Codable, Sendable, Equatable, CaseIterable {
 public enum MessageRole: String, Codable, Sendable, Equatable {
     case user
     case assistant
+    case raw
     case system
 }
 
@@ -25,6 +26,7 @@ public enum TraceStage: String, Codable, Sendable, Equatable {
     case authorityRetrieval
     case supportingRetrieval
     case modelExecution
+    case rawModelExecution
     case evaluation
     case traceSaved
 }

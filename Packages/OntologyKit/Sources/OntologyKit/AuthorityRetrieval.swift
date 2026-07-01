@@ -100,6 +100,11 @@ public struct OntologyAuthorityRetriever: AuthorityRetrieving {
 }
 
 public enum PromptPacketBuilder {
+    public static let rawSystemPrompt = """
+    You are a general-purpose assistant. Answer the user directly without using Adam Blair's ontology, knowledge graph, memory, personal rules, or Adam Pattern constraints.
+    Do not mention graph authority, rules, accepted memory, or Harness unless the user explicitly asks about them.
+    """
+
     public static func makePacket(
         prompt: String,
         ontology: Ontology,
@@ -131,6 +136,17 @@ public enum PromptPacketBuilder {
             system: system,
             authorityHits: authorityHits,
             memoryHits: memoryHits,
+            promptPacketHash: StableHash.hex(hashInput)
+        )
+    }
+
+    public static func makeRawPacket(prompt: String) -> ModelPacket {
+        let hashInput = prompt + "\n" + rawSystemPrompt
+        return ModelPacket(
+            userPrompt: prompt,
+            system: rawSystemPrompt,
+            authorityHits: [],
+            memoryHits: [],
             promptPacketHash: StableHash.hex(hashInput)
         )
     }

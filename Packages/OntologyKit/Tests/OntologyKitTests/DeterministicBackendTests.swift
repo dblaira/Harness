@@ -188,6 +188,30 @@ import Testing
     #expect(results.contains { $0.id == saved.run.id })
 }
 
+@Test func contrastModePersistsRawLLMAnswerBesideHarnessAnswer() async throws {
+    let ontology = OntologyLoader.load()
+    let ledger = try RunLedgerStore.inMemory()
+    let backend = ContrastBackendAdapter()
+    let service = HarnessRunService(
+        ledger: ledger,
+        authorityRetriever: OntologyAuthorityRetriever(),
+        memoryRetriever: StaticMemoryRetriever(hit: nil)
+    )
+
+    let saved = try await service.createRun(
+        prompt: "Should I keep building this feature?",
+        ontology: ontology,
+        backend: backend,
+        includeRawContrast: true
+    )
+    let loaded = try #require(try await ledger.runDetail(id: saved.run.id))
+
+    #expect(loaded.messages.contains { $0.role == .assistant && $0.text == "Harness answer.\n\nRule: conn-019" })
+    #expect(loaded.messages.contains { $0.role == .raw && $0.text == "Raw generic answer." })
+    #expect(loaded.traceEvents.contains { $0.stage == .rawModelExecution })
+    #expect(await backend.calls == 2)
+}
+
 @Test func redactsSecretsBeforePersistence() async throws {
     let ontology = OntologyLoader.load()
     let ledger = try RunLedgerStore.inMemory()
@@ -290,5 +314,18 @@ private struct StaticBackendAdapter: ModelBackendAdapter {
 
     func execute(packet: ModelPacket) async throws -> BackendResponse {
         BackendResponse(text: answer, tokenCount: 12, cost: nil)
+    }
+}
+
+private actor ContrastBackendAdapter: ModelBackendAdapter {
+    nonisolated let metadata = BackendMetadata(backend: .claude, modelName: "test-contrast", invocationMethod: "unit-test")
+    private(set) var calls = 0
+
+    func execute(packet: ModelPacket) async throws -> BackendResponse {
+        calls += 1
+        let text = packet.system == PromptPacketBuilder.rawSystemPrompt
+            ? "Raw generic answer."
+            : "Harness answer.\n\nRule: conn-019"
+        return BackendResponse(text: text, tokenCount: 12, cost: nil)
     }
 }
