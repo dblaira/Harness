@@ -177,7 +177,8 @@ final class MacWorkbenchModel: ObservableObject {
                 let detail = try await service.createRun(
                     prompt: prompt,
                     ontology: ontology,
-                    backend: adapter
+                    backend: adapter,
+                    includeRawContrast: true
                 )
                 let latestRuns = try await ledger.listRuns()
                 await MainActor.run {

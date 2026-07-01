@@ -292,10 +292,10 @@ struct MacChatView: View {
 
     private func messageBubble(_ message: HarnessMessage) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(message.role == .user ? "YOU" : "ANSWER")
+            Text(messageHeader(for: message.role))
                 .font(.caption2.weight(.bold))
                 .tracking(1.2)
-                .foregroundStyle(Theme.macInk.opacity(0.48))
+                .foregroundStyle(message.role == .raw ? Theme.macFaint : Theme.macInk.opacity(0.48))
             Text(message.text)
                 .font(.body)
                 .foregroundStyle(Theme.macInk)
@@ -303,8 +303,21 @@ struct MacChatView: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.macEntry.opacity(message.role == .user ? 0.45 : 0.25), in: RoundedRectangle(cornerRadius: 10))
+        .background(Theme.macEntry.opacity(message.role == .user ? 0.45 : message.role == .raw ? 0.14 : 0.25), in: RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.macHair, lineWidth: 1))
+    }
+
+    private func messageHeader(for role: MessageRole) -> String {
+        switch role {
+        case .user:
+            return "YOU"
+        case .assistant:
+            return "HARNESS"
+        case .raw:
+            return "RAW LLM"
+        case .system:
+            return "SYSTEM"
+        }
     }
 
     private var composer: some View {

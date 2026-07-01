@@ -5,6 +5,13 @@ struct ChatMessage: Identifiable {
     let id = UUID()
     let text: String
     let fromMe: Bool
+    let label: String?
+
+    init(text: String, fromMe: Bool, label: String? = nil) {
+        self.text = text
+        self.fromMe = fromMe
+        self.label = label
+    }
 }
 
 struct ChatView: View {
@@ -118,11 +125,16 @@ struct ChatView: View {
                 let detail = try await service.createRun(
                     prompt: text,
                     ontology: ontology,
-                    backend: AgentRunnerBackendAdapter(backend: chosen, apiKey: key)
+                    backend: AgentRunnerBackendAdapter(backend: chosen, apiKey: key),
+                    includeRawContrast: true
                 )
                 let reply = detail.messages.last { $0.role == .assistant }?.text ?? detail.run.finalAnswer
+                let rawReply = detail.messages.last { $0.role == .raw }?.text
                 await MainActor.run {
-                    messages.append(ChatMessage(text: reply, fromMe: false))
+                    messages.append(ChatMessage(text: reply, fromMe: false, label: "Harness"))
+                    if let rawReply {
+                        messages.append(ChatMessage(text: rawReply, fromMe: false, label: "Raw LLM"))
+                    }
                     latestRunDetail = detail
                     ledgerStatus = detail.run.success ? "Trace saved" : "Backend failed; trace saved"
                     thinking = false
@@ -360,6 +372,11 @@ private struct HarnessMessageBubble: View {
                 Text(message.fromMe ? "You" : backend.rawValue)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Theme.iosMuted)
+                if let label = message.label, !message.fromMe {
+                    Text(label)
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(label == "Raw LLM" ? Theme.iosMuted : Theme.iosSand)
+                }
                 Text(message.text)
                     .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(Theme.iosText)
