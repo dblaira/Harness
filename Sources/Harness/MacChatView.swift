@@ -591,14 +591,14 @@ private struct MacHarnessWatermark: View {
 private struct OutlinedHarnessTitle: View {
     private let text: String
     private let outlineOffsets: [CGSize] = [
-        CGSize(width: -0.65, height: -0.65),
-        CGSize(width: 0, height: -0.75),
-        CGSize(width: 0.65, height: -0.65),
-        CGSize(width: -0.75, height: 0),
-        CGSize(width: 0.75, height: 0),
-        CGSize(width: -0.65, height: 0.65),
-        CGSize(width: 0, height: 0.75),
-        CGSize(width: 0.65, height: 0.65)
+        CGSize(width: -0.35, height: -0.35),
+        CGSize(width: 0, height: -0.4),
+        CGSize(width: 0.35, height: -0.35),
+        CGSize(width: -0.4, height: 0),
+        CGSize(width: 0.4, height: 0),
+        CGSize(width: -0.35, height: 0.35),
+        CGSize(width: 0, height: 0.4),
+        CGSize(width: 0.35, height: 0.35)
     ]
 
     init(_ text: String) {
@@ -609,7 +609,7 @@ private struct OutlinedHarnessTitle: View {
         ZStack {
             ForEach(Array(outlineOffsets.enumerated()), id: \.offset) { _, offset in
                 titleText
-                    .foregroundStyle(Theme.macInk.opacity(0.72))
+                    .foregroundStyle(Theme.macInk.opacity(0.34))
                     .offset(x: offset.width, y: offset.height)
             }
 
