@@ -23,7 +23,7 @@ struct MacChatView: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 14) {
-            PerLetterGradientTitle("HARNESS")
+            OutlinedHarnessTitle("HARNESS")
                 .padding(.bottom, 4)
 
             Button(action: model.newSession) {
@@ -33,6 +33,7 @@ struct MacChatView: View {
 
             sidebarLabel("Skills & Tools", "wrench.and.screwdriver")
             skillsList
+            selectedToolCard
 
             TextField("Search sessions...", text: $model.searchText)
                 .textFieldStyle(.plain)
@@ -92,26 +93,63 @@ struct MacChatView: View {
     }
 
     private func skillRow(_ tool: WorkbenchTool) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: tool.icon)
-                .frame(width: 14)
-                .foregroundStyle(Theme.macInk.opacity(0.45))
-            VStack(alignment: .leading, spacing: 1) {
-                Text(tool.title)
+        Button {
+            model.selectTool(tool)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: tool.icon)
+                    .frame(width: 14)
+                    .foregroundStyle(Theme.macInk.opacity(0.45))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(tool.title)
+                        .lineLimit(1)
+                    Text(tool.detail)
+                        .font(.system(size: 9))
+                        .foregroundStyle(Theme.macInk.opacity(0.42))
+                        .lineLimit(1)
+                }
                     .lineLimit(1)
-                Text(tool.detail)
-                    .font(.system(size: 9))
-                    .foregroundStyle(Theme.macInk.opacity(0.42))
-                    .lineLimit(1)
+                Spacer()
+                Circle()
+                    .fill(tool.state.tint)
+                    .frame(width: 6, height: 6)
             }
-                .lineLimit(1)
-            Spacer()
-            Circle()
-                .fill(tool.state.tint)
-                .frame(width: 6, height: 6)
+            .padding(.vertical, 2)
+            .padding(.horizontal, 4)
+            .background(model.selectedTool?.id == tool.id ? Theme.macEntry.opacity(0.32) : Color.clear, in: RoundedRectangle(cornerRadius: 6))
         }
+        .buttonStyle(.plain)
         .font(.system(size: 11))
         .foregroundStyle(Theme.macInk.opacity(0.72))
+    }
+
+    private var selectedToolCard: some View {
+        Group {
+            if let tool = model.selectedTool {
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack(spacing: 8) {
+                        Image(systemName: tool.icon)
+                            .frame(width: 14)
+                        Text(tool.title)
+                            .font(.system(size: 12).weight(.semibold))
+                        Spacer()
+                        Text(tool.state.rawValue)
+                            .font(.system(size: 8).weight(.bold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(Theme.macEntry.opacity(0.36), in: Capsule())
+                    }
+                    Text(tool.summary)
+                    Text(tool.permission)
+                    Text(tool.provenance)
+                }
+                .font(.system(size: 10))
+                .foregroundStyle(Theme.macInk.opacity(0.68))
+                .padding(10)
+                .background(Theme.macEntry.opacity(0.22), in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
+            }
+        }
     }
 
     private func sidebarLabel(_ title: String, _ icon: String) -> some View {
@@ -147,26 +185,32 @@ struct MacChatView: View {
     private var transcript: some View {
         VStack(spacing: 0) {
             topBar
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    if let detail = model.selectedDetail {
-                        runSummary(detail)
-                        ForEach(detail.messages) { message in
-                            messageBubble(message)
-                        }
-                    }
+            ZStack {
+                MacHarnessWatermark()
+                    .frame(width: 260, height: 300)
+                    .opacity(model.selectedDetail == nil ? 0.18 : 0.08)
 
-                    if model.isRunning {
-                        HStack(spacing: 10) {
-                            ProgressView().controlSize(.small)
-                            Text(model.status)
-                                .foregroundStyle(Theme.macInk.opacity(0.55))
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        if let detail = model.selectedDetail {
+                            runSummary(detail)
+                            ForEach(detail.messages) { message in
+                                messageBubble(message)
+                            }
                         }
-                        .padding(.top, 4)
+
+                        if model.isRunning {
+                            HStack(spacing: 10) {
+                                ProgressView().controlSize(.small)
+                                Text(model.status)
+                                    .foregroundStyle(Theme.macInk.opacity(0.55))
+                            }
+                            .padding(.top, 4)
+                        }
                     }
+                    .padding(22)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(22)
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
             delegateLabel
             composer
@@ -425,6 +469,23 @@ struct MacChatView: View {
                 candidateButton("Review", state: .candidate, candidate: candidate)
                 candidateButton("Reject", state: .rejected, candidate: candidate)
             }
+
+            Button {
+                model.prepareCandidateForGraphReview(candidate)
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "doc.badge.gearshape")
+                    Text(candidate.status == .validated ? "Ready for Graph Review" : "Prepare Graph")
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(candidate.status == .validated ? Theme.macBg : Theme.macInk.opacity(0.78))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 7)
+                .background(candidate.status == .validated ? Theme.macInk : Theme.macEntry.opacity(0.28), in: RoundedRectangle(cornerRadius: 7))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.macHair, lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .disabled(candidate.status == .rejected)
         }
     }
 
@@ -516,28 +577,52 @@ private extension WorkbenchToolState {
     }
 }
 
-private struct PerLetterGradientTitle: View {
-    private let letters: [String]
+private struct MacHarnessWatermark: View {
+    var body: some View {
+        Image("HarnessWatermark")
+            .renderingMode(.template)
+            .resizable()
+            .scaledToFit()
+            .foregroundStyle(Theme.macInk)
+            .accessibilityHidden(true)
+    }
+}
+
+private struct OutlinedHarnessTitle: View {
+    private let text: String
+    private let outlineOffsets: [CGSize] = [
+        CGSize(width: -0.35, height: -0.35),
+        CGSize(width: 0, height: -0.4),
+        CGSize(width: 0.35, height: -0.35),
+        CGSize(width: -0.4, height: 0),
+        CGSize(width: 0.4, height: 0),
+        CGSize(width: -0.35, height: 0.35),
+        CGSize(width: 0, height: 0.4),
+        CGSize(width: 0.35, height: 0.35)
+    ]
 
     init(_ text: String) {
-        self.letters = text.map(String.init)
+        self.text = text
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            ForEach(Array(letters.enumerated()), id: \.offset) { _, letter in
-                Text(letter)
-                    .font(.custom("PlayfairDisplay-Regular", size: 24).weight(.black))
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [Color(hex: 0x2A1B12), Color(hex: 0x5A3A22), Color(hex: 0x8A6A46)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
+        ZStack {
+            ForEach(Array(outlineOffsets.enumerated()), id: \.offset) { _, offset in
+                titleText
+                    .foregroundStyle(Theme.macInk.opacity(0.34))
+                    .offset(x: offset.width, y: offset.height)
             }
+
+            titleText
+                .foregroundStyle(Theme.macBg)
         }
-        .accessibilityLabel("HARNESS")
+        .accessibilityLabel(text)
+    }
+
+    private var titleText: some View {
+        Text(text)
+            .font(.custom("PlayfairDisplay-Regular", size: 24).weight(.black))
+            .tracking(0)
     }
 }
 #endif

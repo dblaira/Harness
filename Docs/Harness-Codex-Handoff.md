@@ -10,7 +10,10 @@ Current branch: `main`
 
 Current state: PR #1 was merged into `main`, the handoff was committed, and local `main` was pushed cleanly. The latest `main` commit before `codex/workbench-run-spine` is `7c4bc33`.
 
-Follow-on branch: `codex/workbench-run-spine` is implementing the macOS run-detail spine, candidate review status controls, and first-pass skills/plugins/tools inventory.
+Follow-on branches:
+
+- `codex/workbench-run-spine` was merged as PR #2.
+- `codex/retrieval-candidate-tools-ios` is implementing cleaner supporting-memory retrieval, candidate graph-review preparation, interactive tools inventory details, and iOS ledger-backed sends.
 
 ## Plain Summary
 
@@ -158,12 +161,12 @@ Do not commit:
 
 The next Codex thread should start from `main` and focus on one of these:
 
-1. If `codex/workbench-run-spine` is not merged yet, review and merge that PR first.
-2. Add real candidate promotion: proposed Turtle, SHACL validation, SPARQL proof, and explicit accepted-graph write path.
+1. If `codex/retrieval-candidate-tools-ios` is not merged yet, review and merge that PR first.
+2. Add real accepted-graph promotion after graph-review preparation: SHACL validation, SPARQL proof, and explicit accepted-graph write path.
 3. Wire the iOS quick actions to real behavior.
 4. Add actual attachment/photo/file import behind the plus button.
 5. Add voice/speak behavior.
-6. Make the skills/plugins/tools inventory dynamic after the static workbench surface is approved.
+6. Make the skills/plugins/tools inventory dynamic after the interactive static surface is approved.
 7. Prepare TestFlight distribution.
 
 ## Suggested First Command In A New Codex Thread

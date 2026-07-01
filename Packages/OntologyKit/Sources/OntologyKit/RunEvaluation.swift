@@ -68,3 +68,24 @@ public struct TurtleCandidateValidator: Sendable {
         )
     }
 }
+
+public struct CandidateGraphDraftBuilder: Sendable {
+    public init() {}
+
+    public func draft(for candidate: MemoryCandidate) -> String {
+        let escapedClaim = Self.escapeLiteral(candidate.proposedClaim)
+        let escapedEvidence = Self.escapeLiteral(candidate.evidenceText)
+        return """
+        <urn:harness:candidate:\(candidate.id)> <urn:harness:proposedClaim> "\(escapedClaim)" .
+        <urn:harness:candidate:\(candidate.id)> <urn:harness:evidenceText> "\(escapedEvidence)" .
+        <urn:harness:candidate:\(candidate.id)> <urn:harness:sourceRunId> "\(candidate.runId)" .
+        """
+    }
+
+    private static func escapeLiteral(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+    }
+}

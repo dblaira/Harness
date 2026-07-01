@@ -17,7 +17,7 @@ public struct ClaudeClient {
     public var apiKey: String
     public var model: String
 
-    public init(apiKey: String? = nil, model: String = "claude-sonnet-4-20250514") {
+    public init(apiKey: String? = nil, model: String = "claude-sonnet-4-6") {
         self.apiKey = apiKey ?? ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] ?? ""
         self.model = model
     }
@@ -64,7 +64,8 @@ public struct ClaudeClient {
         ]
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await URLSession.shared.data(for: req)
+        let statusCode = (response as? HTTPURLResponse)?.statusCode
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ClaudeError.badResponse("Unparseable response")
         }
@@ -72,9 +73,19 @@ public struct ClaudeClient {
            let text = content.first?["text"] as? String {
             return text
         }
-        if let err = json["error"] as? [String: Any], let msg = err["message"] as? String {
-            throw ClaudeError.badResponse(msg)
+        if let err = json["error"] as? [String: Any] {
+            let type = err["type"] as? String
+            let message = err["message"] as? String ?? "Unknown Claude API error"
+            if let statusCode {
+                throw ClaudeError.badResponse("Claude API \(statusCode): \(formattedClaudeError(type: type, message: message))")
+            }
+            throw ClaudeError.badResponse(formattedClaudeError(type: type, message: message))
         }
         return String(data: data, encoding: .utf8) ?? "(empty)"
+    }
+
+    private func formattedClaudeError(type: String?, message: String) -> String {
+        guard let type, !type.isEmpty else { return message }
+        return "\(type): \(message)"
     }
 }
