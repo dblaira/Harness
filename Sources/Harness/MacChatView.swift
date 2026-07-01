@@ -185,26 +185,32 @@ struct MacChatView: View {
     private var transcript: some View {
         VStack(spacing: 0) {
             topBar
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    if let detail = model.selectedDetail {
-                        runSummary(detail)
-                        ForEach(detail.messages) { message in
-                            messageBubble(message)
-                        }
-                    }
+            ZStack {
+                MacHarnessWatermark()
+                    .frame(width: 260, height: 300)
+                    .opacity(model.selectedDetail == nil ? 0.18 : 0.08)
 
-                    if model.isRunning {
-                        HStack(spacing: 10) {
-                            ProgressView().controlSize(.small)
-                            Text(model.status)
-                                .foregroundStyle(Theme.macInk.opacity(0.55))
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        if let detail = model.selectedDetail {
+                            runSummary(detail)
+                            ForEach(detail.messages) { message in
+                                messageBubble(message)
+                            }
                         }
-                        .padding(.top, 4)
+
+                        if model.isRunning {
+                            HStack(spacing: 10) {
+                                ProgressView().controlSize(.small)
+                                Text(model.status)
+                                    .foregroundStyle(Theme.macInk.opacity(0.55))
+                            }
+                            .padding(.top, 4)
+                        }
                     }
+                    .padding(22)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(22)
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
             delegateLabel
             composer
@@ -568,6 +574,17 @@ private extension WorkbenchToolState {
         case .planned:
             return Theme.macFaint
         }
+    }
+}
+
+private struct MacHarnessWatermark: View {
+    var body: some View {
+        Image("HarnessWatermark")
+            .renderingMode(.template)
+            .resizable()
+            .scaledToFit()
+            .foregroundStyle(Theme.macInk)
+            .accessibilityHidden(true)
     }
 }
 
