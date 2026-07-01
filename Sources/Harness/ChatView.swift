@@ -55,6 +55,7 @@ struct ChatView: View {
                     mode: mode,
                     onAttach: { showingAttachmentMenu = true },
                     onSpeak: beginVoice,
+                    onSaveAPIKey: { _ = saveClaudeKey() },
                     onSubmit: send
                 )
                 .padding(.horizontal, 10)
@@ -91,16 +92,8 @@ struct ChatView: View {
             return
         }
 
-        if backend == .claude && !hasConfiguredAPIKey {
-            do {
-                try APIKeyStore.saveClaudeKey(trimmedKey)
-                apiKey = trimmedKey
-                hasConfiguredAPIKey = true
-                ledgerStatus = "Claude key saved locally"
-            } catch {
-                ledgerStatus = error.localizedDescription
-                return
-            }
+        if backend == .claude && !hasConfiguredAPIKey && !saveClaudeKey() {
+            return
         }
 
         messages.append(ChatMessage(text: text, fromMe: true))
@@ -125,11 +118,36 @@ struct ChatView: View {
                 }
             } catch {
                 await MainActor.run {
+                    if chosen == .claude && ChatView.isClaudeAuthenticationError(error) {
+                        try? APIKeyStore.deleteClaudeKey()
+                        hasConfiguredAPIKey = false
+                        apiKey = ""
+                    }
                     messages.append(ChatMessage(text: "Error: \(error.localizedDescription)", fromMe: false))
                     ledgerStatus = error.localizedDescription
                     thinking = false
                 }
             }
+        }
+    }
+
+    @discardableResult
+    private func saveClaudeKey() -> Bool {
+        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedKey.isEmpty else {
+            ledgerStatus = "Claude API key required"
+            return false
+        }
+
+        do {
+            try APIKeyStore.saveClaudeKey(trimmedKey)
+            apiKey = trimmedKey
+            hasConfiguredAPIKey = true
+            ledgerStatus = "Claude key saved locally"
+            return true
+        } catch {
+            ledgerStatus = error.localizedDescription
+            return false
         }
     }
 
@@ -155,6 +173,14 @@ struct ChatView: View {
         #else
         ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] ?? APIKeyStore.loadClaudeKey() ?? ""
         #endif
+    }
+
+    private static func isClaudeAuthenticationError(_ error: Error) -> Bool {
+        let message = error.localizedDescription.lowercased()
+        return message.contains("authentication") ||
+            message.contains("x-api-key") ||
+            message.contains("api key") ||
+            message.contains("401")
     }
 }
 
@@ -362,6 +388,7 @@ private struct HarnessComposer: View {
     let mode: HarnessLaunchMode
     let onAttach: () -> Void
     let onSpeak: () -> Void
+    let onSaveAPIKey: () -> Void
     let onSubmit: () -> Void
 
     var body: some View {
@@ -379,15 +406,28 @@ private struct HarnessComposer: View {
                 #endif
 
             if needsClaudeKey {
-                SecureField("Claude API key", text: $apiKey)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Theme.iosText)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(Theme.iosControlActive, in: RoundedRectangle(cornerRadius: 14))
-                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.iosHair, lineWidth: 1))
-                    .apiKeyEntryBehavior()
+                HStack(spacing: 8) {
+                    SecureField("Claude API key", text: $apiKey)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.iosText)
+                        .padding(.horizontal, 12)
+                        .frame(height: 40)
+                        .background(Theme.iosControlActive, in: RoundedRectangle(cornerRadius: 14))
+                        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.iosHair, lineWidth: 1))
+                        .apiKeyEntryBehavior()
+
+                    Button(action: onSaveAPIKey) {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 16, weight: .black))
+                            .foregroundStyle(saveDisabled ? Theme.iosMuted : Theme.iosBackground)
+                            .frame(width: 40, height: 40)
+                            .background(saveDisabled ? Theme.iosControlActive : Theme.iosText, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(saveDisabled)
+                    .accessibilityLabel("Save Claude API key")
+                }
             }
 
             HStack(spacing: 8) {
@@ -421,6 +461,10 @@ private struct HarnessComposer: View {
         thinking ||
             draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
             (needsClaudeKey && apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    private var saveDisabled: Bool {
+        thinking || apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var needsClaudeKey: Bool {

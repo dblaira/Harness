@@ -2,6 +2,10 @@ import Foundation
 import Testing
 @testable import OntologyKit
 
+@Test func claudeClientUsesCurrentDefaultModel() {
+    #expect(ClaudeClient(apiKey: "test-key").model == "claude-sonnet-4-6")
+}
+
 @Test func authorityRetrievalPrecedesMemoryAndModel() async throws {
     let ontology = OntologyLoader.load()
     let ledger = try RunLedgerStore.inMemory()

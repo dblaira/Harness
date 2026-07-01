@@ -44,6 +44,13 @@ enum APIKeyStore {
         guard status == errSecSuccess else { throw KeychainError(status: status) }
     }
 
+    static func deleteClaudeKey() throws {
+        let status = SecItemDelete(baseQuery(account: claudeAccount) as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw KeychainError(status: status)
+        }
+    }
+
     private static func baseQuery(account: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
