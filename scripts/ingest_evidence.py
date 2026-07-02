@@ -15,6 +15,7 @@ import json
 import math
 import os
 import re
+import statistics
 import sys
 import urllib.error
 import urllib.parse
@@ -27,7 +28,9 @@ MAX_NEW_CANDIDATES = 10
 OBSERVED = "observed_correlation"
 WEAKENING = "weakening_review"
 DEFAULT_START_DATE = dt.date(2024, 6, 1)
-ACCEPTED_CORRELATION_METRIC = "pearson_weekly_counts"
+ACCEPTED_CORRELATION_METRIC = "binary_above_median_week_phi"
+MIN_WEAKENING_BASELINE = 0.55
+MAX_WEAKENING_CURRENT = 0.50
 
 
 def default_ontology_root() -> Path:
@@ -212,11 +215,11 @@ def existing_queue_keys(queue: list[dict]) -> set[tuple[str, str, str]]:
     return keys
 
 
-def accepted_pairs(accepted_graph: Path) -> dict[tuple[str, str], float | None]:
+def accepted_pairs(accepted_graph: Path) -> dict[tuple[str, str], dict]:
     if not accepted_graph.exists():
         return {}
     text = accepted_graph.read_text()
-    pairs: dict[tuple[str, str], float | None] = {}
+    pairs: dict[tuple[str, str], dict] = {}
     for block in re.split(r"\n\s*\n", text):
         if 'understood:connectionType "observed_correlation"' not in block:
             continue
@@ -225,8 +228,13 @@ def accepted_pairs(accepted_graph: Path) -> dict[tuple[str, str], float | None]:
             continue
         strength_match = re.search(r'understood:strength "([0-9.]+)"', block)
         strength = float(strength_match.group(1)) if strength_match else None
+        evidence_match = re.search(r'understood:evidenceNote "((?:[^"\\]|\\.)*)"', block)
+        evidence_note = evidence_match.group(1) if evidence_match else ""
         left, right = sorted([domains[0].lower(), domains[1].lower()])
-        pairs[(left, right)] = strength
+        pairs[(left, right)] = {
+            "accepted_strength": strength,
+            "evidence_note": evidence_note,
+        }
     return pairs
 
 
@@ -240,10 +248,14 @@ def accepted_correlation_stats(
         return None
     series_a = [counts[domain_a].get(week, 0) for week in tracked_weeks]
     series_b = [counts[domain_b].get(week, 0) for week in tracked_weeks]
-    mean_a = sum(series_a) / len(series_a)
-    mean_b = sum(series_b) / len(series_b)
-    deviation_a = [value - mean_a for value in series_a]
-    deviation_b = [value - mean_b for value in series_b]
+    median_a = statistics.median(series_a)
+    median_b = statistics.median(series_b)
+    active_a = [1 if value > median_a else 0 for value in series_a]
+    active_b = [1 if value > median_b else 0 for value in series_b]
+    mean_a = sum(active_a) / len(active_a)
+    mean_b = sum(active_b) / len(active_b)
+    deviation_a = [value - mean_a for value in active_a]
+    deviation_b = [value - mean_b for value in active_b]
     variance_a = sum(value * value for value in deviation_a)
     variance_b = sum(value * value for value in deviation_b)
     if variance_a == 0 or variance_b == 0:
@@ -258,8 +270,35 @@ def accepted_correlation_stats(
         "range_end": (week_start(tracked_weeks[-1]) + dt.timedelta(days=6)).isoformat(),
         "mean_a": mean_a,
         "mean_b": mean_b,
+        "median_a": median_a,
+        "median_b": median_b,
+        "active_count_a": sum(active_a),
+        "active_count_b": sum(active_b),
+        "coactive_count": sum(1 for left, right in zip(active_a, active_b) if left and right),
         "method": ACCEPTED_CORRELATION_METRIC,
     }
+
+
+def baseline_weeks_for_evidence(evidence_note: str, trusted_weeks: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    count_match = re.search(r"(\d+)\s+weeks", evidence_note)
+    if count_match:
+        count = int(count_match.group(1))
+        if 0 < count <= len(trusted_weeks):
+            return trusted_weeks[:count]
+
+    range_match = re.search(r"(\d{4}-\d{2}-\d{2})\s+to\s+(\d{4}-\d{2}-\d{2})", evidence_note)
+    if range_match:
+        start = parse_date(range_match.group(1))
+        end = parse_date(range_match.group(2))
+        if start and end:
+            return [
+                week
+                for week in trusted_weeks
+                if start <= week_start(week)
+                and (week_start(week) + dt.timedelta(days=6)) <= end
+            ]
+
+    return trusted_weeks
 
 
 def plain_pair(domain_a: str, domain_b: str) -> str:
@@ -269,8 +308,9 @@ def plain_pair(domain_a: str, domain_b: str) -> str:
 def evidence_note(stats: dict) -> str:
     percent = round(stats["percent"] * 100)
     return (
-        f"Pearson correlation {percent}% across {stats['active_weeks']} tracked weeks "
-        f"({stats['range_start']} to {stats['range_end']})."
+        f"Robust correlation {percent}% across {stats['active_weeks']} tracked weeks "
+        f"({stats['range_start']} to {stats['range_end']}). "
+        "Metric: each category is yes/no for weeks above its own median, so logging-volume spikes do not dominate."
     )
 
 
@@ -379,29 +419,38 @@ def run(
             queue_keys.add(pair_key(domain_a, domain_b, OBSERVED))
 
     refresh_rows = []
-    for (domain_a, domain_b), old_strength in sorted(accepted.items()):
+    for (domain_a, domain_b), accepted_info in sorted(accepted.items()):
+        baseline_weeks = baseline_weeks_for_evidence(
+            str(accepted_info.get("evidence_note") or ""),
+            trusted_weeks,
+        )
+        previous_stats = accepted_correlation_stats(counts, domain_a, domain_b, baseline_weeks)
         stats = all_stats.get((domain_a, domain_b))
-        if not stats:
+        if not stats or not previous_stats:
             continue
         refresh_rows.append(
             {
                 "domain_a": domain_a,
                 "domain_b": domain_b,
-                "previous_strength": old_strength,
+                "accepted_graph_strength": accepted_info.get("accepted_strength"),
+                "previous_strength": round(previous_stats["percent"], 4),
                 "current_strength": round(stats["percent"], 4),
                 "metric": ACCEPTED_CORRELATION_METRIC,
-                "active_weeks": stats["active_weeks"],
-                "range_start": stats["range_start"],
-                "range_end": stats["range_end"],
+                "previous_active_weeks": previous_stats["active_weeks"],
+                "previous_range_start": previous_stats["range_start"],
+                "previous_range_end": previous_stats["range_end"],
+                "current_active_weeks": stats["active_weeks"],
+                "current_range_start": stats["range_start"],
+                "current_range_end": stats["range_end"],
             }
         )
         if (
             len(new_claims) < remaining_run_slots
-            and stats["percent"] < 0.50
-            and old_strength is not None
+            and previous_stats["percent"] >= MIN_WEAKENING_BASELINE
+            and stats["percent"] < MAX_WEAKENING_CURRENT
             and pair_key(domain_a, domain_b, WEAKENING) not in queue_keys
         ):
-            new_claims.append(build_weakening_claim(domain_a, domain_b, old_strength, stats, run_date))
+            new_claims.append(build_weakening_claim(domain_a, domain_b, previous_stats["percent"], stats, run_date))
             queue_keys.add(pair_key(domain_a, domain_b, WEAKENING))
 
     run_summary = {
