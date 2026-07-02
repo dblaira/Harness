@@ -1,3 +1,5 @@
+# GENERATED COPY — edit canonical version in Ontology/accepted/ instead.
+
 @prefix recall: <https://understood.app/ontology/project-recall#> .
 @prefix bfo: <http://purl.obolibrary.org/obo/> .
 @prefix ro: <http://purl.obolibrary.org/obo/> .
