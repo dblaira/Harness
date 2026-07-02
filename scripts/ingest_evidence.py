@@ -21,12 +21,12 @@ import urllib.parse
 import urllib.request
 from collections import defaultdict
 from pathlib import Path
-from statistics import median
 
 SUPABASE_PROJECT_URL = "https://wqdacfrzurhpsiuvzxwo.supabase.co"
 MAX_NEW_CANDIDATES = 10
 OBSERVED = "observed_correlation"
 WEAKENING = "weakening_review"
+DEFAULT_START_DATE = dt.date(2024, 6, 1)
 
 
 def default_ontology_root() -> Path:
@@ -130,12 +130,35 @@ def parse_date(value: str | None) -> dt.date | None:
         return None
 
 
+def parse_cli_date(value: str) -> dt.date:
+    parsed = parse_date(value)
+    if not parsed:
+        raise argparse.ArgumentTypeError("expected YYYY-MM-DD")
+    return parsed
+
+
 def week_key(value: str | None) -> tuple[int, int] | None:
     parsed = parse_date(value)
     if not parsed:
         return None
     iso = parsed.isocalendar()
     return iso.year, iso.week
+
+
+def row_event_date(row: dict) -> dt.date | None:
+    return parse_date(row.get("time_window_start") or row.get("created_at"))
+
+
+def filter_rows_by_date_window(
+    rows: list[dict],
+    start_date: dt.date,
+    end_date: dt.date,
+) -> list[dict]:
+    return [
+        row
+        for row in rows
+        if (event_date := row_event_date(row)) and start_date <= event_date <= end_date
+    ]
 
 
 def week_start(week: tuple[int, int]) -> dt.date:
@@ -153,7 +176,8 @@ def weekly_counts(rows: list[dict]) -> dict[str, dict[tuple[int, int], int]]:
         domain = normalize_domain(row)
         if not domain:
             continue
-        week = week_key(row.get("time_window_start") or row.get("created_at"))
+        event_date = row_event_date(row)
+        week = week_key(event_date.isoformat() if event_date else None)
         if not week:
             continue
         counts[domain][week] += 1
@@ -209,31 +233,31 @@ def co_rise_stats(
     counts: dict[str, dict[tuple[int, int], int]],
     domain_a: str,
     domain_b: str,
+    tracked_weeks: list[tuple[int, int]],
 ) -> dict | None:
-    weeks_a = set(counts[domain_a])
-    weeks_b = set(counts[domain_b])
-    active_weeks = sorted(weeks_a | weeks_b)
-    if not active_weeks:
+    if not tracked_weeks:
         return None
-    median_a = median(counts[domain_a].values())
-    median_b = median(counts[domain_b].values())
-    co_weeks = [
-        week
-        for week in active_weeks
-        if counts[domain_a].get(week, 0) > median_a
-        and counts[domain_b].get(week, 0) > median_b
-    ]
-    percent = len(co_weeks) / len(active_weeks)
+    series_a = [counts[domain_a].get(week, 0) for week in tracked_weeks]
+    series_b = [counts[domain_b].get(week, 0) for week in tracked_weeks]
+    mean_a = sum(series_a) / len(series_a)
+    mean_b = sum(series_b) / len(series_b)
+    deviation_a = [value - mean_a for value in series_a]
+    deviation_b = [value - mean_b for value in series_b]
+    variance_a = sum(value * value for value in deviation_a)
+    variance_b = sum(value * value for value in deviation_b)
+    if variance_a == 0 or variance_b == 0:
+        return None
+    correlation = sum(a * b for a, b in zip(deviation_a, deviation_b)) / math.sqrt(variance_a * variance_b)
     return {
         "domain_a": domain_a,
         "domain_b": domain_b,
-        "co_weeks": len(co_weeks),
-        "active_weeks": len(active_weeks),
-        "percent": percent,
-        "range_start": week_start(active_weeks[0]).isoformat(),
-        "range_end": (week_start(active_weeks[-1]) + dt.timedelta(days=6)).isoformat(),
-        "median_a": median_a,
-        "median_b": median_b,
+        "active_weeks": len(tracked_weeks),
+        "percent": correlation,
+        "range_start": week_start(tracked_weeks[0]).isoformat(),
+        "range_end": (week_start(tracked_weeks[-1]) + dt.timedelta(days=6)).isoformat(),
+        "mean_a": mean_a,
+        "mean_b": mean_b,
+        "method": "pearson_weekly_counts",
     }
 
 
@@ -244,7 +268,7 @@ def plain_pair(domain_a: str, domain_b: str) -> str:
 def evidence_note(stats: dict) -> str:
     percent = round(stats["percent"] * 100)
     return (
-        f"Co-rose {percent}% across {stats['active_weeks']} active weeks "
+        f"Correlated {percent}% across {stats['active_weeks']} tracked weeks "
         f"({stats['range_start']} to {stats['range_end']})."
     )
 
@@ -257,7 +281,7 @@ def next_candidate_id(queue: list[dict], run_date: str, domain_a: str, domain_b:
 def build_observed_claim(stats: dict, run_date: str) -> dict:
     domain_a = stats["domain_a"]
     domain_b = stats["domain_b"]
-    label = f"{plain_pair(domain_a, domain_b)} rise together in high-activity weeks."
+    label = f"{plain_pair(domain_a, domain_b)} move together across tracked weeks."
     return {
         "id": next_candidate_id([], run_date, domain_a, domain_b, OBSERVED),
         "status": "pending",
@@ -276,7 +300,7 @@ def build_weakening_claim(domain_a: str, domain_b: str, old_strength: float, sta
     new_percent = round(stats["percent"] * 100)
     plain = (
         f"This connection may be weakening: {plain_pair(domain_a, domain_b)} "
-        f"co-rise support was {old_percent}%, now {new_percent}%."
+        f"correlation support was {old_percent}%, now {new_percent}%."
     )
     return {
         "id": next_candidate_id([], run_date, domain_a, domain_b, WEAKENING),
@@ -299,8 +323,17 @@ def append_ingest_log(log_path: Path, entry: dict) -> None:
     save_json(log_path, log)
 
 
-def run(ontology_root: Path, dry_run: bool = False) -> dict:
+def run(
+    ontology_root: Path,
+    dry_run: bool = False,
+    start_date: dt.date = DEFAULT_START_DATE,
+    end_date: dt.date | None = None,
+) -> dict:
     run_date = dt.date.today().isoformat()
+    if end_date is None:
+        end_date = dt.date.today()
+    if start_date > end_date:
+        raise SystemExit("Trusted date window start must be on or before the end date.")
     candidates_dir = ontology_root / "candidates"
     queue_path = candidates_dir / "queue.json"
     accepted_graph = ontology_root / "accepted" / "accepted-graph.ttl"
@@ -308,16 +341,21 @@ def run(ontology_root: Path, dry_run: bool = False) -> dict:
     ingest_log_path = candidates_dir / "ingest-log.json"
 
     rows = fetch_extractions()
-    counts = weekly_counts(rows)
+    trusted_rows = filter_rows_by_date_window(rows, start_date, end_date)
+    counts = weekly_counts(trusted_rows)
+    trusted_weeks = sorted({week for weeks in counts.values() for week in weeks})
     domains = sorted(domain for domain, weeks in counts.items() if weeks)
     queue = load_queue(queue_path)
     queue_keys = existing_queue_keys(queue)
+    run_source = f"supabase-ingest {run_date}"
+    existing_run_claims = [claim for claim in queue if claim.get("source") == run_source]
+    remaining_run_slots = max(0, MAX_NEW_CANDIDATES - len(existing_run_claims))
     accepted = accepted_pairs(accepted_graph)
 
     all_stats: dict[tuple[str, str], dict] = {}
     for index, domain_a in enumerate(domains):
         for domain_b in domains[index + 1 :]:
-            stats = co_rise_stats(counts, domain_a, domain_b)
+            stats = co_rise_stats(counts, domain_a, domain_b, trusted_weeks)
             if stats:
                 all_stats[(domain_a, domain_b)] = stats
 
@@ -327,7 +365,7 @@ def run(ontology_root: Path, dry_run: bool = False) -> dict:
         all_stats.items(),
         key=lambda item: (-item[1]["percent"], item[0][0], item[0][1]),
     ):
-        if len(new_claims) >= MAX_NEW_CANDIDATES:
+        if len(new_claims) >= remaining_run_slots:
             break
         if (domain_a, domain_b) in accepted_pair_set:
             continue
@@ -356,7 +394,7 @@ def run(ontology_root: Path, dry_run: bool = False) -> dict:
             }
         )
         if (
-            len(new_claims) < MAX_NEW_CANDIDATES
+            len(new_claims) < remaining_run_slots
             and stats["percent"] < 0.50
             and old_strength is not None
             and pair_key(domain_a, domain_b, WEAKENING) not in queue_keys
@@ -367,6 +405,14 @@ def run(ontology_root: Path, dry_run: bool = False) -> dict:
     run_summary = {
         "date": dt.datetime.now(dt.timezone.utc).isoformat(),
         "extraction_count": len(rows),
+        "trusted_extraction_count": len(trusted_rows),
+        "trusted_start_date": start_date.isoformat(),
+        "trusted_end_date": end_date.isoformat(),
+        "trusted_week_count": len(trusted_weeks),
+        "trusted_week_range": [
+            week_start(trusted_weeks[0]).isoformat(),
+            (week_start(trusted_weeks[-1]) + dt.timedelta(days=6)).isoformat(),
+        ] if trusted_weeks else [],
         "category_count": len(domains),
         "candidates_created": len(new_claims),
         "dry_run": dry_run,
@@ -374,6 +420,14 @@ def run(ontology_root: Path, dry_run: bool = False) -> dict:
     refresh_report = {
         "generated_at": run_summary["date"],
         "extraction_count": len(rows),
+        "trusted_extraction_count": len(trusted_rows),
+        "trusted_start_date": start_date.isoformat(),
+        "trusted_end_date": end_date.isoformat(),
+        "trusted_week_count": len(trusted_weeks),
+        "trusted_week_range": [
+            week_start(trusted_weeks[0]).isoformat(),
+            (week_start(trusted_weeks[-1]) + dt.timedelta(days=6)).isoformat(),
+        ] if trusted_weeks else [],
         "accepted_observed_correlation_count": len(refresh_rows),
         "connections": refresh_rows,
     }
@@ -397,9 +451,16 @@ def main() -> int:
     load_local_env()
     parser = argparse.ArgumentParser(description="Ingest Supabase evidence into the review queue.")
     parser.add_argument("--ontology-root", type=Path, default=default_ontology_root())
+    parser.add_argument("--start-date", type=parse_cli_date, default=DEFAULT_START_DATE)
+    parser.add_argument("--end-date", type=parse_cli_date, default=dt.date.today())
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
-    result = run(args.ontology_root, dry_run=args.dry_run)
+    result = run(
+        args.ontology_root,
+        dry_run=args.dry_run,
+        start_date=args.start_date,
+        end_date=args.end_date,
+    )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 
