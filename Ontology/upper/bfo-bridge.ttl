@@ -1,0 +1,71 @@
+@prefix understood: <https://understood.app/ontology#> .
+@prefix cco: <https://www.commoncoreontologies.org/> .
+@prefix obo: <http://purl.obolibrary.org/obo/> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+# Bridge only: no existing understood triples are remodeled here.
+# Common Core Ontologies pinned release: v2.1, published 2026-04-04.
+# Source: https://github.com/CommonCoreOntology/CommonCoreOntologies/releases/tag/v2.1
+
+<https://understood.app/ontology/upper/bfo-bridge>
+  a owl:Ontology ;
+  owl:imports <https://raw.githubusercontent.com/CommonCoreOntology/CommonCoreOntologies/v2.1/src/cco-merged/CommonCoreOntologiesMerged.ttl> ;
+  rdfs:comment "Bounded bridge from Understood review-queue vocabulary to BFO/CCO. It adds upper-ontology typing only." .
+
+# Connection is treated as an accepted information artifact about a relationship Adam approved.
+understood:Connection a owl:Class ;
+  rdfs:subClassOf cco:ont00000958 ;
+  rdfs:comment "understood:Connection is bridged to CCO Information Content Entity because it records an approved claim, not the world process itself." .
+
+# Affect is bridged to CCO Information Content Entity because the domain records felt qualities or states as information.
+<https://understood.app/ontology/domain/affect> a owl:Class ;
+  rdfs:subClassOf cco:ont00000958 .
+
+# Ambition is bridged to CCO Objective because it names intended future achievement.
+<https://understood.app/ontology/domain/ambition> a owl:Class ;
+  rdfs:subClassOf cco:ont00000476 .
+
+# Belief is bridged to CCO Information Content Entity because it names held propositional content.
+<https://understood.app/ontology/domain/belief> a owl:Class ;
+  rdfs:subClassOf cco:ont00000958 .
+
+# Entertainment is bridged to CCO Act of Entertainment because it names leisure/entertainment activity.
+<https://understood.app/ontology/domain/entertainment> a owl:Class ;
+  rdfs:subClassOf cco:ont00001144 .
+
+# Exercise is bridged to CCO Planned Act because it names intentional recurring bodily practice.
+<https://understood.app/ontology/domain/exercise> a owl:Class ;
+  rdfs:subClassOf cco:ont00000228 .
+
+# Health is bridged to CCO Measurement Information Content Entity because it is represented by health-state observations and measurements.
+<https://understood.app/ontology/domain/health> a owl:Class ;
+  rdfs:subClassOf cco:ont00001163 .
+
+# Insight is bridged to CCO Information Content Entity because it names captured understanding.
+<https://understood.app/ontology/domain/insight> a owl:Class ;
+  rdfs:subClassOf cco:ont00000958 .
+
+# Learning is bridged to CCO Act of Training Acquisition because it names knowledge acquisition activity.
+<https://understood.app/ontology/domain/learning> a owl:Class ;
+  rdfs:subClassOf cco:ont00000687 .
+
+# Nutrition is bridged to CCO Portion of Food because it centers food intake evidence.
+<https://understood.app/ontology/domain/nutrition> a owl:Class ;
+  rdfs:subClassOf cco:ont00000307 .
+
+# Purchase is bridged to CCO Act of Buying because it names buying events.
+<https://understood.app/ontology/domain/purchase> a owl:Class ;
+  rdfs:subClassOf cco:ont00000389 .
+
+# Sleep is bridged to CCO Measurement Information Content Entity because the domain is represented by sleep observations and scores.
+<https://understood.app/ontology/domain/sleep> a owl:Class ;
+  rdfs:subClassOf cco:ont00001163 .
+
+# Social is bridged to CCO Social Act because it names interpersonal activity.
+<https://understood.app/ontology/domain/social> a owl:Class ;
+  rdfs:subClassOf cco:ont00001327 .
+
+# Work is bridged to CCO Act of Employment because it names work activity.
+<https://understood.app/ontology/domain/work> a owl:Class ;
+  rdfs:subClassOf cco:ont00001226 .

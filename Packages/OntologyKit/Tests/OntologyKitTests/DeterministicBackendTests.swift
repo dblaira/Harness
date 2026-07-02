@@ -11,11 +11,11 @@ import Testing
     let ledger = try RunLedgerStore.inMemory()
     let backend = StaticBackendAdapter(
         metadata: .init(backend: .codex, modelName: "test-codex", invocationMethod: "unit-test"),
-        answer: "Plain answer first.\n\nRule: conn-019"
+        answer: "Plain answer first.\n\nRule: conn-019\nAdam Pattern Step: 5"
     )
     let service = HarnessRunService(
         ledger: ledger,
-        authorityRetriever: OntologyAuthorityRetriever(),
+        authorityRetriever: OntologyAuthorityRetriever(sparqlEndpoint: URL(string: "http://127.0.0.1:9/understood/sparql")!),
         memoryRetriever: StaticMemoryRetriever(hit: .init(
             source: "obsidian://test",
             excerpt: "Supporting note only.",
@@ -50,7 +50,7 @@ import Testing
     let ledger = try RunLedgerStore.inMemory()
     let backend = StaticBackendAdapter(
         metadata: .init(backend: .claude, modelName: "test-claude", invocationMethod: "unit-test"),
-        answer: "Plain answer first.\n\nRule: none"
+        answer: "Plain answer first.\n\nRule: none\nAdam Pattern Step: none"
     )
     let service = HarnessRunService(
         ledger: ledger,
@@ -75,7 +75,7 @@ import Testing
     let ledger = try RunLedgerStore.inMemory()
     let backend = StaticBackendAdapter(
         metadata: .init(backend: .claude, modelName: "test-claude", invocationMethod: "unit-test"),
-        answer: "Plain answer first.\n\nRule: none"
+        answer: "Plain answer first.\n\nRule: none\nAdam Pattern Step: none"
     )
     let service = HarnessRunService(
         ledger: ledger,
@@ -117,7 +117,7 @@ import Testing
     let ledger = try RunLedgerStore.inMemory()
     let backend = StaticBackendAdapter(
         metadata: .init(backend: .claude, modelName: "test-claude", invocationMethod: "unit-test"),
-        answer: "Plain answer first.\n\nRule: none"
+        answer: "Plain answer first.\n\nRule: none\nAdam Pattern Step: none"
     )
     let service = HarnessRunService(
         ledger: ledger,
@@ -273,12 +273,54 @@ import Testing
     #expect(decisions.isEmpty)
 }
 
+@Test func reviewQueueSHACLFailureLeavesClaimPending() async throws {
+    let root = try makeReviewQueueFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let ledger = try RunLedgerStore.inMemory()
+    let store = ReviewQueueStore(
+        ontologyRoot: root,
+        ledger: ledger,
+        turtleParser: RejectingTurtleParser(message: "missing life domain; strength must be a number from 0 to 1"),
+        acceptedGraphPoster: NoopAcceptedGraphPoster()
+    )
+
+    let outcome = try await store.decide(claimId: "cand-seed-001", decision: .yes)
+    let graph = try String(contentsOf: root.appendingPathComponent("accepted/accepted-graph.ttl"), encoding: .utf8)
+    let reloaded = try await store.loadPendingClaims()
+
+    #expect(!outcome.accepted)
+    #expect(outcome.blockedReason == "Blocked: missing life domain; strength must be a number from 0 to 1")
+    #expect(!graph.contains("conn-obs-seed-001"))
+    #expect(reloaded.first?.validationResult == "Blocked: missing life domain; strength must be a number from 0 to 1")
+}
+
+@Test func answerEvalRequiresPatternStepAndWarnsOnExecutionWithoutObservation() {
+    let evaluator = DeterministicAnswerEvaluator()
+
+    let missing = evaluator.evaluate(
+        answer: "Plain answer first.\n\nRule: none",
+        authorityHits: [],
+        memoryHits: [],
+        runId: "run-pattern-missing"
+    )
+    #expect(missing.contains { $0.checkName == "pattern-step-named" && !$0.passed })
+
+    let execution = evaluator.evaluate(
+        answer: "Plain answer first.\n\nRule: none\nAdam Pattern Step: 5",
+        authorityHits: [],
+        memoryHits: [],
+        runId: "run-pattern-execution"
+    )
+    #expect(execution.contains { $0.checkName == "pattern-step-named" && $0.passed })
+    #expect(execution.contains { $0.checkName == "observational-zone-before-execution" && !$0.passed && $0.detail.contains("Warning") })
+}
+
 @Test func runLedgerPersistsSearchableRunDetail() async throws {
     let ontology = OntologyLoader.load()
     let ledger = try RunLedgerStore.inMemory()
     let backend = StaticBackendAdapter(
         metadata: .init(backend: .grok, modelName: "test-grok", invocationMethod: "unit-test"),
-        answer: "Plain answer first.\n\nRule: system-over-task"
+        answer: "Plain answer first.\n\nRule: system-over-task\nAdam Pattern Step: 1"
     )
     let service = HarnessRunService(
         ledger: ledger,
@@ -304,7 +346,7 @@ import Testing
     let ledger = try RunLedgerStore.inMemory()
     let backend = StaticBackendAdapter(
         metadata: .init(backend: .claude, modelName: "test-claude", invocationMethod: "unit-test"),
-        answer: "Plain answer first with sk-ant-secret-value.\n\nRule: none"
+        answer: "Plain answer first.\n\nRule: none\nAdam Pattern Step: none"
     )
     let service = HarnessRunService(
         ledger: ledger,

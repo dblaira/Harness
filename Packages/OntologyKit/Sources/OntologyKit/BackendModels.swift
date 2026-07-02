@@ -102,6 +102,8 @@ public struct GraphAuthorityHit: Identifiable, Codable, Sendable, Equatable {
     public let authorityLevel: AuthorityLevel
     public let score: Double
 
+    public var sparqlTrace: String { queryTrace }
+
     public init(
         id: String = UUID().uuidString,
         runId: String? = nil,

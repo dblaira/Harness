@@ -11,10 +11,11 @@ public struct DeterministicAnswerEvaluator: AnswerEvaluating {
         let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
         let firstLine = trimmed.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init) ?? ""
         let namesRule = trimmed.range(of: #"Rule:\s*(conn-\d+|[A-Za-z0-9_\-]+|none)"#, options: .regularExpression) != nil
+        let patternStep = Self.patternStep(in: trimmed)
         let candidateAsAuthority = trimmed.localizedCaseInsensitiveContains("candidate memory is accepted")
             || trimmed.localizedCaseInsensitiveContains("suggested memory is accepted")
 
-        return [
+        var results = [
             EvalResult(
                 runId: runId,
                 checkName: "plain-answer-first",
@@ -29,6 +30,12 @@ public struct DeterministicAnswerEvaluator: AnswerEvaluating {
             ),
             EvalResult(
                 runId: runId,
+                checkName: "pattern-step-named",
+                passed: patternStep != nil || trimmed.range(of: #"(?i)Adam Pattern Step:\s*none"#, options: .regularExpression) != nil,
+                detail: patternStep.map { "Adam Pattern step \($0) named." } ?? "Answer must include Adam Pattern Step: 1-8 or Adam Pattern Step: none."
+            ),
+            EvalResult(
+                runId: runId,
                 checkName: "authority-memory-separated",
                 passed: !candidateAsAuthority && memoryHits.allSatisfy { $0.authorityLevel == .supporting } && authorityHits.allSatisfy { $0.authorityLevel == .accepted },
                 detail: "Accepted authority hits: \(authorityHits.count); supporting memory hits: \(memoryHits.count)."
@@ -40,11 +47,60 @@ public struct DeterministicAnswerEvaluator: AnswerEvaluating {
                 detail: "Answer can be persisted after redaction."
             )
         ]
+        if let patternStep, patternStep >= 5 {
+            let observationalEvidence = Self.hasObservationalEvidence(answer: trimmed, authorityHits: authorityHits, memoryHits: memoryHits)
+            results.append(
+                EvalResult(
+                    runId: runId,
+                    checkName: "observational-zone-before-execution",
+                    passed: observationalEvidence,
+                    detail: observationalEvidence
+                        ? "Execution step has observational context."
+                        : "Warning: observational zone incomplete before execution step \(patternStep)."
+                )
+            )
+        }
+        return results
+    }
+
+    private static func patternStep(in text: String) -> Int? {
+        let patterns = [
+            #"(?i)Adam Pattern Step:\s*([1-8])"#,
+            #"(?i)Pattern Step:\s*([1-8])"#,
+            #"(?i)Step\s*([1-8])"#
+        ]
+        for pattern in patterns {
+            guard let re = try? NSRegularExpression(pattern: pattern) else { continue }
+            let range = NSRange(text.startIndex..., in: text)
+            guard let match = re.firstMatch(in: text, range: range),
+                  match.numberOfRanges > 1,
+                  let matchRange = Range(match.range(at: 1), in: text),
+                  let step = Int(text[matchRange])
+            else { continue }
+            return step
+        }
+        return nil
+    }
+
+    private static func hasObservationalEvidence(answer: String, authorityHits: [GraphAuthorityHit], memoryHits: [MemoryHit]) -> Bool {
+        let context = ([answer] + authorityHits.map { "\($0.subject) \($0.object)" } + memoryHits.map(\.excerpt))
+            .joined(separator: "\n")
+            .lowercased()
+        let markers = [
+            "step 1", "step 2", "step 3", "step 4",
+            "context", "circle", "close the gap", "choose success",
+            "accept reality", "watch before moving", "specific gap", "measurable target"
+        ]
+        return markers.contains { context.contains($0) }
     }
 }
 
 public struct TurtleCandidateValidator: Sendable {
-    public init() {}
+    private let turtleParser: any TurtleParsing
+
+    public init(turtleParser: any TurtleParsing = PythonSHACLConnectionValidator()) {
+        self.turtleParser = turtleParser
+    }
 
     public func validate(candidate: MemoryCandidate) -> ValidationResult {
         guard let graph = candidate.proposedGraph, !graph.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -57,16 +113,38 @@ public struct TurtleCandidateValidator: Sendable {
             )
         }
 
-        let hasTerminator = graph.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix(".")
-        let hasPredicateShape = graph.contains(" ")
+        do {
+            try turtleParser.parse(Self.prefixes + graph)
+        } catch {
+            let message: String
+            if let localized = error as? LocalizedError, let description = localized.errorDescription {
+                message = description
+            } else {
+                message = error.localizedDescription
+            }
+            return ValidationResult(
+                runId: candidate.runId,
+                candidateId: candidate.id,
+                kind: "shacl",
+                passed: false,
+                detail: "Blocked: \(message)"
+            )
+        }
+
         return ValidationResult(
             runId: candidate.runId,
             candidateId: candidate.id,
-            kind: "turtle",
-            passed: hasTerminator && hasPredicateShape,
-            detail: hasTerminator && hasPredicateShape ? "Lightweight Turtle shape passed." : "Turtle must include a statement ending in a period."
+            kind: "shacl",
+            passed: true,
+            detail: "SHACL validation passed."
         )
     }
+
+    private static let prefixes = """
+    @prefix understood: <https://understood.app/ontology#> .
+    @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+    """
 }
 
 public struct CandidateGraphDraftBuilder: Sendable {

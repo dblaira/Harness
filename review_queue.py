@@ -26,22 +26,17 @@ Files it creates (same folder, safe to sync to iCloud/Obsidian):
 
 import argparse
 import json
+import subprocess
 import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-try:
-    from rdflib import Graph
-
-    HAVE_RDFLIB = True
-except ImportError:
-    HAVE_RDFLIB = False
-
 BASE = Path(__file__).parent
 QUEUE_FILE = BASE / "queue.json"
 GRAPH_FILE = BASE / "accepted-graph.ttl"
 LEDGER_FILE = BASE / "decision-ledger.json"
+VALIDATOR = BASE / "scripts" / "validate_connection_turtle.py"
 
 PREFIXES = """@prefix understood: <https://understood.app/ontology#> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
@@ -128,15 +123,21 @@ def claim_to_turtle(claim, frequency="usually"):
     """Emit a Connection matching the existing adam-beliefs.ttl vocabulary."""
     cid = claim["id"].replace("cand-", "conn-obs-")
     uri = f"<https://understood.app/ontology/connection/{cid}>"
-    a = claim["domain_a"]
-    b = claim["domain_b"]
+    domains = [
+        claim.get("domain_a", "").strip(),
+        claim.get("domain_b", "").strip(),
+    ]
+    domain_lines = "\n".join(
+        f"  understood:inLifeDomain <https://understood.app/ontology/domain/{domain}> ;"
+        for domain in domains
+        if domain
+    )
     label = claim["plain"].rstrip(".").replace('"', "'")
     accepted_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     return f"""{uri} a understood:Connection ;
   understood:label "{label}" ;
   understood:connectionType "{claim['connection_type']}" ;
-  understood:inLifeDomain <https://understood.app/ontology/domain/{a}> ;
-  understood:inLifeDomain <https://understood.app/ontology/domain/{b}> ;
+{domain_lines + chr(10) if domain_lines else ""}\
   understood:strength "{claim['strength']:.2f}"^^xsd:decimal ;
   understood:frequency "{frequency}" ;
   understood:evidenceNote "{claim['evidence']}" ;
@@ -147,15 +148,24 @@ def claim_to_turtle(claim, frequency="usually"):
 
 
 def validate_turtle(turtle_text):
-    """Malformed Turtle never reaches the accepted graph."""
-    if not HAVE_RDFLIB:
-        return False, "rdflib not installed - run: pip install rdflib"
+    """Malformed or SHACL-invalid Turtle never reaches the accepted graph."""
+    if not VALIDATOR.exists():
+        return False, "SHACL validator script was not found."
+    completed = subprocess.run(
+        [sys.executable, str(VALIDATOR), "--json"],
+        input=PREFIXES + turtle_text,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
     try:
-        graph = Graph()
-        graph.parse(data=PREFIXES + turtle_text, format="turtle")
-        return True, f"valid ({len(graph)} triples)"
-    except Exception as exc:
-        return False, str(exc)
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return False, completed.stderr.strip() or "SHACL validation failed."
+    if completed.returncode == 0 and payload.get("conforms"):
+        return True, "SHACL validation passed"
+    messages = payload.get("messages") or ["claim does not match the accepted connection grammar"]
+    return False, "; ".join(messages)
 
 
 def append_to_graph(turtle_text):

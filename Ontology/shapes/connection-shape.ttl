@@ -1,0 +1,69 @@
+@prefix understood: <https://understood.app/ontology#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+understood:ConnectionShape
+  a sh:NodeShape ;
+  sh:targetClass understood:Connection ;
+  sh:property [
+    sh:path understood:label ;
+    sh:minCount 1 ;
+    sh:maxCount 1 ;
+    sh:datatype xsd:string ;
+    sh:message "missing label" ;
+  ] ;
+  sh:property [
+    sh:path understood:connectionType ;
+    sh:minCount 1 ;
+    sh:maxCount 1 ;
+    sh:datatype xsd:string ;
+    sh:message "missing or invalid connection type" ;
+  ] ;
+  sh:property [
+    sh:path understood:inLifeDomain ;
+    sh:minCount 1 ;
+    sh:nodeKind sh:IRI ;
+    sh:in (
+      <https://understood.app/ontology/domain/affect>
+      <https://understood.app/ontology/domain/ambition>
+      <https://understood.app/ontology/domain/belief>
+      <https://understood.app/ontology/domain/entertainment>
+      <https://understood.app/ontology/domain/exercise>
+      <https://understood.app/ontology/domain/health>
+      <https://understood.app/ontology/domain/insight>
+      <https://understood.app/ontology/domain/learning>
+      <https://understood.app/ontology/domain/nutrition>
+      <https://understood.app/ontology/domain/purchase>
+      <https://understood.app/ontology/domain/sleep>
+      <https://understood.app/ontology/domain/social>
+      <https://understood.app/ontology/domain/work>
+    ) ;
+    sh:message "unknown or missing life domain" ;
+  ] ;
+  sh:property [
+    sh:path understood:strength ;
+    sh:maxCount 1 ;
+    sh:datatype xsd:decimal ;
+    sh:minInclusive 0 ;
+    sh:maxInclusive 1 ;
+    sh:message "strength must be a decimal between 0 and 1" ;
+  ] ;
+  sh:property [
+    sh:path understood:frequency ;
+    sh:maxCount 1 ;
+    sh:datatype xsd:string ;
+    sh:in ("usually" "sometimes") ;
+    sh:message "frequency must be usually or sometimes" ;
+  ] ;
+  sh:property [
+    sh:path understood:acceptedAt ;
+    sh:maxCount 1 ;
+    sh:datatype xsd:dateTime ;
+    sh:message "acceptedAt must be a date-time" ;
+  ] ;
+  sh:property [
+    sh:path understood:evidenceNote ;
+    sh:maxCount 1 ;
+    sh:datatype xsd:string ;
+    sh:message "evidence note must be text" ;
+  ] .

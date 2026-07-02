@@ -85,11 +85,13 @@ public struct FusekiAcceptedGraphPoster: AcceptedGraphPosting {
     }
 }
 
-public struct PythonRdflibTurtleParser: TurtleParsing {
+public struct PythonSHACLConnectionValidator: TurtleParsing {
     private let pythonPath: String?
+    private let scriptPath: String?
 
-    public init(pythonPath: String? = nil) {
+    public init(pythonPath: String? = nil, scriptPath: String? = nil) {
         self.pythonPath = pythonPath
+        self.scriptPath = scriptPath
     }
 
     public func parse(_ turtle: String) throws {
@@ -100,22 +102,21 @@ public struct PythonRdflibTurtleParser: TurtleParsing {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: try resolvePython())
-        process.arguments = [
-            "-c",
-            "import rdflib, sys; g=rdflib.Graph(); g.parse(sys.argv[1], format='turtle'); print(len(g))",
-            tempURL.path
-        ]
+        process.arguments = [try resolveScript(), "--json", tempURL.path]
         let errorPipe = Pipe()
+        let outputPipe = Pipe()
         process.standardError = errorPipe
-        process.standardOutput = Pipe()
+        process.standardOutput = outputPipe
         try process.run()
         process.waitUntilExit()
 
         guard process.terminationStatus == 0 else {
-            let data = errorPipe.fileHandleForReading.readDataToEndOfFile()
-            let message = String(data: data, encoding: .utf8)?
+            let output = outputPipe.fileHandleForReading.readDataToEndOfFile()
+            let error = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            let message = Self.plainMessage(from: output)
+                ?? String(data: error, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            throw TurtleParseError(message?.isEmpty == false ? message! : "Turtle did not parse.")
+            throw TurtleParseError(message?.isEmpty == false ? message! : "Claim does not match the accepted connection grammar.")
         }
     }
 
@@ -141,6 +142,36 @@ public struct PythonRdflibTurtleParser: TurtleParsing {
         }
         throw TurtleParseError("Python 3 was not found for Turtle validation.")
     }
+
+    private func resolveScript() throws -> String {
+        if let scriptPath, FileManager.default.isExecutableFile(atPath: scriptPath) {
+            return scriptPath
+        }
+        if let envPath = ProcessInfo.processInfo.environment["HARNESS_SHACL_VALIDATOR"],
+           FileManager.default.isExecutableFile(atPath: envPath) {
+            return envPath
+        }
+        let candidates = [
+            FileManager.default.currentDirectoryPath + "/scripts/validate_connection_turtle.py",
+            FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Developer/GitHub/Harness/scripts/validate_connection_turtle.py").path
+        ]
+        if let path = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
+            return path
+        }
+        throw TurtleParseError("SHACL validator script was not found.")
+    }
+
+    private static func plainMessage(from data: Data) -> String? {
+        guard
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let messages = object["messages"] as? [String],
+            !messages.isEmpty
+        else {
+            return nil
+        }
+        return messages.joined(separator: "; ")
+    }
 }
 
 public final class ReviewQueueStore: Sendable {
@@ -152,7 +183,7 @@ public final class ReviewQueueStore: Sendable {
     public init(
         ontologyRoot: URL = ReviewQueueStore.defaultOntologyRoot(),
         ledger: RunLedgerStore,
-        turtleParser: any TurtleParsing = PythonRdflibTurtleParser(),
+        turtleParser: any TurtleParsing = PythonSHACLConnectionValidator(),
         acceptedGraphPoster: any AcceptedGraphPosting = FusekiAcceptedGraphPoster()
     ) {
         self.ontologyRoot = ontologyRoot
@@ -286,20 +317,24 @@ public final class ReviewQueueStore: Sendable {
         let label = escapeLiteral(String(claim.plain.trimmingCharacters(in: CharacterSet(charactersIn: "."))))
         let evidence = escapeLiteral(claim.evidence)
         let timestamp = ISO8601DateFormatter.reviewQueue.string(from: acceptedAt)
-        return """
-
-        <https://understood.app/ontology/connection/\(cid)> a understood:Connection ;
-          understood:label "\(label)" ;
-          understood:connectionType "\(escapeLiteral(claim.connectionType))" ;
-          understood:inLifeDomain <https://understood.app/ontology/domain/\(claim.domainA)> ;
-          understood:inLifeDomain <https://understood.app/ontology/domain/\(claim.domainB)> ;
-          understood:strength "\(String(format: "%.2f", claim.strength))"^^xsd:decimal ;
-          understood:frequency "\(frequency)" ;
-          understood:evidenceNote "\(evidence)" ;
-          understood:acceptedAt "\(timestamp)"^^xsd:dateTime ;
-          .
-
-        """
+        let domainTriples = [claim.domainA, claim.domainB]
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .map { "  understood:inLifeDomain <https://understood.app/ontology/domain/\($0)> ;" }
+        let lines = [
+            "",
+            "<https://understood.app/ontology/connection/\(cid)> a understood:Connection ;",
+            "  understood:label \"\(label)\" ;",
+            "  understood:connectionType \"\(escapeLiteral(claim.connectionType))\" ;",
+        ] + domainTriples + [
+            "  understood:strength \"\(String(format: "%.2f", claim.strength))\"^^xsd:decimal ;",
+            "  understood:frequency \"\(frequency)\" ;",
+            "  understood:evidenceNote \"\(evidence)\" ;",
+            "  understood:acceptedAt \"\(timestamp)\"^^xsd:dateTime ;",
+            "  .",
+            "",
+            ""
+        ]
+        return lines.joined(separator: "\n")
     }
 
     private static func escapeLiteral(_ text: String) -> String {
@@ -346,6 +381,21 @@ private struct ReviewQueueClaim: Codable, Sendable, Equatable {
         case connectionType = "connection_type"
         case frequency
         case blockedReason = "blocked_reason"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        status = try container.decode(String.self, forKey: .status)
+        plain = try container.decode(String.self, forKey: .plain)
+        evidence = try container.decode(String.self, forKey: .evidence)
+        source = try container.decode(String.self, forKey: .source)
+        domainA = try container.decodeIfPresent(String.self, forKey: .domainA) ?? ""
+        domainB = try container.decodeIfPresent(String.self, forKey: .domainB) ?? ""
+        strength = try container.decode(Double.self, forKey: .strength)
+        connectionType = try container.decode(String.self, forKey: .connectionType)
+        frequency = try container.decodeIfPresent(String.self, forKey: .frequency)
+        blockedReason = try container.decodeIfPresent(String.self, forKey: .blockedReason)
     }
 
     var memoryCandidate: MemoryCandidate {
