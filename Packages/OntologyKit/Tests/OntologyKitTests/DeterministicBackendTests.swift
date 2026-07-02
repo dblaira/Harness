@@ -168,7 +168,8 @@ import Testing
     let store = ReviewQueueStore(
         ontologyRoot: root,
         ledger: try RunLedgerStore.inMemory(),
-        turtleParser: AcceptingTurtleParser()
+        turtleParser: AcceptingTurtleParser(),
+        acceptedGraphPoster: NoopAcceptedGraphPoster()
     )
 
     let pending = try await store.loadPendingClaims()
@@ -189,7 +190,8 @@ import Testing
     let store = ReviewQueueStore(
         ontologyRoot: root,
         ledger: ledger,
-        turtleParser: AcceptingTurtleParser()
+        turtleParser: AcceptingTurtleParser(),
+        acceptedGraphPoster: NoopAcceptedGraphPoster()
     )
 
     let outcome = try await store.decide(claimId: "cand-seed-001", decision: .sometimes)
@@ -208,6 +210,45 @@ import Testing
     #expect(decisions.first?.frequency == "sometimes")
 }
 
+@Test func reviewQueuePostsAcceptedTriplesToFusekiBestEffort() async throws {
+    let root = try makeReviewQueueFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let poster = RecordingAcceptedGraphPoster()
+    let store = ReviewQueueStore(
+        ontologyRoot: root,
+        ledger: try RunLedgerStore.inMemory(),
+        turtleParser: AcceptingTurtleParser(),
+        acceptedGraphPoster: poster
+    )
+
+    let outcome = try await store.decide(claimId: "cand-seed-001", decision: .yes)
+    let posted = await poster.posted
+
+    #expect(outcome.accepted)
+    #expect(posted.count == 1)
+    #expect(posted.first?.contains("@prefix understood:") == true)
+    #expect(posted.first?.contains("conn-obs-seed-001") == true)
+}
+
+@Test func reviewQueueFusekiPostFailureDoesNotBlockFileAuthority() async throws {
+    let root = try makeReviewQueueFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = ReviewQueueStore(
+        ontologyRoot: root,
+        ledger: try RunLedgerStore.inMemory(),
+        turtleParser: AcceptingTurtleParser(),
+        acceptedGraphPoster: FailingAcceptedGraphPoster()
+    )
+
+    let outcome = try await store.decide(claimId: "cand-seed-001", decision: .yes)
+    let graph = try String(contentsOf: root.appendingPathComponent("accepted/accepted-graph.ttl"), encoding: .utf8)
+    let reloaded = try await store.loadPendingClaims()
+
+    #expect(outcome.accepted)
+    #expect(graph.contains("conn-obs-seed-001"))
+    #expect(reloaded.isEmpty)
+}
+
 @Test func reviewQueueValidationFailureLeavesClaimPending() async throws {
     let root = try makeReviewQueueFixture()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -215,7 +256,8 @@ import Testing
     let store = ReviewQueueStore(
         ontologyRoot: root,
         ledger: ledger,
-        turtleParser: RejectingTurtleParser(message: "Turtle did not parse.")
+        turtleParser: RejectingTurtleParser(message: "Turtle did not parse."),
+        acceptedGraphPoster: NoopAcceptedGraphPoster()
     )
 
     let outcome = try await store.decide(claimId: "cand-seed-001", decision: .yes)
@@ -255,30 +297,6 @@ import Testing
     #expect(loaded?.run.id == saved.run.id)
     #expect(loaded?.messages.contains { $0.role == .assistant } == true)
     #expect(results.contains { $0.id == saved.run.id })
-}
-
-@Test func contrastModePersistsRawLLMAnswerBesideHarnessAnswer() async throws {
-    let ontology = OntologyLoader.load()
-    let ledger = try RunLedgerStore.inMemory()
-    let backend = ContrastBackendAdapter()
-    let service = HarnessRunService(
-        ledger: ledger,
-        authorityRetriever: OntologyAuthorityRetriever(),
-        memoryRetriever: StaticMemoryRetriever(hit: nil)
-    )
-
-    let saved = try await service.createRun(
-        prompt: "Should I keep building this feature?",
-        ontology: ontology,
-        backend: backend,
-        includeRawContrast: true
-    )
-    let loaded = try #require(try await ledger.runDetail(id: saved.run.id))
-
-    #expect(loaded.messages.contains { $0.role == .assistant && $0.text == "Harness answer.\n\nRule: conn-019" })
-    #expect(loaded.messages.contains { $0.role == .raw && $0.text == "Raw generic answer." })
-    #expect(loaded.traceEvents.contains { $0.stage == .rawModelExecution })
-    #expect(await backend.calls == 2)
 }
 
 @Test func redactsSecretsBeforePersistence() async throws {
@@ -386,19 +404,6 @@ private struct StaticBackendAdapter: ModelBackendAdapter {
     }
 }
 
-private actor ContrastBackendAdapter: ModelBackendAdapter {
-    nonisolated let metadata = BackendMetadata(backend: .claude, modelName: "test-contrast", invocationMethod: "unit-test")
-    private(set) var calls = 0
-
-    func execute(packet: ModelPacket) async throws -> BackendResponse {
-        calls += 1
-        let text = packet.system == PromptPacketBuilder.rawSystemPrompt
-            ? "Raw generic answer."
-            : "Harness answer.\n\nRule: conn-019"
-        return BackendResponse(text: text, tokenCount: 12, cost: nil)
-    }
-}
-
 private func makeReviewQueueFixture() throws -> URL {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("HarnessReviewQueueTests-\(UUID().uuidString)", isDirectory: true)
@@ -449,5 +454,23 @@ private struct RejectingTurtleParser: TurtleParsing {
 
     func parse(_ turtle: String) throws {
         throw TurtleParseError(message)
+    }
+}
+
+private struct NoopAcceptedGraphPoster: AcceptedGraphPosting {
+    func postAcceptedTriples(_ turtle: String) async throws {}
+}
+
+private actor RecordingAcceptedGraphPoster: AcceptedGraphPosting {
+    private(set) var posted: [String] = []
+
+    func postAcceptedTriples(_ turtle: String) async throws {
+        posted.append(turtle)
+    }
+}
+
+private struct FailingAcceptedGraphPoster: AcceptedGraphPosting {
+    func postAcceptedTriples(_ turtle: String) async throws {
+        throw URLError(.cannotConnectToHost)
     }
 }

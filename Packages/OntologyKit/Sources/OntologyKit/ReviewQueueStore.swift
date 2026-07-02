@@ -43,6 +43,48 @@ public protocol TurtleParsing: Sendable {
     func parse(_ turtle: String) throws
 }
 
+public protocol AcceptedGraphPosting: Sendable {
+    func postAcceptedTriples(_ turtle: String) async throws
+}
+
+public struct FusekiAcceptedGraphPoster: AcceptedGraphPosting {
+    private let dataEndpoint: URL
+    private let graphIRI: String
+
+    public init(
+        dataEndpoint: URL? = nil,
+        graphIRI: String = "https://understood.app/graph/accepted"
+    ) {
+        if let dataEndpoint {
+            self.dataEndpoint = dataEndpoint
+        } else if let env = ProcessInfo.processInfo.environment["HARNESS_FUSEKI_DATA_ENDPOINT"],
+                  let url = URL(string: env) {
+            self.dataEndpoint = url
+        } else {
+            self.dataEndpoint = URL(string: "http://127.0.0.1:3030/understood/data")!
+        }
+        self.graphIRI = graphIRI
+    }
+
+    public func postAcceptedTriples(_ turtle: String) async throws {
+        var components = URLComponents(url: dataEndpoint, resolvingAgainstBaseURL: false)!
+        var queryItems = components.queryItems ?? []
+        queryItems.append(URLQueryItem(name: "graph", value: graphIRI))
+        components.queryItems = queryItems
+        guard let url = components.url else {
+            throw URLError(.badURL)
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("text/turtle", forHTTPHeaderField: "Content-Type")
+        let (_, response) = try await URLSession.shared.upload(for: request, from: Data(turtle.utf8))
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw URLError(.badServerResponse)
+        }
+    }
+}
+
 public struct PythonRdflibTurtleParser: TurtleParsing {
     private let pythonPath: String?
 
@@ -105,15 +147,18 @@ public final class ReviewQueueStore: Sendable {
     private let ontologyRoot: URL
     private let ledger: RunLedgerStore
     private let turtleParser: any TurtleParsing
+    private let acceptedGraphPoster: any AcceptedGraphPosting
 
     public init(
         ontologyRoot: URL = ReviewQueueStore.defaultOntologyRoot(),
         ledger: RunLedgerStore,
-        turtleParser: any TurtleParsing = PythonRdflibTurtleParser()
+        turtleParser: any TurtleParsing = PythonRdflibTurtleParser(),
+        acceptedGraphPoster: any AcceptedGraphPosting = FusekiAcceptedGraphPoster()
     ) {
         self.ontologyRoot = ontologyRoot
         self.ledger = ledger
         self.turtleParser = turtleParser
+        self.acceptedGraphPoster = acceptedGraphPoster
     }
 
     public static func defaultOntologyRoot() -> URL {
@@ -147,6 +192,7 @@ public final class ReviewQueueStore: Sendable {
             }
 
             try appendToAcceptedGraph(turtle)
+            await postAcceptedTriplesBestEffort(Self.prefixes + turtle)
             claim.status = "accepted"
             claim.frequency = frequency
             claim.blockedReason = nil
@@ -206,6 +252,14 @@ public final class ReviewQueueStore: Sendable {
         try handle.seekToEnd()
         if let data = turtle.data(using: .utf8) {
             try handle.write(contentsOf: data)
+        }
+    }
+
+    private func postAcceptedTriplesBestEffort(_ turtle: String) async {
+        do {
+            try await acceptedGraphPoster.postAcceptedTriples(turtle)
+        } catch {
+            fputs("Harness Fuseki accepted graph sync skipped: \(error.localizedDescription)\n", stderr)
         }
     }
 
