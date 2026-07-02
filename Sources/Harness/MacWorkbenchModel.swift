@@ -90,6 +90,21 @@ final class MacWorkbenchModel: ObservableObject {
         }
     }
 
+    func scanForNewPatterns() {
+        status = "Scanning Supabase evidence"
+        Task {
+            do {
+                let output = try await Task.detached(priority: .userInitiated) {
+                    try Self.runEvidenceIngest()
+                }.value
+                reviewQueueCandidates = try await reviewQueue.loadPendingClaims()
+                status = output
+            } catch {
+                status = "Evidence scan failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
     func decideReviewQueueCandidate(_ candidate: MemoryCandidate, decision: ReviewQueueDecision) {
         let reviewQueue = reviewQueue
         Task {
@@ -246,6 +261,58 @@ final class MacWorkbenchModel: ObservableObject {
         case .accepted:
             return "Candidate review cannot accept graph authority."
         }
+    }
+
+    nonisolated private static func runEvidenceIngest() throws -> String {
+        let scriptURL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Developer/GitHub/Harness/scripts/ingest_evidence.py")
+        guard FileManager.default.fileExists(atPath: scriptURL.path) else {
+            throw NSError(
+                domain: "HarnessEvidenceIngest",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "scripts/ingest_evidence.py was not found."]
+            )
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        process.arguments = [scriptURL.path]
+        process.currentDirectoryURL = scriptURL.deletingLastPathComponent().deletingLastPathComponent()
+
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = errorPipe
+
+        try process.run()
+        process.waitUntilExit()
+
+        let output = String(
+            data: outputPipe.fileHandleForReading.readDataToEndOfFile(),
+            encoding: .utf8
+        ) ?? ""
+        let error = String(
+            data: errorPipe.fileHandleForReading.readDataToEndOfFile(),
+            encoding: .utf8
+        ) ?? ""
+
+        guard process.terminationStatus == 0 else {
+            let message = error.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? output
+                : error
+            throw NSError(
+                domain: "HarnessEvidenceIngest",
+                code: Int(process.terminationStatus),
+                userInfo: [NSLocalizedDescriptionKey: message.trimmingCharacters(in: .whitespacesAndNewlines)]
+            )
+        }
+
+        if let data = output.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let count = json["candidates_created"] as? Int {
+            return "Evidence scan complete: \(count) new candidate\(count == 1 ? "" : "s")."
+        }
+        return "Evidence scan complete."
     }
 }
 

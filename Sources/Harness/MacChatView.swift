@@ -437,9 +437,24 @@ struct MacChatView: View {
 
     private var candidatePanel: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("\(model.reviewQueueCandidates.count) remaining")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(Theme.macInk.opacity(0.58))
+            HStack(spacing: 8) {
+                Text("\(model.reviewQueueCandidates.count) remaining")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.macInk.opacity(0.58))
+                Spacer()
+                Button {
+                    model.scanForNewPatterns()
+                } label: {
+                    Label("Scan for new patterns", systemImage: "waveform.path.ecg")
+                        .font(.caption.weight(.semibold))
+                        .labelStyle(.titleAndIcon)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        .background(Theme.macEntry.opacity(0.28), in: RoundedRectangle(cornerRadius: 7))
+                        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.macHair, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+            }
 
             if model.reviewQueueCandidates.isEmpty {
                 emptyInspectorText("No pending claims.")
