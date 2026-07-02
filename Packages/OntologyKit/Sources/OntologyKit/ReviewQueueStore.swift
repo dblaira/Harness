@@ -232,16 +232,16 @@ public final class ReviewQueueStore: Sendable {
             claim.blockedReason = nil
             queue[index] = claim
             try saveQueue(queue)
-            try await ledger.recordReviewQueueDecision(
-                ReviewQueueDecisionRecord(
-                    claimId: claim.id,
-                    decision: "accepted",
-                    frequency: frequency,
-                    claim: claim.plain,
-                    evidenceNote: claim.evidence,
-                    sourceRef: claim.source
-                )
+            let record = ReviewQueueDecisionRecord(
+                claimId: claim.id,
+                decision: "accepted",
+                frequency: frequency,
+                claim: claim.plain,
+                evidenceNote: claim.evidence,
+                sourceRef: claim.source
             )
+            try await ledger.recordReviewQueueDecision(record)
+            mirrorDecisionToCanonicalLedger(record)
             return ReviewQueueOutcome(claimId: claimId, accepted: true)
         }
 
@@ -249,16 +249,16 @@ public final class ReviewQueueStore: Sendable {
         claim.blockedReason = nil
         queue[index] = claim
         try saveQueue(queue)
-        try await ledger.recordReviewQueueDecision(
-            ReviewQueueDecisionRecord(
-                claimId: claim.id,
-                decision: "rejected",
-                frequency: nil,
-                claim: claim.plain,
-                evidenceNote: claim.evidence,
-                sourceRef: claim.source
-            )
+        let record = ReviewQueueDecisionRecord(
+            claimId: claim.id,
+            decision: "rejected",
+            frequency: nil,
+            claim: claim.plain,
+            evidenceNote: claim.evidence,
+            sourceRef: claim.source
         )
+        try await ledger.recordReviewQueueDecision(record)
+        mirrorDecisionToCanonicalLedger(record)
         return ReviewQueueOutcome(claimId: claimId, accepted: false)
     }
 
@@ -286,6 +286,39 @@ public final class ReviewQueueStore: Sendable {
         try handle.seekToEnd()
         if let data = turtle.data(using: .utf8) {
             try handle.write(contentsOf: data)
+        }
+    }
+
+    private func mirrorDecisionToCanonicalLedger(_ record: ReviewQueueDecisionRecord) {
+        let ledgerURL = acceptedURL.appendingPathComponent("decision-ledger.json")
+        do {
+            var entries: [[String: Any]] = []
+            if FileManager.default.fileExists(atPath: ledgerURL.path) {
+                let data = try Data(contentsOf: ledgerURL)
+                guard let existing = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+                    fputs("Canonical ledger mirror skipped: decision-ledger.json is not a JSON array; not overwriting.\n", stderr)
+                    return
+                }
+                entries = existing
+            }
+            var entry: [String: Any] = [
+                "ledger_id": String(record.id.prefix(8)),
+                "app_ledger_id": record.id,
+                "claim_id": record.claimId,
+                "decision": record.decision,
+                "claim": record.claim,
+                "at": ISO8601DateFormatter.reviewQueue.string(from: record.createdAt),
+                "source": "harness-app",
+            ]
+            if let frequency = record.frequency {
+                entry["frequency"] = frequency
+            }
+            entries.append(entry)
+            let data = try JSONSerialization.data(withJSONObject: entries, options: [.prettyPrinted, .sortedKeys])
+            try FileManager.default.createDirectory(at: acceptedURL, withIntermediateDirectories: true)
+            try data.write(to: ledgerURL, options: .atomic)
+        } catch {
+            fputs("Canonical ledger mirror skipped: \(error.localizedDescription)\n", stderr)
         }
     }
 

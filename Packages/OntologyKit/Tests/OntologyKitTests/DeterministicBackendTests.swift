@@ -210,6 +210,33 @@ import Testing
     #expect(decisions.first?.frequency == "sometimes")
 }
 
+@Test func reviewQueueMirrorsDecisionsToCanonicalJSONLedger() async throws {
+    let root = try makeReviewQueueFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let ledger = try RunLedgerStore.inMemory()
+    let store = ReviewQueueStore(
+        ontologyRoot: root,
+        ledger: ledger,
+        turtleParser: AcceptingTurtleParser(),
+        acceptedGraphPoster: NoopAcceptedGraphPoster()
+    )
+
+    _ = try await store.decide(claimId: "cand-seed-001", decision: .sometimes)
+
+    let ledgerURL = root.appendingPathComponent("accepted/decision-ledger.json")
+    let data = try Data(contentsOf: ledgerURL)
+    let entries = try #require(try JSONSerialization.jsonObject(with: data) as? [[String: Any]])
+    let entry = try #require(entries.first)
+    let appRecord = try #require(try await ledger.listReviewQueueDecisions().first)
+
+    #expect(entries.count == 1)
+    #expect(entry["claim_id"] as? String == "cand-seed-001")
+    #expect(entry["decision"] as? String == "accepted")
+    #expect(entry["frequency"] as? String == "sometimes")
+    #expect(entry["source"] as? String == "harness-app")
+    #expect(entry["app_ledger_id"] as? String == appRecord.id)
+}
+
 @Test func reviewQueueCanAcceptClaimWithoutStrength() async throws {
     let root = try makeReviewQueueFixture()
     defer { try? FileManager.default.removeItem(at: root) }
