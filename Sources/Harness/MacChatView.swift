@@ -436,15 +436,66 @@ struct MacChatView: View {
     }
 
     private var candidatePanel: some View {
-        Group {
-            if let detail = model.selectedDetail, !detail.memoryCandidates.isEmpty {
-                ForEach(detail.memoryCandidates) { candidate in
-                    candidateBlock(candidate, validations: detail.validationResults.filter { $0.candidateId == candidate.id })
-                }
+        VStack(alignment: .leading, spacing: 10) {
+            Text("\(model.reviewQueueCandidates.count) remaining")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Theme.macInk.opacity(0.58))
+
+            if model.reviewQueueCandidates.isEmpty {
+                emptyInspectorText("No pending claims.")
             } else {
-                emptyInspectorText("No candidate memory for this run.")
+                ForEach(model.reviewQueueCandidates) { candidate in
+                    reviewQueueCard(candidate)
+                }
             }
         }
+    }
+
+    private func reviewQueueCard(_ candidate: MemoryCandidate) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(candidate.plainEnglish)
+                .font(.system(size: 12).weight(.semibold))
+                .foregroundStyle(Theme.macInk)
+                .lineLimit(3)
+
+            Text(candidate.evidenceNote)
+                .font(.caption)
+                .foregroundStyle(Theme.macInk.opacity(0.62))
+                .lineLimit(3)
+
+            if let validationResult = candidate.validationResult,
+               validationResult.hasPrefix("Blocked:") {
+                Text(validationResult)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.macRed)
+                    .lineLimit(3)
+            }
+
+            HStack(spacing: 8) {
+                reviewQueueButton("Yes", candidate: candidate, decision: .yes)
+                reviewQueueButton("Sometimes", candidate: candidate, decision: .sometimes)
+                reviewQueueButton("No", candidate: candidate, decision: .no)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.macEntry.opacity(0.24), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
+    }
+
+    private func reviewQueueButton(_ title: String, candidate: MemoryCandidate, decision: ReviewQueueDecision) -> some View {
+        Button {
+            model.decideReviewQueueCandidate(candidate, decision: decision)
+        } label: {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Theme.macInk.opacity(0.78))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+                .background(Theme.macEntry.opacity(0.28), in: RoundedRectangle(cornerRadius: 7))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.macHair, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
     }
 
     private func emptyInspectorText(_ text: String) -> some View {

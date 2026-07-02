@@ -249,6 +249,11 @@ public struct MemoryCandidate: Identifiable, Codable, Sendable, Equatable {
     public let status: CandidateState
     public let validationResult: String?
     public let createdAt: Date
+    public let plainEnglish: String
+    public let evidenceNote: String
+    public let sourceRef: String
+    public let strength: Double?
+    public let frequency: String?
 
     public init(
         id: String = UUID().uuidString,
@@ -259,7 +264,12 @@ public struct MemoryCandidate: Identifiable, Codable, Sendable, Equatable {
         proposedGraph: String?,
         status: CandidateState,
         validationResult: String?,
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        plainEnglish: String? = nil,
+        evidenceNote: String? = nil,
+        sourceRef: String? = nil,
+        strength: Double? = nil,
+        frequency: String? = nil
     ) {
         self.id = id
         self.runId = runId
@@ -269,6 +279,42 @@ public struct MemoryCandidate: Identifiable, Codable, Sendable, Equatable {
         self.proposedGraph = proposedGraph
         self.status = status
         self.validationResult = validationResult
+        self.createdAt = createdAt
+        self.plainEnglish = plainEnglish ?? proposedClaim
+        self.evidenceNote = evidenceNote ?? evidenceText
+        self.sourceRef = sourceRef ?? runId
+        self.strength = strength
+        self.frequency = frequency
+    }
+}
+
+public struct ReviewQueueDecisionRecord: Identifiable, Codable, Sendable, Equatable {
+    public let id: String
+    public let claimId: String
+    public let decision: String
+    public let frequency: String?
+    public let claim: String
+    public let evidenceNote: String
+    public let sourceRef: String
+    public let createdAt: Date
+
+    public init(
+        id: String = UUID().uuidString,
+        claimId: String,
+        decision: String,
+        frequency: String?,
+        claim: String,
+        evidenceNote: String,
+        sourceRef: String,
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.claimId = claimId
+        self.decision = decision
+        self.frequency = frequency
+        self.claim = claim
+        self.evidenceNote = evidenceNote
+        self.sourceRef = sourceRef
         self.createdAt = createdAt
     }
 }

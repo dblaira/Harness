@@ -14,10 +14,12 @@ final class MacWorkbenchModel: ObservableObject {
     @Published var status = "Ledger ready"
     @Published var searchText = ""
     @Published var selectedTool: WorkbenchTool?
+    @Published var reviewQueueCandidates: [MemoryCandidate] = []
     let toolGroups = WorkbenchToolGroup.defaults
 
     private let ledger: RunLedgerStore
     private let service: HarnessRunService
+    private let reviewQueue: ReviewQueueStore
 
     init() {
         let store: RunLedgerStore
@@ -28,7 +30,11 @@ final class MacWorkbenchModel: ObservableObject {
         }
         self.ledger = store
         self.service = HarnessRunService(ledger: store)
-        Task { await refreshRuns() }
+        self.reviewQueue = ReviewQueueStore(ledger: store)
+        Task {
+            await refreshRuns()
+            await refreshReviewQueue()
+        }
     }
 
     func updateOntology(_ ontology: Ontology) {
@@ -72,6 +78,38 @@ final class MacWorkbenchModel: ObservableObject {
     func selectTool(_ tool: WorkbenchTool) {
         selectedTool = tool
         status = "\(tool.title): \(tool.state.rawValue)"
+    }
+
+    func refreshReviewQueue() async {
+        do {
+            reviewQueueCandidates = try await reviewQueue.loadPendingClaims()
+            status = "\(reviewQueueCandidates.count) candidate\(reviewQueueCandidates.count == 1 ? "" : "s") waiting"
+        } catch {
+            reviewQueueCandidates = []
+            status = "Candidates unavailable: \(error.localizedDescription)"
+        }
+    }
+
+    func decideReviewQueueCandidate(_ candidate: MemoryCandidate, decision: ReviewQueueDecision) {
+        let reviewQueue = reviewQueue
+        Task {
+            do {
+                let outcome = try await reviewQueue.decide(claimId: candidate.id, decision: decision)
+                let pending = try await reviewQueue.loadPendingClaims()
+                await MainActor.run {
+                    self.reviewQueueCandidates = pending
+                    if let blocked = outcome.blockedReason {
+                        self.status = blocked
+                    } else {
+                        self.status = "\(pending.count) candidate\(pending.count == 1 ? "" : "s") waiting"
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    self.status = error.localizedDescription
+                }
+            }
+        }
     }
 
     func markCandidate(_ candidate: MemoryCandidate, as status: CandidateState) {
