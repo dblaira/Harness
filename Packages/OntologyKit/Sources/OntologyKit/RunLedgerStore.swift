@@ -116,6 +116,23 @@ public actor RunLedgerStore {
         }
     }
 
+    public func recordReviewQueueDecision(_ decision: ReviewQueueDecisionRecord) throws {
+        try dbQueue.write { db in
+            try insertReviewQueueDecision(decision, db: db)
+        }
+    }
+
+    public func listReviewQueueDecisions(limit: Int = 100) throws -> [ReviewQueueDecisionRecord] {
+        try dbQueue.read { db in
+            try Row.fetchAll(
+                db,
+                sql: "SELECT * FROM review_queue_decisions ORDER BY createdAt DESC LIMIT ?",
+                arguments: [limit]
+            )
+            .map(mapReviewQueueDecision)
+        }
+    }
+
     private static var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
         migrator.registerMigration("v1") { db in
@@ -185,6 +202,11 @@ public actor RunLedgerStore {
                 t.column("status", .text).notNull()
                 t.column("validationResult", .text)
                 t.column("createdAt", .double).notNull()
+                t.column("plainEnglish", .text)
+                t.column("evidenceNote", .text)
+                t.column("sourceRef", .text)
+                t.column("strength", .double)
+                t.column("frequency", .text)
             }
             try db.create(table: "validation_results", ifNotExists: true) { t in
                 t.column("id", .text).primaryKey()
@@ -193,6 +215,28 @@ public actor RunLedgerStore {
                 t.column("kind", .text).notNull()
                 t.column("passed", .boolean).notNull()
                 t.column("detail", .text).notNull()
+                t.column("createdAt", .double).notNull()
+            }
+        }
+        migrator.registerMigration("v2-review-queue") { db in
+            let memoryCandidateColumns = try db.columns(in: "memory_candidates").map(\.name)
+            if !memoryCandidateColumns.contains("plainEnglish") {
+                try db.alter(table: "memory_candidates") { t in
+                    t.add(column: "plainEnglish", .text)
+                    t.add(column: "evidenceNote", .text)
+                    t.add(column: "sourceRef", .text)
+                    t.add(column: "strength", .double)
+                    t.add(column: "frequency", .text)
+                }
+            }
+            try db.create(table: "review_queue_decisions", ifNotExists: true) { t in
+                t.column("id", .text).primaryKey()
+                t.column("claimId", .text).notNull().indexed()
+                t.column("decision", .text).notNull()
+                t.column("frequency", .text)
+                t.column("claim", .text).notNull()
+                t.column("evidenceNote", .text).notNull()
+                t.column("sourceRef", .text).notNull()
                 t.column("createdAt", .double).notNull()
             }
         }
@@ -272,8 +316,8 @@ private func insertMemoryCandidate(_ candidate: MemoryCandidate, db: Database) t
     try db.execute(
         sql: """
         INSERT OR REPLACE INTO memory_candidates
-        (id, runId, sourceRunIds, evidenceText, proposedClaim, proposedGraph, status, validationResult, createdAt)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, runId, sourceRunIds, evidenceText, proposedClaim, proposedGraph, status, validationResult, createdAt, plainEnglish, evidenceNote, sourceRef, strength, frequency)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         arguments: [
             candidate.id,
@@ -284,7 +328,32 @@ private func insertMemoryCandidate(_ candidate: MemoryCandidate, db: Database) t
             candidate.proposedGraph,
             candidate.status.rawValue,
             candidate.validationResult,
-            candidate.createdAt.timeIntervalSince1970
+            candidate.createdAt.timeIntervalSince1970,
+            candidate.plainEnglish,
+            candidate.evidenceNote,
+            candidate.sourceRef,
+            candidate.strength,
+            candidate.frequency
+        ]
+    )
+}
+
+private func insertReviewQueueDecision(_ decision: ReviewQueueDecisionRecord, db: Database) throws {
+    try db.execute(
+        sql: """
+        INSERT OR REPLACE INTO review_queue_decisions
+        (id, claimId, decision, frequency, claim, evidenceNote, sourceRef, createdAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        arguments: [
+            decision.id,
+            decision.claimId,
+            decision.decision,
+            decision.frequency,
+            decision.claim,
+            decision.evidenceNote,
+            decision.sourceRef,
+            decision.createdAt.timeIntervalSince1970
         ]
     )
 }
@@ -385,6 +454,24 @@ private func mapMemoryCandidate(_ row: Row) -> MemoryCandidate {
         proposedGraph: row["proposedGraph"],
         status: CandidateState(rawValue: row["status"]) ?? .suggested,
         validationResult: row["validationResult"],
+        createdAt: Date(timeIntervalSince1970: row["createdAt"]),
+        plainEnglish: row["plainEnglish"],
+        evidenceNote: row["evidenceNote"],
+        sourceRef: row["sourceRef"],
+        strength: row["strength"],
+        frequency: row["frequency"]
+    )
+}
+
+private func mapReviewQueueDecision(_ row: Row) -> ReviewQueueDecisionRecord {
+    ReviewQueueDecisionRecord(
+        id: row["id"],
+        claimId: row["claimId"],
+        decision: row["decision"],
+        frequency: row["frequency"],
+        claim: row["claim"],
+        evidenceNote: row["evidenceNote"],
+        sourceRef: row["sourceRef"],
         createdAt: Date(timeIntervalSince1970: row["createdAt"])
     )
 }

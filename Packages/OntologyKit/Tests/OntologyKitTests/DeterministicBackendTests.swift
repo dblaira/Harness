@@ -162,6 +162,75 @@ import Testing
     #expect(loadedCandidate.status != .accepted)
 }
 
+@Test func reviewQueueLoadsPendingClaimsFromCanonicalCandidatesFolder() async throws {
+    let root = try makeReviewQueueFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = ReviewQueueStore(
+        ontologyRoot: root,
+        ledger: try RunLedgerStore.inMemory(),
+        turtleParser: AcceptingTurtleParser()
+    )
+
+    let pending = try await store.loadPendingClaims()
+    let claim = try #require(pending.first)
+
+    #expect(pending.count == 1)
+    #expect(claim.id == "cand-seed-001")
+    #expect(claim.plainEnglish == "Focus and Sleep rise together in the same week.")
+    #expect(claim.evidenceNote == "Seed evidence for app review.")
+    #expect(claim.sourceRef == "Harness Review Queue Seed, 2026-07-01")
+    #expect(claim.strength == 0.42)
+}
+
+@Test func reviewQueueSometimesAppendsAcceptedConnectionAndLogsDecision() async throws {
+    let root = try makeReviewQueueFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let ledger = try RunLedgerStore.inMemory()
+    let store = ReviewQueueStore(
+        ontologyRoot: root,
+        ledger: ledger,
+        turtleParser: AcceptingTurtleParser()
+    )
+
+    let outcome = try await store.decide(claimId: "cand-seed-001", decision: .sometimes)
+    let graph = try String(contentsOf: root.appendingPathComponent("accepted/accepted-graph.ttl"), encoding: .utf8)
+    let reloaded = try await store.loadPendingClaims()
+    let decisions = try await ledger.listReviewQueueDecisions()
+
+    #expect(outcome.accepted)
+    #expect(graph.contains("conn-obs-seed-001"))
+    #expect(graph.contains(#"understood:frequency "sometimes""#))
+    #expect(graph.contains(#"understood:evidenceNote "Seed evidence for app review.""#))
+    #expect(reloaded.isEmpty)
+    #expect(decisions.count == 1)
+    #expect(decisions.first?.claimId == "cand-seed-001")
+    #expect(decisions.first?.decision == "accepted")
+    #expect(decisions.first?.frequency == "sometimes")
+}
+
+@Test func reviewQueueValidationFailureLeavesClaimPending() async throws {
+    let root = try makeReviewQueueFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let ledger = try RunLedgerStore.inMemory()
+    let store = ReviewQueueStore(
+        ontologyRoot: root,
+        ledger: ledger,
+        turtleParser: RejectingTurtleParser(message: "Turtle did not parse.")
+    )
+
+    let outcome = try await store.decide(claimId: "cand-seed-001", decision: .yes)
+    let graph = try String(contentsOf: root.appendingPathComponent("accepted/accepted-graph.ttl"), encoding: .utf8)
+    let reloaded = try await store.loadPendingClaims()
+    let decisions = try await ledger.listReviewQueueDecisions()
+
+    #expect(!outcome.accepted)
+    #expect(outcome.blockedReason == "Blocked: Turtle did not parse.")
+    #expect(!graph.contains("conn-obs-seed-001"))
+    #expect(reloaded.count == 1)
+    #expect(reloaded.first?.validationResult == "Blocked: Turtle did not parse.")
+    #expect(decisions.isEmpty)
+}
+
 @Test func runLedgerPersistsSearchableRunDetail() async throws {
     let ontology = OntologyLoader.load()
     let ledger = try RunLedgerStore.inMemory()
@@ -327,5 +396,58 @@ private actor ContrastBackendAdapter: ModelBackendAdapter {
             ? "Raw generic answer."
             : "Harness answer.\n\nRule: conn-019"
         return BackendResponse(text: text, tokenCount: 12, cost: nil)
+    }
+}
+
+private func makeReviewQueueFixture() throws -> URL {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("HarnessReviewQueueTests-\(UUID().uuidString)", isDirectory: true)
+    let accepted = root.appendingPathComponent("accepted", isDirectory: true)
+    let candidates = root.appendingPathComponent("candidates", isDirectory: true)
+    try FileManager.default.createDirectory(at: accepted, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: candidates, withIntermediateDirectories: true)
+    try """
+    @prefix understood: <https://understood.app/ontology#> .
+    @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+    """.write(to: accepted.appendingPathComponent("accepted-graph.ttl"), atomically: true, encoding: .utf8)
+    try """
+    [
+      {
+        "id": "cand-seed-001",
+        "status": "pending",
+        "plain": "Focus and Sleep rise together in the same week.",
+        "evidence": "Seed evidence for app review.",
+        "source": "Harness Review Queue Seed, 2026-07-01",
+        "domain_a": "focus",
+        "domain_b": "sleep",
+        "strength": 0.42,
+        "connection_type": "observed_correlation"
+      },
+      {
+        "id": "cand-old-001",
+        "status": "accepted",
+        "plain": "Old accepted claim.",
+        "evidence": "Old evidence.",
+        "source": "Old source.",
+        "domain_a": "old",
+        "domain_b": "claim",
+        "strength": 0.1,
+        "connection_type": "observed_correlation"
+      }
+    ]
+    """.write(to: candidates.appendingPathComponent("queue.json"), atomically: true, encoding: .utf8)
+    return root
+}
+
+private struct AcceptingTurtleParser: TurtleParsing {
+    func parse(_ turtle: String) throws {}
+}
+
+private struct RejectingTurtleParser: TurtleParsing {
+    let message: String
+
+    func parse(_ turtle: String) throws {
+        throw TurtleParseError(message)
     }
 }
