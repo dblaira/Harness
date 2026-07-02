@@ -58,22 +58,28 @@ def load_local_env() -> None:
 
 
 def supabase_headers() -> dict[str, str]:
-    key = os.environ.get("SUPABASE_PUBLISHABLE_KEY", "")
-    if not key:
-        raise SystemExit("SUPABASE_PUBLISHABLE_KEY is missing from local .env.")
-    bearer = (
-        os.environ.get("SUPABASE_ACCESS_TOKEN")
-        or os.environ.get("SUPABASE_JWT")
-        or key
-    )
+    secret_key = os.environ.get("SUPABASE_SECRET_KEY", "")
+    if not secret_key:
+        raise SystemExit("SUPABASE_SECRET_KEY is missing from local .env.")
     return {
-        "apikey": key,
-        "Authorization": f"Bearer {bearer}",
+        "apikey": secret_key,
         "Accept": "application/json",
     }
 
 
+def assert_read_only_request(method: str, query: dict[str, str]) -> None:
+    if method.upper() != "GET":
+        raise SystemExit("Refusing to run: Supabase ingest is read-only.")
+    select = query.get("select")
+    if not select:
+        raise SystemExit("Refusing to run: Supabase ingest only permits select reads.")
+    forbidden = {"insert", "update", "upsert", "delete", "rpc"}
+    if any(key.lower() in forbidden for key in query):
+        raise SystemExit("Refusing to run: Supabase ingest only permits select reads.")
+
+
 def rest_get(path: str, query: dict[str, str], offset: int, limit: int) -> list[dict]:
+    assert_read_only_request("GET", query)
     base_url = os.environ.get("SUPABASE_URL") or SUPABASE_PROJECT_URL
     query_string = urllib.parse.urlencode(query, safe="(),.*")
     url = f"{base_url.rstrip('/')}/rest/v1/{path}?{query_string}"
