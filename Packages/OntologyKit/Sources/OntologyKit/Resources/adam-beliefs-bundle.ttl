@@ -1,3 +1,5 @@
+# GENERATED COPY — edit canonical version in Ontology/accepted/ instead.
+
 @prefix understood: <https://understood.app/ontology#> .
 @prefix recall:     <https://understood.app/ontology/project-recall#> .
 @prefix owl:        <http://www.w3.org/2002/07/owl#> .

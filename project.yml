@@ -21,6 +21,10 @@ targets:
       - Sources/Harness
       - path: Sources/Harness/Fonts
         buildPhase: resources
+    preBuildScripts:
+      - name: Sync Canonical Ontology
+        script: scripts/sync-ontology.sh
+        basedOnDependencyAnalysis: false
     dependencies:
       - package: OntologyKit
     info:
