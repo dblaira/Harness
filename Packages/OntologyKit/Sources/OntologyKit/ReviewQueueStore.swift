@@ -131,8 +131,11 @@ public struct PythonSHACLConnectionValidator: TurtleParsing {
 
         let candidates = [
             FileManager.default.currentDirectoryPath + "/.venv/bin/python3",
+            FileManager.default.currentDirectoryPath + "/.venv/bin/python",
             FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent("Developer/GitHub/Harness/.venv/bin/python3").path,
+            FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Developer/GitHub/Harness/.venv/bin/python").path,
             "/opt/homebrew/bin/python3",
             "/usr/local/bin/python3",
             "/usr/bin/python3"
@@ -320,13 +323,16 @@ public final class ReviewQueueStore: Sendable {
         let domainTriples = [claim.domainA, claim.domainB]
             .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .map { "  understood:inLifeDomain <https://understood.app/ontology/domain/\($0)> ;" }
-        let lines = [
+        var lines = [
             "",
             "<https://understood.app/ontology/connection/\(cid)> a understood:Connection ;",
             "  understood:label \"\(label)\" ;",
             "  understood:connectionType \"\(escapeLiteral(claim.connectionType))\" ;",
-        ] + domainTriples + [
-            "  understood:strength \"\(String(format: "%.2f", claim.strength))\"^^xsd:decimal ;",
+        ] + domainTriples
+        if let strength = claim.strength {
+            lines.append("  understood:strength \"\(String(format: "%.2f", strength))\"^^xsd:decimal ;")
+        }
+        lines += [
             "  understood:frequency \"\(frequency)\" ;",
             "  understood:evidenceNote \"\(evidence)\" ;",
             "  understood:acceptedAt \"\(timestamp)\"^^xsd:dateTime ;",
@@ -364,7 +370,7 @@ private struct ReviewQueueClaim: Codable, Sendable, Equatable {
     var source: String
     var domainA: String
     var domainB: String
-    var strength: Double
+    var strength: Double?
     var connectionType: String
     var frequency: String?
     var blockedReason: String?
@@ -392,10 +398,25 @@ private struct ReviewQueueClaim: Codable, Sendable, Equatable {
         source = try container.decode(String.self, forKey: .source)
         domainA = try container.decodeIfPresent(String.self, forKey: .domainA) ?? ""
         domainB = try container.decodeIfPresent(String.self, forKey: .domainB) ?? ""
-        strength = try container.decode(Double.self, forKey: .strength)
+        strength = try container.decodeIfPresent(Double.self, forKey: .strength)
         connectionType = try container.decode(String.self, forKey: .connectionType)
         frequency = try container.decodeIfPresent(String.self, forKey: .frequency)
         blockedReason = try container.decodeIfPresent(String.self, forKey: .blockedReason)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(status, forKey: .status)
+        try container.encode(plain, forKey: .plain)
+        try container.encode(evidence, forKey: .evidence)
+        try container.encode(source, forKey: .source)
+        try container.encode(domainA, forKey: .domainA)
+        try container.encode(domainB, forKey: .domainB)
+        try container.encodeIfPresent(strength, forKey: .strength)
+        try container.encode(connectionType, forKey: .connectionType)
+        try container.encodeIfPresent(frequency, forKey: .frequency)
+        try container.encodeIfPresent(blockedReason, forKey: .blockedReason)
     }
 
     var memoryCandidate: MemoryCandidate {

@@ -134,11 +134,14 @@ def claim_to_turtle(claim, frequency="usually"):
     )
     label = claim["plain"].rstrip(".").replace('"', "'")
     accepted_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    strength_line = ""
+    if claim.get("strength") is not None:
+        strength_line = f'  understood:strength "{claim["strength"]:.2f}"^^xsd:decimal ;\n'
     return f"""{uri} a understood:Connection ;
   understood:label "{label}" ;
   understood:connectionType "{claim['connection_type']}" ;
 {domain_lines + chr(10) if domain_lines else ""}\
-  understood:strength "{claim['strength']:.2f}"^^xsd:decimal ;
+{strength_line}\
   understood:frequency "{frequency}" ;
   understood:evidenceNote "{claim['evidence']}" ;
   understood:acceptedAt "{accepted_at}"^^xsd:dateTime ;

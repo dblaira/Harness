@@ -42,6 +42,10 @@ understood:Connection a owl:Class ;
   rdfs:label "Connection"@en ;
   rdfs:comment "Durable belief/principle captured as entry_type=connection."@en .
 
+understood:UnpromptedSignal a owl:Class ;
+  rdfs:label "Unprompted Signal"@en ;
+  rdfs:comment "Occurrences of the Clear Sign defined in cand-clear-sign-2026-q3."@en .
+
 understood:Entry a owl:Class ;
   rdfs:label "Entry"@en ;
   rdfs:comment "Journal capture row that may support axioms."@en .
@@ -87,6 +91,10 @@ understood:status a owl:DatatypeProperty ; rdfs:range xsd:string .
 understood:scope a owl:DatatypeProperty ; rdfs:range xsd:string .
 understood:provenanceSource a owl:DatatypeProperty ; rdfs:range xsd:string .
 understood:connectionType a owl:DatatypeProperty ; rdfs:domain understood:Connection ; rdfs:range xsd:string .
+understood:occurredAt a owl:DatatypeProperty ; rdfs:domain understood:UnpromptedSignal ; rdfs:range xsd:dateTime .
+understood:whoSaid a owl:DatatypeProperty ; rdfs:domain understood:UnpromptedSignal ; rdfs:range xsd:string .
+understood:whatTheySaid a owl:DatatypeProperty ; rdfs:domain understood:UnpromptedSignal ; rdfs:range xsd:string .
+understood:loggedBy a owl:DatatypeProperty ; rdfs:domain understood:UnpromptedSignal ; rdfs:range xsd:string .
 
 # vocabularyVersion: adam-beliefs-connections-v1
 

@@ -210,6 +210,41 @@ import Testing
     #expect(decisions.first?.frequency == "sometimes")
 }
 
+@Test func reviewQueueCanAcceptClaimWithoutStrength() async throws {
+    let root = try makeReviewQueueFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let queueURL = root.appendingPathComponent("candidates/queue.json")
+    try """
+    [
+      {
+        "id": "cand-clear-sign-2026-q3",
+        "status": "pending",
+        "plain": "Clear Sign for this season.",
+        "evidence": "Defined before the fact.",
+        "source": "Adam Pattern Step 7",
+        "domain_a": "ambition",
+        "domain_b": "social",
+        "connection_type": "clear_sign_commitment"
+      }
+    ]
+    """.write(to: queueURL, atomically: true, encoding: .utf8)
+    let store = ReviewQueueStore(
+        ontologyRoot: root,
+        ledger: try RunLedgerStore.inMemory(),
+        turtleParser: AcceptingTurtleParser(),
+        acceptedGraphPoster: NoopAcceptedGraphPoster()
+    )
+
+    let pending = try await store.loadPendingClaims()
+    let outcome = try await store.decide(claimId: "cand-clear-sign-2026-q3", decision: .yes)
+    let graph = try String(contentsOf: root.appendingPathComponent("accepted/accepted-graph.ttl"), encoding: .utf8)
+
+    #expect(pending.first?.strength == nil)
+    #expect(outcome.accepted)
+    #expect(graph.contains("conn-obs-clear-sign-2026-q3"))
+    #expect(!graph.contains("understood:strength"))
+}
+
 @Test func reviewQueuePostsAcceptedTriplesToFusekiBestEffort() async throws {
     let root = try makeReviewQueueFixture()
     defer { try? FileManager.default.removeItem(at: root) }
