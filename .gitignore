@@ -13,6 +13,9 @@ Harness.xcodeproj/
 
 # Local recovered duplicates and machine-only scratch files
 .local-artifacts/
+accepted-graph.ttl
+decision-ledger.json
+queue.json
 
 # macOS
 .DS_Store
