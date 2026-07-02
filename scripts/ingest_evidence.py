@@ -27,6 +27,7 @@ MAX_NEW_CANDIDATES = 10
 OBSERVED = "observed_correlation"
 WEAKENING = "weakening_review"
 DEFAULT_START_DATE = dt.date(2024, 6, 1)
+ACCEPTED_CORRELATION_METRIC = "pearson_weekly_counts"
 
 
 def default_ontology_root() -> Path:
@@ -229,7 +230,7 @@ def accepted_pairs(accepted_graph: Path) -> dict[tuple[str, str], float | None]:
     return pairs
 
 
-def co_rise_stats(
+def accepted_correlation_stats(
     counts: dict[str, dict[tuple[int, int], int]],
     domain_a: str,
     domain_b: str,
@@ -257,7 +258,7 @@ def co_rise_stats(
         "range_end": (week_start(tracked_weeks[-1]) + dt.timedelta(days=6)).isoformat(),
         "mean_a": mean_a,
         "mean_b": mean_b,
-        "method": "pearson_weekly_counts",
+        "method": ACCEPTED_CORRELATION_METRIC,
     }
 
 
@@ -268,7 +269,7 @@ def plain_pair(domain_a: str, domain_b: str) -> str:
 def evidence_note(stats: dict) -> str:
     percent = round(stats["percent"] * 100)
     return (
-        f"Correlated {percent}% across {stats['active_weeks']} tracked weeks "
+        f"Pearson correlation {percent}% across {stats['active_weeks']} tracked weeks "
         f"({stats['range_start']} to {stats['range_end']})."
     )
 
@@ -355,7 +356,7 @@ def run(
     all_stats: dict[tuple[str, str], dict] = {}
     for index, domain_a in enumerate(domains):
         for domain_b in domains[index + 1 :]:
-            stats = co_rise_stats(counts, domain_a, domain_b, trusted_weeks)
+            stats = accepted_correlation_stats(counts, domain_a, domain_b, trusted_weeks)
             if stats:
                 all_stats[(domain_a, domain_b)] = stats
 
@@ -388,6 +389,7 @@ def run(
                 "domain_b": domain_b,
                 "previous_strength": old_strength,
                 "current_strength": round(stats["percent"], 4),
+                "metric": ACCEPTED_CORRELATION_METRIC,
                 "active_weeks": stats["active_weeks"],
                 "range_start": stats["range_start"],
                 "range_end": stats["range_end"],
