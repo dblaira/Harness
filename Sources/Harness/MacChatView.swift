@@ -308,12 +308,13 @@ struct MacChatView: View {
     }
 
     private var composer: some View {
-        HStack(spacing: 10) {
+        HStack(alignment: .bottom, spacing: 10) {
             TextField("", text: $model.draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .foregroundStyle(Theme.macInk)
                 .font(.system(size: 13))
-                .lineLimit(1...5)
+                .lineLimit(1...12)
+                .fixedSize(horizontal: false, vertical: true)
                 .overlay(alignment: .leading) {
                     if model.draft.isEmpty {
                         Text("Type a message...")
