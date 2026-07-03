@@ -12,6 +12,8 @@ final class MacWorkbenchModel: ObservableObject {
     }
     @Published var backend: Backend = .codex
     @Published var apiKey = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] ?? ""
+    @Published var firecrawlAPIKey = ""
+    @Published var hasFirecrawlAPIKey = false
     @Published var isRunning = false
     @Published var status = "Ledger ready"
     @Published var searchText = ""
@@ -37,6 +39,7 @@ final class MacWorkbenchModel: ObservableObject {
         self.ledger = store
         self.service = HarnessRunService(ledger: store)
         self.reviewQueue = ReviewQueueStore(ledger: store)
+        self.hasFirecrawlAPIKey = Self.loadFirecrawlAPIKey() != nil
         Task {
             await refreshRuns()
             await refreshReviewQueue()
@@ -98,7 +101,7 @@ final class MacWorkbenchModel: ObservableObject {
     }
 
     func refreshConnectors() {
-        connectors = HarnessConnectorRegistry.defaultConnectors()
+        connectors = HarnessConnectorRegistry.defaultConnectors(environment: Self.connectorEnvironment())
         capabilities = HarnessCapabilityRegistry.defaultCapabilities()
         refreshRoutePlan()
     }
@@ -154,6 +157,7 @@ final class MacWorkbenchModel: ObservableObject {
         status = "Running approved step"
         let connectors = connectors
         let capabilities = capabilities
+        let firecrawlKey = Self.loadFirecrawlAPIKey()
         Task {
             do {
                 let result = try await HarnessRouteExecutor(
@@ -161,7 +165,22 @@ final class MacWorkbenchModel: ObservableObject {
                     capabilities: capabilities
                 ).executeApproved(
                     plan,
-                    approvedStepIDs: [step.id]
+                    approvedStepIDs: [step.id],
+                    externalResearchDelegate: { request in
+                        if request.adapter.skillName == "firecrawl-deep-research" {
+                            guard let firecrawlKey else { throw FirecrawlClient.FirecrawlError.noKey }
+                            let response = try await FirecrawlClient(apiKey: firecrawlKey)
+                                .search(query: request.userPrompt, limit: 5)
+                            let mcpConfig = HarnessMCPServerConfiguration.firecrawlLocal(apiKey: firecrawlKey)
+                            return response.formattedBrief(for: request.userPrompt)
+                                + "\n\nMCP runtime: \(mcpConfig.redactedSummary)"
+                        }
+                        return try await AgentRunner().run(
+                            backend: .codex,
+                            system: request.adapter.systemInstruction,
+                            user: request.routePrompt
+                        )
+                    }
                 )
                 await MainActor.run {
                     self.refreshConnectors()
@@ -174,6 +193,35 @@ final class MacWorkbenchModel: ObservableObject {
                     self.status = "Approved step failed: \(error.localizedDescription)"
                 }
             }
+        }
+    }
+
+    func saveFirecrawlAPIKey() {
+        let trimmed = firecrawlAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            status = "Paste a Firecrawl API key first."
+            return
+        }
+        do {
+            try APIKeyStore.saveFirecrawlKey(trimmed)
+            firecrawlAPIKey = ""
+            hasFirecrawlAPIKey = true
+            refreshConnectors()
+            status = "Firecrawl key saved in Keychain."
+        } catch {
+            status = "Firecrawl key save failed: \(error.localizedDescription)"
+        }
+    }
+
+    func deleteFirecrawlAPIKey() {
+        do {
+            try APIKeyStore.deleteFirecrawlKey()
+            firecrawlAPIKey = ""
+            hasFirecrawlAPIKey = Self.loadFirecrawlAPIKey() != nil
+            refreshConnectors()
+            status = "Firecrawl key removed."
+        } catch {
+            status = "Firecrawl key removal failed: \(error.localizedDescription)"
         }
     }
 
@@ -422,6 +470,23 @@ final class MacWorkbenchModel: ObservableObject {
             return "Evidence scan complete: \(count) new candidate\(count == 1 ? "" : "s")."
         }
         return "Evidence scan complete."
+    }
+
+    private static func connectorEnvironment() -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        if loadFirecrawlAPIKey() != nil {
+            environment["FIRECRAWL_API_KEY"] = "[configured]"
+        }
+        return environment
+    }
+
+    private static func loadFirecrawlAPIKey() -> String? {
+        let environmentKey = ProcessInfo.processInfo.environment["FIRECRAWL_API_KEY"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let environmentKey, !environmentKey.isEmpty {
+            return environmentKey
+        }
+        return APIKeyStore.loadFirecrawlKey()
     }
 }
 

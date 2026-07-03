@@ -866,6 +866,76 @@ import Testing
     #expect(HarnessConnectorRegistry.memorySources(from: connectors).contains { $0.kind == .github })
 }
 
+@Test func connectorRegistrySurfacesFirecrawlMCPAsApprovalGatedToolBridge() throws {
+    let home = FileManager.default.temporaryDirectory
+        .appendingPathComponent("HarnessFirecrawlConnectorTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+
+    let missing = HarnessConnectorRegistry.defaultConnectors(homeDirectory: home, environment: [:])
+    let configured = HarnessConnectorRegistry.defaultConnectors(
+        homeDirectory: home,
+        environment: ["FIRECRAWL_API_KEY": "fc-test-key"]
+    )
+
+    let missingConnector = try #require(missing.first { $0.title == "Firecrawl MCP" })
+    let configuredConnector = try #require(configured.first { $0.title == "Firecrawl MCP" })
+
+    #expect(missingConnector.kind == .mcpServer)
+    #expect(missingConnector.role == .toolBridge)
+    #expect(missingConnector.state == .needsPermission)
+    #expect(configuredConnector.state == .available)
+    #expect(configuredConnector.permission.contains("approval"))
+    #expect(!configuredConnector.summary.contains("fc-test-key"))
+}
+
+@Test func firecrawlMCPConfigUsesRuntimeEnvironmentWithoutLeakingSecrets() throws {
+    let config = HarnessMCPServerConfiguration.firecrawlLocal(apiKey: "fc-secret-value")
+
+    #expect(config.name == "firecrawl")
+    #expect(config.transport == .localProcess)
+    #expect(config.command == "npx")
+    #expect(config.arguments == ["-y", "firecrawl-mcp"])
+    #expect(config.environment["FIRECRAWL_API_KEY"] == "fc-secret-value")
+    #expect(config.redactedSummary.contains("firecrawl-mcp"))
+    #expect(config.redactedSummary.contains("FIRECRAWL_API_KEY"))
+    #expect(!config.redactedSummary.contains("fc-secret-value"))
+}
+
+@Test func firecrawlClientBuildsSearchRequestAndParsesSources() throws {
+    let request = try FirecrawlClient.searchRequest(
+        apiKey: "fc-test-key",
+        query: "Harness product research",
+        limit: 3,
+        baseURL: URL(string: "https://api.firecrawl.dev/v2")!
+    )
+    let body = try #require(try JSONSerialization.jsonObject(with: request.httpBody ?? Data()) as? [String: Any])
+    let fixture = """
+    {
+      "success": true,
+      "creditsUsed": 2,
+      "data": [
+        {
+          "title": "Harness Example",
+          "url": "https://example.com/harness",
+          "description": "A useful source.",
+          "markdown": "# Harness\\nUseful evidence."
+        }
+      ]
+    }
+    """.data(using: .utf8)!
+
+    let parsed = try FirecrawlClient.parseSearchResponse(fixture)
+
+    #expect(request.url?.absoluteString == "https://api.firecrawl.dev/v2/search")
+    #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer fc-test-key")
+    #expect(request.timeoutInterval == 30)
+    #expect(body["query"] as? String == "Harness product research")
+    #expect(body["limit"] as? Int == 3)
+    #expect(parsed.creditsUsed == 2)
+    #expect(parsed.results.first?.url == "https://example.com/harness")
+    #expect(parsed.formattedBrief(for: "Harness product research").contains("https://example.com/harness"))
+}
+
 @Test func capabilityRegistryDiscoversAgentSkillsAndPluginManifests() throws {
     let home = FileManager.default.temporaryDirectory
         .appendingPathComponent("HarnessCapabilityRegistryTests-\(UUID().uuidString)", isDirectory: true)

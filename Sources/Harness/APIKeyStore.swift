@@ -7,6 +7,7 @@ enum APIKeyStore {
     private static let claudeAccount = "anthropic_api_key"
     private static let openAIAccount = "openai_api_key"
     private static let xAIAccount = "xai_api_key"
+    private static let firecrawlAccount = "firecrawl_api_key"
 
     static func loadKey(for backend: Backend) -> String? {
         guard let account = account(for: backend) else { return nil }
@@ -33,6 +34,18 @@ enum APIKeyStore {
 
     static func deleteClaudeKey() throws {
         try deleteKey(account: claudeAccount)
+    }
+
+    static func loadFirecrawlKey() -> String? {
+        loadKey(account: firecrawlAccount)
+    }
+
+    static func saveFirecrawlKey(_ key: String) throws {
+        try saveKey(key, account: firecrawlAccount)
+    }
+
+    static func deleteFirecrawlKey() throws {
+        try deleteKey(account: firecrawlAccount)
     }
 
     private static func loadKey(account: String) -> String? {

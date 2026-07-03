@@ -80,6 +80,7 @@ public enum HarnessConnectorRegistry {
             + authorityConnectors(homeDirectory: homeDirectory)
             + skillConnectors(homeDirectory: homeDirectory)
             + pluginConnectors(homeDirectory: homeDirectory)
+            + mcpConnectors(environment: environment)
             + agentBridgeConnectors(homeDirectory: homeDirectory)
         )
     }
@@ -231,6 +232,22 @@ public enum HarnessConnectorRegistry {
         ]
     }
 
+    private static func mcpConnectors(environment: [String: String]) -> [HarnessConnector] {
+        [
+            HarnessConnector(
+                title: "Firecrawl MCP",
+                kind: .mcpServer,
+                role: .toolBridge,
+                sourceSystem: "Firecrawl",
+                root: URL(string: "https://mcp.firecrawl.dev/v2/mcp")!,
+                state: hasFirecrawlKey(environment) ? .available : .needsPermission,
+                summary: "Approved external web research: search, scrape, crawl, map, and extract through Firecrawl MCP.",
+                permission: "Requires Firecrawl API key and per-step approval before external web calls.",
+                provenance: "Key is stored outside the connector catalog; MCP launch config is generated at runtime."
+            )
+        ]
+    }
+
     private static func agentBridgeConnectors(homeDirectory: URL) -> [HarnessConnector] {
         [
             HarnessConnector(
@@ -280,6 +297,10 @@ public enum HarnessConnectorRegistry {
             permission: "Read-only discovery by default.",
             provenance: "Plugin install paths and source systems are shown in the connector catalog."
         )
+    }
+
+    private static func hasFirecrawlKey(_ environment: [String: String]) -> Bool {
+        environment["FIRECRAWL_API_KEY"]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
 
     private static func appleNotesState(homeDirectory: URL) -> HarnessConnectorState {

@@ -621,15 +621,89 @@ struct MacChatView: View {
 
     private var connectorPanel: some View {
         VStack(alignment: .leading, spacing: 10) {
+            firecrawlConnectorSettings
+
             ForEach(model.connectors) { connector in
                 inspectorBlock(
                     title: connector.title,
                     subtitle: "\(connector.sourceSystem) - \(connector.role.rawValue) - \(connector.state.rawValue)",
-                    body: "\(connector.summary)\n\nPermission: \(connector.permission)\n\nProvenance: \(connector.provenance)\n\nPath: \(connector.root.path)",
+                    body: "\(connector.summary)\n\nPermission: \(connector.permission)\n\nProvenance: \(connector.provenance)\n\nLocation: \(connectorLocation(connector))",
                     status: connector.kind.rawValue
                 )
             }
         }
+    }
+
+    private var firecrawlConnectorSettings: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "network")
+                    .foregroundStyle(Theme.macInk.opacity(0.58))
+                    .frame(width: 14)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Firecrawl MCP")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.macInk.opacity(0.76))
+                    Text(model.hasFirecrawlAPIKey ? "Key saved in Keychain" : "Paste your Firecrawl API key")
+                        .font(.caption2)
+                        .foregroundStyle(Theme.macInk.opacity(0.44))
+                }
+                Spacer()
+                statusBadge(model.hasFirecrawlAPIKey ? "available" : "needs key")
+            }
+
+            SecureField(model.hasFirecrawlAPIKey ? "Replace saved key..." : "fc-...", text: $model.firecrawlAPIKey)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.macInk)
+                .padding(8)
+                .background(Theme.macEntry.opacity(0.3), in: RoundedRectangle(cornerRadius: 7))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.macHair, lineWidth: 1))
+
+            HStack(spacing: 8) {
+                Button {
+                    model.saveFirecrawlAPIKey()
+                } label: {
+                    Label("Save", systemImage: "key")
+                        .font(.caption.weight(.semibold))
+                        .labelStyle(.titleAndIcon)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        .background(Theme.macEntry.opacity(0.28), in: RoundedRectangle(cornerRadius: 7))
+                        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.macHair, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .disabled(model.firecrawlAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .help("Save Firecrawl key to Keychain")
+
+                Button {
+                    model.deleteFirecrawlAPIKey()
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.macInk.opacity(model.hasFirecrawlAPIKey ? 0.68 : 0.28))
+                        .frame(width: 28, height: 24)
+                        .background(Theme.macEntry.opacity(0.28), in: RoundedRectangle(cornerRadius: 7))
+                        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.macHair, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .disabled(!model.hasFirecrawlAPIKey)
+                .help("Remove Firecrawl key from Keychain")
+            }
+
+            Text("Harness uses this key only for approval-gated Firecrawl research. It is not shown in connector details.")
+                .font(.caption)
+                .foregroundStyle(Theme.macInk.opacity(0.54))
+                .lineLimit(3)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.macEntry.opacity(0.18), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
+    }
+
+    private func connectorLocation(_ connector: HarnessConnector) -> String {
+        connector.root.isFileURL ? connector.root.path : connector.root.absoluteString
     }
 
     private var capabilityPanel: some View {
