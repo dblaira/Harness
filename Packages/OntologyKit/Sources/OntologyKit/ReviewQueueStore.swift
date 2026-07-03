@@ -88,6 +88,7 @@ public struct FusekiAcceptedGraphPoster: AcceptedGraphPosting {
 public struct PythonSHACLConnectionValidator: TurtleParsing {
     private let pythonPath: String?
     private let scriptPath: String?
+    static let validatorSourceFilePath = #filePath
 
     public init(pythonPath: String? = nil, scriptPath: String? = nil) {
         self.pythonPath = pythonPath
@@ -130,20 +131,70 @@ public struct PythonSHACLConnectionValidator: TurtleParsing {
         }
 
         let candidates = [
-            FileManager.default.currentDirectoryPath + "/.venv/bin/python3",
-            FileManager.default.currentDirectoryPath + "/.venv/bin/python",
-            FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Developer/GitHub/Harness/.venv/bin/python3").path,
-            FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Developer/GitHub/Harness/.venv/bin/python").path,
-            "/opt/homebrew/bin/python3",
-            "/usr/local/bin/python3",
-            "/usr/bin/python3"
-        ]
+            Self.repositoryRootCandidates().flatMap {
+                [
+                    $0.appendingPathComponent(".venv/bin/python3").path,
+                    $0.appendingPathComponent(".venv/bin/python").path
+                ]
+            },
+            [
+                "/opt/homebrew/bin/python3",
+                "/usr/local/bin/python3",
+                "/usr/bin/python3"
+            ]
+        ].flatMap { $0 }
         if let path = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
             return path
         }
         throw TurtleParseError("Python 3 was not found for Turtle validation.")
+    }
+
+    static func repositoryRootCandidates(sourceFilePath: String = validatorSourceFilePath) -> [URL] {
+        var candidates: [URL] = []
+        var seen: Set<String> = []
+
+        func append(_ url: URL) {
+            let standardized = url.standardizedFileURL
+            guard !seen.contains(standardized.path) else { return }
+            seen.insert(standardized.path)
+            candidates.append(standardized)
+        }
+
+        func appendHarnessAncestors(from startURL: URL) {
+            var cursor = startURL.standardizedFileURL
+            while cursor.path != "/" {
+                if isHarnessRepositoryRoot(cursor) {
+                    append(cursor)
+                }
+                let parent = cursor.deletingLastPathComponent()
+                if parent.path == cursor.path { break }
+                cursor = parent
+            }
+        }
+
+        let environment = ProcessInfo.processInfo.environment
+        if let repoRoot = environment["HARNESS_REPO_ROOT"], !repoRoot.isEmpty {
+            append(URL(fileURLWithPath: repoRoot, isDirectory: true))
+        }
+        appendHarnessAncestors(from: URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true))
+        append(FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Developer/GitHub/Harness"))
+        if let home = environment["HOME"], !home.isEmpty {
+            append(URL(fileURLWithPath: home, isDirectory: true).appendingPathComponent("Developer/GitHub/Harness"))
+        }
+        if let user = environment["USER"], !user.isEmpty {
+            append(URL(fileURLWithPath: "/Users/\(user)/Developer/GitHub/Harness", isDirectory: true))
+        }
+        appendHarnessAncestors(from: URL(fileURLWithPath: sourceFilePath).deletingLastPathComponent())
+
+        return candidates
+    }
+
+    private static func isHarnessRepositoryRoot(_ url: URL) -> Bool {
+        FileManager.default.fileExists(atPath: url.appendingPathComponent("scripts/validate_connection_turtle.py").path)
+            || (
+                FileManager.default.fileExists(atPath: url.appendingPathComponent("project.yml").path)
+                && FileManager.default.fileExists(atPath: url.appendingPathComponent("Packages/OntologyKit/Package.swift").path)
+            )
     }
 
     private func resolveScript() throws -> String {
@@ -154,11 +205,8 @@ public struct PythonSHACLConnectionValidator: TurtleParsing {
            FileManager.default.isExecutableFile(atPath: envPath) {
             return envPath
         }
-        let candidates = [
-            FileManager.default.currentDirectoryPath + "/scripts/validate_connection_turtle.py",
-            FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Developer/GitHub/Harness/scripts/validate_connection_turtle.py").path
-        ]
+        let candidates = Self.repositoryRootCandidates()
+            .map { $0.appendingPathComponent("scripts/validate_connection_turtle.py").path }
         if let path = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
             return path
         }

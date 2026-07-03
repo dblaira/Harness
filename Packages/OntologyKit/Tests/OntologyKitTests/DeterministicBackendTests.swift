@@ -197,6 +197,51 @@ import Testing
     #expect(claim.strength == 0.42)
 }
 
+@Test func pythonSHACLValidatorDiscoversHarnessRootFromSourcePath() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("HarnessRootDiscovery-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let scripts = root.appendingPathComponent("scripts", isDirectory: true)
+    let sourceDir = root.appendingPathComponent("Packages/OntologyKit/Sources/OntologyKit", isDirectory: true)
+    try FileManager.default.createDirectory(at: scripts, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: sourceDir, withIntermediateDirectories: true)
+    try "".write(to: scripts.appendingPathComponent("validate_connection_turtle.py"), atomically: true, encoding: .utf8)
+
+    let roots = PythonSHACLConnectionValidator.repositoryRootCandidates(
+        sourceFilePath: sourceDir.appendingPathComponent("ReviewQueueStore.swift").path
+    )
+
+    #expect(roots.contains(root.standardizedFileURL))
+}
+
+@Test func pythonSHACLValidatorRunsWithDefaultRepoResolutionWhenAvailable() throws {
+    let roots = PythonSHACLConnectionValidator.repositoryRootCandidates()
+    guard roots.contains(where: {
+        FileManager.default.isExecutableFile(atPath: $0.appendingPathComponent(".venv/bin/python").path)
+            || FileManager.default.isExecutableFile(atPath: $0.appendingPathComponent(".venv/bin/python3").path)
+    }) else {
+        return
+    }
+
+    let turtle = """
+    @prefix understood: <https://understood.app/ontology#> .
+    @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+    <https://understood.app/ontology/connection/conn-test-validator-resolution> a understood:Connection ;
+      understood:label "Validator resolution test" ;
+      understood:connectionType "observed_correlation" ;
+      understood:inLifeDomain <https://understood.app/ontology/domain/sleep> ;
+      understood:inLifeDomain <https://understood.app/ontology/domain/health> ;
+      understood:strength "0.50"^^xsd:decimal ;
+      understood:frequency "sometimes" ;
+      understood:evidenceNote "Local resolver regression test." ;
+      understood:acceptedAt "2026-07-02T00:00:00Z"^^xsd:dateTime ;
+      .
+    """
+
+    try PythonSHACLConnectionValidator().parse(turtle)
+}
+
 @Test func reviewQueueSometimesAppendsAcceptedConnectionAndLogsDecision() async throws {
     let root = try makeReviewQueueFixture()
     defer { try? FileManager.default.removeItem(at: root) }
