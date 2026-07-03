@@ -63,6 +63,8 @@ public enum HarnessResearchSourceScope: String, Codable, Sendable, Equatable, Ca
 public enum HarnessResearchExecutionKind: String, Codable, Sendable, Equatable, CaseIterable {
     case agentSynthesis = "agent-synthesis"
     case firecrawlSearch = "firecrawl-search"
+    case firecrawlScrape = "firecrawl-scrape"
+    case firecrawlMap = "firecrawl-map"
 }
 
 public struct HarnessResearchAdapter: Identifiable, Codable, Sendable, Equatable {
@@ -121,6 +123,28 @@ public struct HarnessResearchAdapter: Identifiable, Codable, Sendable, Equatable
             citationContract: "Return source URLs for every listed result."
         ),
         HarnessResearchAdapter(
+            id: "firecrawl-scrape",
+            skillName: "firecrawl-scrape",
+            displayName: "Firecrawl Scrape",
+            sourceScope: .externalWeb,
+            requiresApproval: true,
+            executionKind: .firecrawlScrape,
+            systemInstruction: "You are the Firecrawl Scrape adapter. Extract clean markdown from one approved URL.",
+            outputContract: "Executive Conclusion, Consequence, Recommendation, single-page evidence, Sources.",
+            citationContract: "Cite the scraped URL and do not generalize beyond the page content."
+        ),
+        HarnessResearchAdapter(
+            id: "firecrawl-map",
+            skillName: "firecrawl-map",
+            displayName: "Firecrawl Map",
+            sourceScope: .externalWeb,
+            requiresApproval: true,
+            executionKind: .firecrawlMap,
+            systemInstruction: "You are the Firecrawl Map adapter. Discover URLs on one approved website before targeted scraping.",
+            outputContract: "Executive Conclusion, Consequence, Recommendation, URL inventory, Sources.",
+            citationContract: "Return discovered URLs and keep them distinct from extracted claims."
+        ),
+        HarnessResearchAdapter(
             id: "firecrawl-deep-research",
             skillName: "firecrawl-deep-research",
             displayName: "Firecrawl Deep Research",
@@ -155,6 +179,15 @@ public struct HarnessResearchAdapter: Identifiable, Codable, Sendable, Equatable
 
     public static func adapter(forSkillName skillName: String) -> HarnessResearchAdapter? {
         all.first { $0.skillName.caseInsensitiveCompare(skillName) == .orderedSame }
+    }
+
+    public var requiresURL: Bool {
+        switch executionKind {
+        case .firecrawlScrape, .firecrawlMap:
+            return true
+        case .agentSynthesis, .firecrawlSearch:
+            return false
+        }
     }
 }
 
@@ -324,7 +357,7 @@ public enum HarnessExecutionRouter {
         if intent.needsResearch {
             steps.append(contentsOf: skillSteps(
                 capabilities,
-                names: ["research-response", "firecrawl-search", "firecrawl-deep-research", "llm-wiki", "arxiv"],
+                names: ["research-response", "firecrawl-search", "firecrawl-scrape", "firecrawl-map", "firecrawl-deep-research", "llm-wiki", "arxiv"],
                 defaultAction: .runSkill,
                 intent: intent,
                 priorityStart: 40
@@ -426,6 +459,9 @@ public enum HarnessExecutionRouter {
                 return nil
             }
             let researchAdapter = HarnessResearchAdapter.adapter(forSkillName: capability.name)
+            if researchAdapter?.requiresURL == true, !intent.hasURL {
+                return nil
+            }
             let externalResearch = researchAdapter?.requiresApproval == true
             let delegation = defaultAction == .delegateAgent
             let guardrail: HarnessRouteGuardrail = (externalResearch || delegation) ? .approvalRequired : guardrail(for: capability)
@@ -1006,7 +1042,7 @@ private struct PromptIntent {
     }
 
     var needsResearch: Bool {
-        containsAny(["research", "deep dive", "look into", "investigate", "market", "marketing", "outline", "synthesis"])
+        containsAny(["research", "deep dive", "look into", "investigate", "market", "marketing", "outline", "synthesis", "scrape", "map ", "website", "url"])
     }
 
     var needsAgentDelegation: Bool {
@@ -1015,6 +1051,10 @@ private struct PromptIntent {
 
     var needsOutputCreation: Bool {
         containsAny(["create", "outline", "pdf", "deck", "diagram", "artifact", "write", "draft", "marketing"])
+    }
+
+    var hasURL: Bool {
+        normalized.contains("http://") || normalized.contains("https://")
     }
 
     func contains(_ token: String) -> Bool {

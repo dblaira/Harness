@@ -936,6 +936,69 @@ import Testing
     #expect(parsed.formattedBrief(for: "Harness product research").contains("https://example.com/harness"))
 }
 
+@Test func firecrawlClientBuildsScrapeRequestAndParsesMarkdownPage() throws {
+    let request = try FirecrawlClient.scrapeRequest(
+        apiKey: "fc-test-key",
+        url: URL(string: "https://example.com/pricing")!,
+        baseURL: URL(string: "https://api.firecrawl.dev/v2")!
+    )
+    let body = try #require(try JSONSerialization.jsonObject(with: request.httpBody ?? Data()) as? [String: Any])
+    let fixture = """
+    {
+      "success": true,
+      "creditsUsed": 1,
+      "data": {
+        "markdown": "# Pricing\\nStarter is free.",
+        "metadata": {
+          "title": "Pricing",
+          "description": "Plan details",
+          "sourceURL": "https://example.com/pricing"
+        }
+      }
+    }
+    """.data(using: .utf8)!
+
+    let parsed = try FirecrawlClient.parseScrapeResponse(fixture)
+
+    #expect(request.url?.absoluteString == "https://api.firecrawl.dev/v2/scrape")
+    #expect(body["url"] as? String == "https://example.com/pricing")
+    #expect(body["formats"] as? [String] == ["markdown"])
+    #expect(body["onlyMainContent"] as? Bool == true)
+    #expect(parsed.url == "https://example.com/pricing")
+    #expect(parsed.title == "Pricing")
+    #expect(parsed.markdown.contains("Starter is free."))
+    #expect(parsed.formattedBrief(for: "Summarize pricing").contains("https://example.com/pricing"))
+}
+
+@Test func firecrawlClientBuildsMapRequestAndParsesLinks() throws {
+    let request = try FirecrawlClient.mapRequest(
+        apiKey: "fc-test-key",
+        url: URL(string: "https://example.com")!,
+        limit: 25,
+        baseURL: URL(string: "https://api.firecrawl.dev/v2")!
+    )
+    let body = try #require(try JSONSerialization.jsonObject(with: request.httpBody ?? Data()) as? [String: Any])
+    let fixture = """
+    {
+      "success": true,
+      "links": [
+        { "url": "https://example.com/pricing", "title": "Pricing" },
+        "https://example.com/docs"
+      ]
+    }
+    """.data(using: .utf8)!
+
+    let parsed = try FirecrawlClient.parseMapResponse(fixture)
+
+    #expect(request.url?.absoluteString == "https://api.firecrawl.dev/v2/map")
+    #expect(body["url"] as? String == "https://example.com")
+    #expect(body["limit"] as? Int == 25)
+    #expect(body["sitemap"] as? String == "include")
+    #expect(body["ignoreQueryParameters"] as? Bool == true)
+    #expect(parsed.links.map(\.url) == ["https://example.com/pricing", "https://example.com/docs"])
+    #expect(parsed.formattedBrief(for: "Map example.com").contains("https://example.com/docs"))
+}
+
 @Test func workbenchLayoutStateSupportsIndependentSidePanelToggles() {
     var layout = HarnessWorkbenchLayoutState()
 
@@ -1510,6 +1573,8 @@ import Testing
 @Test func researchAdapterRegistryExposesConnectorSpecificContracts() throws {
     let local = try #require(HarnessResearchAdapter.adapter(forSkillName: "research-response"))
     let firecrawlSearch = try #require(HarnessResearchAdapter.adapter(forSkillName: "firecrawl-search"))
+    let firecrawlScrape = try #require(HarnessResearchAdapter.adapter(forSkillName: "firecrawl-scrape"))
+    let firecrawlMap = try #require(HarnessResearchAdapter.adapter(forSkillName: "firecrawl-map"))
     let firecrawl = try #require(HarnessResearchAdapter.adapter(forSkillName: "firecrawl-deep-research"))
     let arxiv = try #require(HarnessResearchAdapter.adapter(forSkillName: "arxiv"))
 
@@ -1524,6 +1589,18 @@ import Testing
     #expect(firecrawlSearch.executionKind == .firecrawlSearch)
     #expect(firecrawlSearch.outputContract.contains("source shortlist"))
 
+    #expect(firecrawlScrape.displayName == "Firecrawl Scrape")
+    #expect(firecrawlScrape.sourceScope == .externalWeb)
+    #expect(firecrawlScrape.requiresApproval)
+    #expect(firecrawlScrape.executionKind == .firecrawlScrape)
+    #expect(firecrawlScrape.outputContract.contains("single-page"))
+
+    #expect(firecrawlMap.displayName == "Firecrawl Map")
+    #expect(firecrawlMap.sourceScope == .externalWeb)
+    #expect(firecrawlMap.requiresApproval)
+    #expect(firecrawlMap.executionKind == .firecrawlMap)
+    #expect(firecrawlMap.outputContract.contains("URL inventory"))
+
     #expect(firecrawl.displayName == "Firecrawl Deep Research")
     #expect(firecrawl.sourceScope == .externalWeb)
     #expect(firecrawl.requiresApproval)
@@ -1534,6 +1611,46 @@ import Testing
     #expect(arxiv.sourceScope == .literature)
     #expect(arxiv.requiresApproval)
     #expect(arxiv.systemInstruction.contains("papers"))
+}
+
+@Test func executionRouterPlansUrlSpecificFirecrawlAdaptersOnlyForUrlPrompts() throws {
+    let home = FileManager.default.temporaryDirectory
+        .appendingPathComponent("HarnessFirecrawlURLRouteTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+
+    try writeSkill(
+        home.appendingPathComponent(".agents/skills/firecrawl-search/SKILL.md"),
+        name: "firecrawl-search",
+        description: "Web search with full page content."
+    )
+    try writeSkill(
+        home.appendingPathComponent(".agents/skills/firecrawl-scrape/SKILL.md"),
+        name: "firecrawl-scrape",
+        description: "Extract clean markdown from a known URL."
+    )
+    try writeSkill(
+        home.appendingPathComponent(".agents/skills/firecrawl-map/SKILL.md"),
+        name: "firecrawl-map",
+        description: "Discover URLs on a website."
+    )
+
+    let capabilities = HarnessCapabilityRegistry.defaultCapabilities(homeDirectory: home)
+    let noURLPlan = HarnessExecutionRouter.plan(
+        prompt: "Research Harness competitors.",
+        connectors: HarnessConnectorRegistry.defaultConnectors(homeDirectory: home),
+        capabilities: capabilities
+    )
+    let urlPlan = HarnessExecutionRouter.plan(
+        prompt: "Map and scrape https://example.com for product positioning research.",
+        connectors: HarnessConnectorRegistry.defaultConnectors(homeDirectory: home),
+        capabilities: capabilities
+    )
+
+    #expect(noURLPlan.steps.contains { $0.targetName == "firecrawl-search" })
+    #expect(!noURLPlan.steps.contains { $0.targetName == "firecrawl-scrape" })
+    #expect(!noURLPlan.steps.contains { $0.targetName == "firecrawl-map" })
+    #expect(urlPlan.steps.contains { $0.targetName == "firecrawl-scrape" && $0.guardrail == .approvalRequired })
+    #expect(urlPlan.steps.contains { $0.targetName == "firecrawl-map" && $0.guardrail == .approvalRequired })
 }
 
 @Test func executionRouterPlansFirecrawlSearchBeforeDeepResearchWhenAvailable() throws {

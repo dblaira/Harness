@@ -178,13 +178,34 @@ final class MacWorkbenchModel: ObservableObject {
                     plan,
                     approvedStepIDs: [step.id],
                     externalResearchDelegate: { request in
-                        if request.adapter.executionKind == .firecrawlSearch {
+                        switch request.adapter.executionKind {
+                        case .firecrawlSearch:
                             guard let firecrawlKey else { throw FirecrawlClient.FirecrawlError.noKey }
                             let response = try await FirecrawlClient(apiKey: firecrawlKey)
                                 .search(query: request.userPrompt, limit: 5)
                             let mcpConfig = HarnessMCPServerConfiguration.firecrawlLocal(apiKey: firecrawlKey)
                             return response.formattedBrief(for: request.userPrompt)
                                 + "\n\nMCP runtime: \(mcpConfig.redactedSummary)"
+                        case .firecrawlScrape:
+                            guard let firecrawlKey else { throw FirecrawlClient.FirecrawlError.noKey }
+                            guard let url = FirecrawlClient.firstURL(in: request.userPrompt) else {
+                                throw FirecrawlClient.FirecrawlError.missingURL
+                            }
+                            let response = try await FirecrawlClient(apiKey: firecrawlKey).scrape(url: url)
+                            let mcpConfig = HarnessMCPServerConfiguration.firecrawlLocal(apiKey: firecrawlKey)
+                            return response.formattedBrief(for: request.userPrompt)
+                                + "\n\nMCP runtime: \(mcpConfig.redactedSummary)"
+                        case .firecrawlMap:
+                            guard let firecrawlKey else { throw FirecrawlClient.FirecrawlError.noKey }
+                            guard let url = FirecrawlClient.firstURL(in: request.userPrompt) else {
+                                throw FirecrawlClient.FirecrawlError.missingURL
+                            }
+                            let response = try await FirecrawlClient(apiKey: firecrawlKey).map(url: url, limit: 100)
+                            let mcpConfig = HarnessMCPServerConfiguration.firecrawlLocal(apiKey: firecrawlKey)
+                            return response.formattedBrief(for: request.userPrompt)
+                                + "\n\nMCP runtime: \(mcpConfig.redactedSummary)"
+                        case .agentSynthesis:
+                            break
                         }
                         return try await AgentRunner().run(
                             backend: .codex,
