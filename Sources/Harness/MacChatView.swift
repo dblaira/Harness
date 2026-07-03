@@ -546,34 +546,9 @@ struct MacChatView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
-                    ForEach(compactInspectorTabs) { tab in
+                    ForEach(WorkbenchInspectorTab.compactRailOrder) { tab in
                         compactInspectorCard(tab)
                     }
-
-                    Menu {
-                        ForEach(WorkbenchInspectorTab.allCases.filter { !compactInspectorTabs.contains($0) }) { tab in
-                            Button {
-                                openInspectorDetail(tab)
-                            } label: {
-                                Label(tab.rawValue, systemImage: inspectorIcon(tab))
-                            }
-                        }
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "ellipsis.circle")
-                                .frame(width: 14)
-                            Text("More")
-                                .font(.caption.weight(.semibold))
-                            Spacer()
-                        }
-                        .foregroundStyle(Theme.macInk.opacity(0.62))
-                        .padding(9)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Theme.macEntry.opacity(0.18), in: RoundedRectangle(cornerRadius: 8))
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
-                    }
-                    .menuStyle(.button)
-                    .buttonStyle(.plain)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -586,10 +561,6 @@ struct MacChatView: View {
         .padding(10)
         .frame(width: CGFloat(currentLayout.inspectorWidth), alignment: .leading)
         .background(Theme.macBg)
-    }
-
-    private var compactInspectorTabs: [WorkbenchInspectorTab] {
-        [.authority, .route, .memory, .connectors]
     }
 
     private func openInspectorDetail(_ tab: WorkbenchInspectorTab) {

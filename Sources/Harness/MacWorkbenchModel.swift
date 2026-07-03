@@ -511,6 +511,16 @@ enum WorkbenchInspectorTab: String, CaseIterable, Identifiable {
     case candidates = "Candidates"
 
     var id: String { rawValue }
+
+    static let compactRailOrder: [WorkbenchInspectorTab] = [
+        .authority,
+        .route,
+        .memory,
+        .candidates,
+        .connectors,
+        .skills,
+        .trace
+    ]
 }
 
 struct WorkbenchToolGroup: Identifiable, Equatable {

@@ -57,11 +57,14 @@ targets:
     sources:
       - Tests/HarnessTests
     dependencies:
+      - target: Harness
       - package: OntologyKit
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
         CODE_SIGNING_ALLOWED: NO
+        "TEST_HOST[sdk=macosx*]": "$(BUILT_PRODUCTS_DIR)/Harness.app/Contents/MacOS/Harness"
+        "BUNDLE_LOADER[sdk=macosx*]": "$(TEST_HOST)"
 
 schemes:
   Harness:
