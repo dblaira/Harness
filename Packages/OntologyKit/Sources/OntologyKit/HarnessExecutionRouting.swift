@@ -60,12 +60,18 @@ public enum HarnessResearchSourceScope: String, Codable, Sendable, Equatable, Ca
     }
 }
 
+public enum HarnessResearchExecutionKind: String, Codable, Sendable, Equatable, CaseIterable {
+    case agentSynthesis = "agent-synthesis"
+    case firecrawlSearch = "firecrawl-search"
+}
+
 public struct HarnessResearchAdapter: Identifiable, Codable, Sendable, Equatable {
     public let id: String
     public let skillName: String
     public let displayName: String
     public let sourceScope: HarnessResearchSourceScope
     public let requiresApproval: Bool
+    public let executionKind: HarnessResearchExecutionKind
     public let systemInstruction: String
     public let outputContract: String
     public let citationContract: String
@@ -76,6 +82,7 @@ public struct HarnessResearchAdapter: Identifiable, Codable, Sendable, Equatable
         displayName: String,
         sourceScope: HarnessResearchSourceScope,
         requiresApproval: Bool,
+        executionKind: HarnessResearchExecutionKind = .agentSynthesis,
         systemInstruction: String,
         outputContract: String,
         citationContract: String
@@ -85,6 +92,7 @@ public struct HarnessResearchAdapter: Identifiable, Codable, Sendable, Equatable
         self.displayName = displayName
         self.sourceScope = sourceScope
         self.requiresApproval = requiresApproval
+        self.executionKind = executionKind
         self.systemInstruction = systemInstruction
         self.outputContract = outputContract
         self.citationContract = citationContract
@@ -102,11 +110,23 @@ public struct HarnessResearchAdapter: Identifiable, Codable, Sendable, Equatable
             citationContract: "Use local source names and file paths when available."
         ),
         HarnessResearchAdapter(
+            id: "firecrawl-search",
+            skillName: "firecrawl-search",
+            displayName: "Firecrawl Search",
+            sourceScope: .externalWeb,
+            requiresApproval: true,
+            executionKind: .firecrawlSearch,
+            systemInstruction: "You are the Firecrawl Search adapter. Use approved live web search to produce a source shortlist before synthesis.",
+            outputContract: "Executive Conclusion, Consequence, Recommendation, source shortlist, Sources.",
+            citationContract: "Return source URLs for every listed result."
+        ),
+        HarnessResearchAdapter(
             id: "firecrawl-deep-research",
             skillName: "firecrawl-deep-research",
             displayName: "Firecrawl Deep Research",
             sourceScope: .externalWeb,
             requiresApproval: true,
+            executionKind: .firecrawlSearch,
             systemInstruction: "You are the Firecrawl Deep Research adapter. Use approved external web research for competitive, market, and source-rich investigations.",
             outputContract: "Executive Conclusion, Consequence, Recommendation, Sources.",
             citationContract: "Cite every material claim with source URLs."
@@ -304,7 +324,7 @@ public enum HarnessExecutionRouter {
         if intent.needsResearch {
             steps.append(contentsOf: skillSteps(
                 capabilities,
-                names: ["research-response", "firecrawl-deep-research", "llm-wiki", "arxiv"],
+                names: ["research-response", "firecrawl-search", "firecrawl-deep-research", "llm-wiki", "arxiv"],
                 defaultAction: .runSkill,
                 intent: intent,
                 priorityStart: 40

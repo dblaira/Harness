@@ -178,7 +178,7 @@ final class MacWorkbenchModel: ObservableObject {
                     plan,
                     approvedStepIDs: [step.id],
                     externalResearchDelegate: { request in
-                        if request.adapter.skillName == "firecrawl-deep-research" {
+                        if request.adapter.executionKind == .firecrawlSearch {
                             guard let firecrawlKey else { throw FirecrawlClient.FirecrawlError.noKey }
                             let response = try await FirecrawlClient(apiKey: firecrawlKey)
                                 .search(query: request.userPrompt, limit: 5)

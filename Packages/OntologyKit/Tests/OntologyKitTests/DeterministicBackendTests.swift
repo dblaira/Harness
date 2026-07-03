@@ -1509,6 +1509,7 @@ import Testing
 
 @Test func researchAdapterRegistryExposesConnectorSpecificContracts() throws {
     let local = try #require(HarnessResearchAdapter.adapter(forSkillName: "research-response"))
+    let firecrawlSearch = try #require(HarnessResearchAdapter.adapter(forSkillName: "firecrawl-search"))
     let firecrawl = try #require(HarnessResearchAdapter.adapter(forSkillName: "firecrawl-deep-research"))
     let arxiv = try #require(HarnessResearchAdapter.adapter(forSkillName: "arxiv"))
 
@@ -1517,15 +1518,52 @@ import Testing
     #expect(!local.requiresApproval)
     #expect(local.outputContract.contains("Executive Conclusion"))
 
+    #expect(firecrawlSearch.displayName == "Firecrawl Search")
+    #expect(firecrawlSearch.sourceScope == .externalWeb)
+    #expect(firecrawlSearch.requiresApproval)
+    #expect(firecrawlSearch.executionKind == .firecrawlSearch)
+    #expect(firecrawlSearch.outputContract.contains("source shortlist"))
+
     #expect(firecrawl.displayName == "Firecrawl Deep Research")
     #expect(firecrawl.sourceScope == .externalWeb)
     #expect(firecrawl.requiresApproval)
     #expect(firecrawl.citationContract.contains("source URLs"))
+    #expect(firecrawl.executionKind == .firecrawlSearch)
 
     #expect(arxiv.displayName == "arXiv")
     #expect(arxiv.sourceScope == .literature)
     #expect(arxiv.requiresApproval)
     #expect(arxiv.systemInstruction.contains("papers"))
+}
+
+@Test func executionRouterPlansFirecrawlSearchBeforeDeepResearchWhenAvailable() throws {
+    let home = FileManager.default.temporaryDirectory
+        .appendingPathComponent("HarnessFirecrawlSearchRouteTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+
+    try writeSkill(
+        home.appendingPathComponent(".agents/skills/firecrawl-search/SKILL.md"),
+        name: "firecrawl-search",
+        description: "Web search with full page content."
+    )
+    try writeSkill(
+        home.appendingPathComponent(".agents/skills/firecrawl-deep-research/SKILL.md"),
+        name: "firecrawl-deep-research",
+        description: "Produce cited deep research."
+    )
+
+    let capabilities = HarnessCapabilityRegistry.defaultCapabilities(homeDirectory: home)
+    let plan = HarnessExecutionRouter.plan(
+        prompt: "Research current Firecrawl MCP capabilities for Harness.",
+        connectors: HarnessConnectorRegistry.defaultConnectors(homeDirectory: home),
+        capabilities: capabilities
+    )
+    let firecrawlSearch = try #require(plan.steps.first { $0.targetName == "firecrawl-search" })
+    let deepResearch = try #require(plan.steps.first { $0.targetName == "firecrawl-deep-research" })
+
+    #expect(firecrawlSearch.action == .runSkill)
+    #expect(firecrawlSearch.guardrail == .approvalRequired)
+    #expect(firecrawlSearch.priority < deepResearch.priority)
 }
 
 @Test func routeExecutorIncludesResearchSkillInstructionContext() async throws {
