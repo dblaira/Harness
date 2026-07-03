@@ -16,6 +16,7 @@ final class MacWorkbenchModel: ObservableObject {
     @Published var selectedTool: WorkbenchTool?
     @Published var reviewQueueCandidates: [MemoryCandidate] = []
     @Published var connectors: [HarnessConnector] = HarnessConnectorRegistry.defaultConnectors()
+    @Published var capabilities: [HarnessCapability] = HarnessCapabilityRegistry.defaultCapabilities()
     let toolGroups = WorkbenchToolGroup.defaults
 
     private let ledger: RunLedgerStore
@@ -94,6 +95,7 @@ final class MacWorkbenchModel: ObservableObject {
 
     func refreshConnectors() {
         connectors = HarnessConnectorRegistry.defaultConnectors()
+        capabilities = HarnessCapabilityRegistry.defaultCapabilities()
     }
 
     func syncAppleNotes() {
@@ -345,6 +347,7 @@ enum WorkbenchInspectorTab: String, CaseIterable, Identifiable {
     case authority = "Authority"
     case memory = "Memory"
     case connectors = "Connectors"
+    case skills = "Skills"
     case trace = "Trace"
     case candidates = "Candidates"
 

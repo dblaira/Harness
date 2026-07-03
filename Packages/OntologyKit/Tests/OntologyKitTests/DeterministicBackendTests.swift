@@ -866,6 +866,61 @@ import Testing
     #expect(HarnessConnectorRegistry.memorySources(from: connectors).contains { $0.kind == .github })
 }
 
+@Test func capabilityRegistryDiscoversAgentSkillsAndPluginManifests() throws {
+    let home = FileManager.default.temporaryDirectory
+        .appendingPathComponent("HarnessCapabilityRegistryTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+
+    try writeSkill(
+        home.appendingPathComponent(".hermes/skills/apple/apple-notes/SKILL.md"),
+        name: "apple-notes",
+        description: "Manage Apple Notes via memo CLI: create, search, edit."
+    )
+    try writeSkill(
+        home.appendingPathComponent(".hermes/skills/autonomous-ai-agents/codex/SKILL.md"),
+        name: "codex",
+        description: "Delegate coding to OpenAI Codex CLI."
+    )
+    try writeSkill(
+        home.appendingPathComponent(".claude/skills/research-response/SKILL.md"),
+        name: "research-response",
+        description: "Research responses matched to Adam's visual-first profile."
+    )
+    try writeSkill(
+        home.appendingPathComponent(".agents/skills/firecrawl-deep-research/SKILL.md"),
+        name: "firecrawl-deep-research",
+        description: "Produce an intensive cited research report."
+    )
+
+    let claudePlugin = home.appendingPathComponent(".claude/plugins/cache/compound-engineering/compound-engineering/3.12.0/.claude-plugin/plugin.json")
+    try FileManager.default.createDirectory(at: claudePlugin.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try """
+    {
+      "name": "compound-engineering",
+      "version": "3.12.0",
+      "description": "AI-powered development tools for code review, research, design, and workflow automation."
+    }
+    """.write(to: claudePlugin, atomically: true, encoding: .utf8)
+
+    let codexPlugin = home.appendingPathComponent(".codex/plugins/cache/openai-curated/github/3fdeeb49/.app.json")
+    try FileManager.default.createDirectory(at: codexPlugin.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try """
+    {
+      "name": "GitHub",
+      "description": "Access repositories, issues, and pull requests."
+    }
+    """.write(to: codexPlugin, atomically: true, encoding: .utf8)
+
+    let capabilities = HarnessCapabilityRegistry.defaultCapabilities(homeDirectory: home)
+
+    #expect(capabilities.contains { $0.kind == .skill && $0.name == "apple-notes" && $0.category == "apple" && $0.sourceSystem == "Hermes" })
+    #expect(capabilities.contains { $0.kind == .skill && $0.name == "research-response" && $0.sourceSystem == "Claude" })
+    #expect(capabilities.contains { $0.kind == .skill && $0.name == "firecrawl-deep-research" && $0.sourceSystem == "Agents" })
+    #expect(capabilities.contains { $0.kind == .plugin && $0.name == "compound-engineering" && $0.sourceSystem == "Claude" })
+    #expect(capabilities.contains { $0.kind == .plugin && $0.name == "GitHub" && $0.sourceSystem == "Codex" })
+    #expect(HarnessCapabilityRegistry.groupCounts(capabilities).contains { $0.key == "Hermes / apple" && $0.value == 1 })
+}
+
 private struct StaticMemoryRetriever: SupportingMemoryRetrieving {
     let hit: MemoryHit?
 
@@ -881,6 +936,18 @@ private struct StaticBackendAdapter: ModelBackendAdapter {
     func execute(packet: ModelPacket) async throws -> BackendResponse {
         BackendResponse(text: answer, tokenCount: 12, cost: nil)
     }
+}
+
+private func writeSkill(_ url: URL, name: String, description: String) throws {
+    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try """
+    ---
+    name: \(name)
+    description: \(description)
+    ---
+
+    # \(name)
+    """.write(to: url, atomically: true, encoding: .utf8)
 }
 
 private struct StaticGraphHealthChecker: GraphHealthChecking {

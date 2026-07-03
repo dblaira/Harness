@@ -371,6 +371,8 @@ struct MacChatView: View {
                         memoryPanel
                     case .connectors:
                         connectorPanel
+                    case .skills:
+                        capabilityPanel
                     case .trace:
                         tracePanel
                     case .candidates:
@@ -506,6 +508,95 @@ struct MacChatView: View {
                     status: connector.kind.rawValue
                 )
             }
+        }
+    }
+
+    private var capabilityPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text("\(model.capabilities.count) discovered")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.macInk.opacity(0.58))
+                Spacer()
+                Button {
+                    model.refreshConnectors()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.macInk.opacity(0.68))
+                        .frame(width: 28, height: 24)
+                        .background(Theme.macEntry.opacity(0.28), in: RoundedRectangle(cornerRadius: 7))
+                        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.macHair, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .help("Refresh skills and plugins")
+            }
+
+            ForEach(capabilityGroups, id: \.key) { group in
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack(spacing: 8) {
+                        Text(group.key)
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(Theme.macInk.opacity(0.56))
+                            .lineLimit(1)
+                        Spacer()
+                        statusBadge("\(group.items.count)")
+                    }
+
+                    ForEach(group.items.prefix(12)) { capability in
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Image(systemName: capabilityIcon(capability.kind))
+                                .frame(width: 14)
+                                .foregroundStyle(Theme.macInk.opacity(0.48))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(capability.name)
+                                    .font(.system(size: 12).weight(.semibold))
+                                    .foregroundStyle(Theme.macInk.opacity(0.78))
+                                    .lineLimit(1)
+                                Text(capability.description)
+                                    .font(.caption)
+                                    .foregroundStyle(Theme.macInk.opacity(0.48))
+                                    .lineLimit(2)
+                            }
+                        }
+                    }
+
+                    if group.items.count > 12 {
+                        Text("+ \(group.items.count - 12) more")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(Theme.macInk.opacity(0.42))
+                    }
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Theme.macEntry.opacity(0.18), in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
+            }
+        }
+    }
+
+    private var capabilityGroups: [(key: String, items: [HarnessCapability])] {
+        let grouped = Dictionary(grouping: model.capabilities) { capability in
+            "\(capability.sourceSystem) / \(capability.category)"
+        }
+        return grouped
+            .map { (key: $0.key, items: $0.value.sorted { $0.name < $1.name }) }
+            .sorted { lhs, rhs in
+                if lhs.items.count == rhs.items.count { return lhs.key < rhs.key }
+                return lhs.items.count > rhs.items.count
+            }
+    }
+
+    private func capabilityIcon(_ kind: HarnessCapabilityKind) -> String {
+        switch kind {
+        case .skill:
+            return "wrench.and.screwdriver"
+        case .plugin:
+            return "shippingbox"
+        case .connector:
+            return "point.3.connected.trianglepath.dotted"
+        case .tool:
+            return "terminal"
         }
     }
 
