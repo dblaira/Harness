@@ -6,19 +6,33 @@ struct MacChatView: View {
     let ontology: Ontology
     @StateObject private var model = MacWorkbenchModel()
     @State private var inspectorTab: WorkbenchInspectorTab = .authority
+    @SceneStorage("MacChatView.isSidebarVisible") private var isSidebarVisible = true
+    @SceneStorage("MacChatView.isInspectorVisible") private var isInspectorVisible = true
 
     var body: some View {
         HStack(spacing: 0) {
-            sidebar
-            Divider().overlay(Theme.macHair)
+            if isSidebarVisible {
+                sidebar
+                Divider().overlay(Theme.macHair)
+            }
             transcript
-            Divider().overlay(Theme.macHair)
-            inspector
+            if isInspectorVisible {
+                Divider().overlay(Theme.macHair)
+                inspector
+            }
         }
+        .frame(minWidth: CGFloat(currentLayout.minimumWindowWidth), minHeight: 680)
         .background(Theme.macBg.ignoresSafeArea())
         .onAppear { model.updateOntology(ontology) }
         .onChange(of: ontology.connections.count) { _, _ in model.updateOntology(ontology) }
         .onChange(of: model.searchText) { _, _ in Task { await model.searchRuns() } }
+    }
+
+    private var currentLayout: HarnessWorkbenchLayoutState {
+        HarnessWorkbenchLayoutState(
+            isSidebarVisible: isSidebarVisible,
+            isInspectorVisible: isInspectorVisible
+        )
     }
 
     private var sidebar: some View {
@@ -71,7 +85,7 @@ struct MacChatView: View {
             .foregroundStyle(Theme.macInk.opacity(0.55))
         }
         .padding(14)
-        .frame(width: 250, alignment: .leading)
+        .frame(width: CGFloat(HarnessWorkbenchLayoutState.sidebarWidth), alignment: .leading)
         .background(Theme.macBg)
     }
 
@@ -215,12 +229,19 @@ struct MacChatView: View {
             delegateLabel
             composer
         }
-        .frame(minWidth: 520, maxWidth: .infinity)
+        .frame(minWidth: CGFloat(HarnessWorkbenchLayoutState.transcriptMinimumWidth), maxWidth: .infinity)
         .background(Theme.macBg)
     }
 
     private var topBar: some View {
         HStack(spacing: 12) {
+            toolbarIconButton(
+                isSidebarVisible ? "rectangle.leftthird.inset.filled" : "rectangle",
+                help: isSidebarVisible ? "Hide left sidebar" : "Show left sidebar"
+            ) {
+                isSidebarVisible.toggle()
+            }
+
             VStack(alignment: .leading, spacing: 2) {
                 Text(model.selectedDetail?.run.prompt ?? "The Adam Pattern")
                     .font(.system(size: 14).weight(.semibold))
@@ -249,10 +270,30 @@ struct MacChatView: View {
                     .background(Theme.macEntry.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
             }
+
+            toolbarIconButton(
+                isInspectorVisible ? "rectangle.rightthird.inset.filled" : "rectangle",
+                help: isInspectorVisible ? "Hide right inspector" : "Show right inspector"
+            ) {
+                isInspectorVisible.toggle()
+            }
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
         .overlay(Rectangle().fill(Theme.macHair).frame(height: 1), alignment: .bottom)
+    }
+
+    private func toolbarIconButton(_ systemImage: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 12).weight(.semibold))
+                .foregroundStyle(Theme.macInk.opacity(0.68))
+                .frame(width: 28, height: 24)
+                .background(Theme.macEntry.opacity(0.26), in: RoundedRectangle(cornerRadius: 7))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.macHair, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 
     private var delegateLabel: some View {
@@ -320,6 +361,8 @@ struct MacChatView: View {
 
     private var composer: some View {
         HStack(alignment: .bottom, spacing: 10) {
+            capabilityInsertMenu
+
             TextField("", text: $model.draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .foregroundStyle(Theme.macInk)
@@ -352,15 +395,90 @@ struct MacChatView: View {
         .overlay(Rectangle().fill(Theme.macHair).frame(height: 1), alignment: .top)
     }
 
+    private var capabilityInsertMenu: some View {
+        Menu {
+            Button {
+                model.newSession()
+            } label: {
+                Label("New Session", systemImage: "plus.bubble")
+            }
+
+            Divider()
+
+            Menu {
+                ForEach(menuCapabilities(kind: .skill).prefix(40)) { capability in
+                    Button {
+                        model.insertCapabilityReference(capability)
+                    } label: {
+                        Text(capability.name)
+                    }
+                }
+                if menuCapabilities(kind: .skill).count > 40 {
+                    Text("+ \(menuCapabilities(kind: .skill).count - 40) more")
+                }
+            } label: {
+                Label("Skills", systemImage: "wrench.and.screwdriver")
+            }
+
+            Menu {
+                ForEach(menuCapabilities(kind: .plugin).prefix(40)) { capability in
+                    Button {
+                        model.insertCapabilityReference(capability)
+                    } label: {
+                        Text(capability.name)
+                    }
+                }
+                if menuCapabilities(kind: .plugin).count > 40 {
+                    Text("+ \(menuCapabilities(kind: .plugin).count - 40) more")
+                }
+            } label: {
+                Label("Plugins", systemImage: "shippingbox")
+            }
+
+            Divider()
+
+            Button {
+                model.refreshConnectors()
+            } label: {
+                Label("Refresh", systemImage: "arrow.clockwise")
+            }
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 13).weight(.semibold))
+                .foregroundStyle(Theme.macInk.opacity(0.72))
+                .frame(width: 30, height: 30)
+                .background(Theme.macEntry.opacity(0.32), in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .help("Add skill or plugin")
+    }
+
+    private func menuCapabilities(kind: HarnessCapabilityKind) -> [HarnessCapability] {
+        model.capabilities
+            .filter { $0.kind == kind }
+            .sorted { lhs, rhs in
+                if lhs.sourceSystem == rhs.sourceSystem {
+                    return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+                }
+                return lhs.sourceSystem.localizedCaseInsensitiveCompare(rhs.sourceSystem) == .orderedAscending
+            }
+    }
+
     private var inspector: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Picker("Inspector", selection: $inspectorTab) {
-                ForEach(WorkbenchInspectorTab.allCases) { tab in
-                    Text(tab.rawValue).tag(tab)
+            ScrollView(.horizontal, showsIndicators: false) {
+                Picker("Inspector", selection: $inspectorTab) {
+                    ForEach(WorkbenchInspectorTab.allCases) { tab in
+                        Text(tab.rawValue).tag(tab)
+                    }
                 }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(minWidth: 520)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
+            .frame(maxWidth: .infinity)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
@@ -390,7 +508,7 @@ struct MacChatView: View {
                 .lineLimit(2)
         }
         .padding(14)
-        .frame(width: 330, alignment: .leading)
+        .frame(width: CGFloat(HarnessWorkbenchLayoutState.inspectorWidth), alignment: .leading)
         .background(Theme.macBg)
     }
 

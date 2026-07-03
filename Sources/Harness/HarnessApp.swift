@@ -13,7 +13,12 @@ struct HarnessApp: App {
         WindowGroup("The Adam Pattern") {
             #if os(macOS)
             MacChatView(ontology: ontology)
-                .frame(minWidth: 1100, idealWidth: 1240, minHeight: 680, idealHeight: 780)
+                .frame(
+                    minWidth: CGFloat(HarnessWorkbenchLayoutState.transcriptMinimumWidth),
+                    idealWidth: CGFloat(HarnessWorkbenchLayoutState().minimumWindowWidth),
+                    minHeight: 680,
+                    idealHeight: 780
+                )
                 .task(loadOntologyIfNeeded)
             #else
             ChatView(ontology: ontology)

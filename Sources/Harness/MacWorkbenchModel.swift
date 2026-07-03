@@ -116,6 +116,17 @@ final class MacWorkbenchModel: ObservableObject {
         routeExecutionResult = nil
     }
 
+    func insertCapabilityReference(_ capability: HarnessCapability) {
+        let label = capability.kind == .plugin ? "Plugin" : "Skill"
+        let insertion = "[\(label): \(capability.name)]"
+        if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            draft = "\(insertion) "
+        } else if !draft.contains(insertion) {
+            draft += "\n\(insertion) "
+        }
+        status = "\(capability.name) added to draft."
+    }
+
     func runReadOnlyRoute() {
         let plan = routePlan
         guard !plan.steps.isEmpty else {

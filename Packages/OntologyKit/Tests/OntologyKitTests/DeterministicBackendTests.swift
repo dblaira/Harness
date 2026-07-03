@@ -936,6 +936,29 @@ import Testing
     #expect(parsed.formattedBrief(for: "Harness product research").contains("https://example.com/harness"))
 }
 
+@Test func workbenchLayoutStateSupportsIndependentSidePanelToggles() {
+    var layout = HarnessWorkbenchLayoutState()
+
+    #expect(layout.isSidebarVisible)
+    #expect(layout.isInspectorVisible)
+    #expect(layout.minimumWindowWidth == 1_240)
+
+    layout.toggleSidebar()
+    #expect(!layout.isSidebarVisible)
+    #expect(layout.isInspectorVisible)
+    #expect(layout.minimumWindowWidth == 980)
+
+    layout.toggleInspector()
+    #expect(!layout.isSidebarVisible)
+    #expect(!layout.isInspectorVisible)
+    #expect(layout.minimumWindowWidth == 560)
+
+    layout.toggleSidebar()
+    #expect(layout.isSidebarVisible)
+    #expect(!layout.isInspectorVisible)
+    #expect(layout.minimumWindowWidth == 820)
+}
+
 @Test func capabilityRegistryDiscoversAgentSkillsAndPluginManifests() throws {
     let home = FileManager.default.temporaryDirectory
         .appendingPathComponent("HarnessCapabilityRegistryTests-\(UUID().uuidString)", isDirectory: true)
