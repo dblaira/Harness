@@ -2,6 +2,20 @@ import Foundation
 import Testing
 @testable import OntologyKit
 
+@Test func hermesLocalBackendRunsAgainstOllamaWhenReachable() async throws {
+    // Live integration check, not a mock: skips cleanly if `ollama serve` isn't
+    // up (e.g. CI), but proves the real Backend.hermes code path against the
+    // real local model when it is.
+    guard let url = URL(string: "http://127.0.0.1:11434/api/tags"),
+          let (_, response) = try? await URLSession.shared.data(from: url),
+          (response as? HTTPURLResponse)?.statusCode == 200 else {
+        return
+    }
+    let runner = AgentRunner()
+    let reply = try await runner.run(backend: .hermes, system: "Reply with exactly one word.", user: "Say OK.")
+    #expect(!reply.isEmpty)
+}
+
 @Test func claudeClientUsesCurrentDefaultModel() {
     #expect(ClaudeClient(apiKey: "test-key").model == "claude-sonnet-4-6")
 }

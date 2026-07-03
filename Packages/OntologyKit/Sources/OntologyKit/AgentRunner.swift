@@ -8,6 +8,7 @@ public enum Backend: String, CaseIterable, Identifiable, Sendable, Codable {
     case codex   = "Codex"      // ChatGPT subscription
     case grok    = "Grok"       // xAI subscription
     case claude  = "Claude API" // direct API key (optional)
+    case hermes  = "Hermes local" // local Ollama model, no subscription or key
     public var id: String { rawValue }
 }
 
@@ -50,7 +51,33 @@ public struct AgentRunner: Sendable {
         case .claude:
             let c = ClaudeClient(apiKey: apiKey)
             return try await c.send(messages: [(role: "user", text: user)], system: system)
+        case .hermes:
+            return try await runHermesLocal(system: system, user: user)
         }
+    }
+
+    /// Local Ollama server, no network egress, no subscription or key.
+    private func runHermesLocal(system: String, user: String) async throws -> String {
+        guard let url = URL(string: "http://127.0.0.1:11434/api/generate") else {
+            throw RunError.notFound("Ollama endpoint")
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "model": "hermes3:8b",
+            "prompt": system + "\n\n---\nUser: " + user,
+            "stream": false,
+        ])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw RunError.failed("Ollama not reachable on 127.0.0.1:11434. Is `ollama serve` running?")
+        }
+        guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let text = obj["response"] as? String else {
+            throw RunError.failed("Unexpected Ollama response shape.")
+        }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     public enum RunError: Error, LocalizedError {

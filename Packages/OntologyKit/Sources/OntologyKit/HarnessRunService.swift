@@ -165,6 +165,7 @@ public extension Backend {
         case .codex: return "codex-cli"
         case .grok: return "grok-cli"
         case .claude: return "claude-sonnet-4-20250514"
+        case .hermes: return "hermes3:8b"
         }
     }
 
@@ -172,6 +173,7 @@ public extension Backend {
         switch self {
         case .codex, .grok: return "local-cli"
         case .claude: return "https-api"
+        case .hermes: return "local-http"
         }
     }
 }

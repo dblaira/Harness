@@ -431,11 +431,11 @@ struct WorkbenchToolGroup: Identifiable, Equatable {
                 WorkbenchTool(
                     title: "Hermes local",
                     icon: "shippingbox",
-                    state: .planned,
-                    detail: "planned",
-                    summary: "Reserved for a future local Hermes agent workspace bridge.",
-                    permission: "No execution or permissions wired yet.",
-                    provenance: "Displayed as roadmap inventory only."
+                    state: .available,
+                    detail: "local model",
+                    summary: "Routes model packets to a local Hermes 3 (8B) model via Ollama. No subscription, no API key, no network egress.",
+                    permission: "Requires `ollama serve` running locally on 127.0.0.1:11434.",
+                    provenance: "Backend metadata records local-http invocation."
                 )
             ]
         )
