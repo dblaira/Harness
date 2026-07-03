@@ -8,22 +8,31 @@ struct MacChatView: View {
     @State private var inspectorTab: WorkbenchInspectorTab = .authority
     @SceneStorage("MacChatView.isSidebarVisible") private var isSidebarVisible = true
     @SceneStorage("MacChatView.isInspectorVisible") private var isInspectorVisible = true
+    @SceneStorage("MacChatView.sidebarWidth") private var sidebarWidth = HarnessWorkbenchLayoutState.defaultSidebarWidth
+    @SceneStorage("MacChatView.inspectorWidth") private var inspectorWidth = HarnessWorkbenchLayoutState.defaultInspectorWidth
+    @State private var sidebarDragStartWidth: Double?
+    @State private var inspectorDragStartWidth: Double?
 
     var body: some View {
         HStack(spacing: 0) {
             if isSidebarVisible {
                 sidebar
+                panelResizeHandle(.sidebar)
                 Divider().overlay(Theme.macHair)
             }
             transcript
             if isInspectorVisible {
                 Divider().overlay(Theme.macHair)
+                panelResizeHandle(.inspector)
                 inspector
             }
         }
         .frame(minWidth: CGFloat(currentLayout.minimumWindowWidth), minHeight: 680)
         .background(Theme.macBg.ignoresSafeArea())
-        .onAppear { model.updateOntology(ontology) }
+        .onAppear {
+            normalizePanelWidths()
+            model.updateOntology(ontology)
+        }
         .onChange(of: ontology.connections.count) { _, _ in model.updateOntology(ontology) }
         .onChange(of: model.searchText) { _, _ in Task { await model.searchRuns() } }
     }
@@ -31,8 +40,15 @@ struct MacChatView: View {
     private var currentLayout: HarnessWorkbenchLayoutState {
         HarnessWorkbenchLayoutState(
             isSidebarVisible: isSidebarVisible,
-            isInspectorVisible: isInspectorVisible
+            isInspectorVisible: isInspectorVisible,
+            sidebarWidth: sidebarWidth,
+            inspectorWidth: inspectorWidth
         )
+    }
+
+    private func normalizePanelWidths() {
+        sidebarWidth = HarnessWorkbenchLayoutState.clampedSidebarWidth(sidebarWidth)
+        inspectorWidth = HarnessWorkbenchLayoutState.clampedInspectorWidth(inspectorWidth)
     }
 
     private var sidebar: some View {
@@ -85,8 +101,43 @@ struct MacChatView: View {
             .foregroundStyle(Theme.macInk.opacity(0.55))
         }
         .padding(14)
-        .frame(width: CGFloat(HarnessWorkbenchLayoutState.sidebarWidth), alignment: .leading)
+        .frame(width: CGFloat(currentLayout.sidebarWidth), alignment: .leading)
         .background(Theme.macBg)
+    }
+
+    private func panelResizeHandle(_ target: WorkbenchPanelResizeTarget) -> some View {
+        ZStack {
+            Color.clear
+            RoundedRectangle(cornerRadius: 1)
+                .fill(Theme.macHair.opacity(0.9))
+                .frame(width: 2, height: 34)
+        }
+        .frame(width: CGFloat(HarnessWorkbenchLayoutState.resizeHandleWidth))
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 2)
+                .onChanged { value in
+                    switch target {
+                    case .sidebar:
+                        let start = sidebarDragStartWidth ?? sidebarWidth
+                        sidebarDragStartWidth = start
+                        sidebarWidth = HarnessWorkbenchLayoutState.clampedSidebarWidth(
+                            start + Double(value.translation.width)
+                        )
+                    case .inspector:
+                        let start = inspectorDragStartWidth ?? inspectorWidth
+                        inspectorDragStartWidth = start
+                        inspectorWidth = HarnessWorkbenchLayoutState.clampedInspectorWidth(
+                            start - Double(value.translation.width)
+                        )
+                    }
+                }
+                .onEnded { _ in
+                    sidebarDragStartWidth = nil
+                    inspectorDragStartWidth = nil
+                }
+        )
+        .help("Drag to resize")
     }
 
     private var skillsList: some View {
@@ -508,7 +559,7 @@ struct MacChatView: View {
                 .lineLimit(2)
         }
         .padding(14)
-        .frame(width: CGFloat(HarnessWorkbenchLayoutState.inspectorWidth), alignment: .leading)
+        .frame(width: CGFloat(currentLayout.inspectorWidth), alignment: .leading)
         .background(Theme.macBg)
     }
 
@@ -1144,6 +1195,11 @@ private extension WorkbenchToolState {
             return Theme.macFaint
         }
     }
+}
+
+private enum WorkbenchPanelResizeTarget {
+    case sidebar
+    case inspector
 }
 
 private struct MacHarnessWatermark: View {

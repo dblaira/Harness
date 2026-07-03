@@ -941,12 +941,12 @@ import Testing
 
     #expect(layout.isSidebarVisible)
     #expect(layout.isInspectorVisible)
-    #expect(layout.minimumWindowWidth == 1_240)
+    #expect(layout.minimumWindowWidth == 1_258)
 
     layout.toggleSidebar()
     #expect(!layout.isSidebarVisible)
     #expect(layout.isInspectorVisible)
-    #expect(layout.minimumWindowWidth == 980)
+    #expect(layout.minimumWindowWidth == 989)
 
     layout.toggleInspector()
     #expect(!layout.isSidebarVisible)
@@ -956,7 +956,28 @@ import Testing
     layout.toggleSidebar()
     #expect(layout.isSidebarVisible)
     #expect(!layout.isInspectorVisible)
-    #expect(layout.minimumWindowWidth == 820)
+    #expect(layout.minimumWindowWidth == 829)
+}
+
+@Test func workbenchLayoutStateClampsSidePanelResize() {
+    var layout = HarnessWorkbenchLayoutState(sidebarWidth: 80, inspectorWidth: 900)
+
+    #expect(layout.sidebarWidth == HarnessWorkbenchLayoutState.minimumSidebarWidth)
+    #expect(layout.inspectorWidth == HarnessWorkbenchLayoutState.maximumInspectorWidth)
+
+    layout.resizeSidebar(to: 286)
+    layout.resizeInspector(to: 372)
+
+    #expect(layout.sidebarWidth == 286)
+    #expect(layout.inspectorWidth == 372)
+    #expect(layout.minimumWindowWidth == 1_236)
+
+    layout.resizeSidebar(to: 999)
+    layout.resizeInspector(to: 120)
+
+    #expect(layout.sidebarWidth == HarnessWorkbenchLayoutState.maximumSidebarWidth)
+    #expect(layout.inspectorWidth == HarnessWorkbenchLayoutState.minimumInspectorWidth)
+    #expect(layout.minimumWindowWidth == 1_238)
 }
 
 @Test func capabilityRegistryDiscoversAgentSkillsAndPluginManifests() throws {
