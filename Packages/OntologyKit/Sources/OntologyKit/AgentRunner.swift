@@ -1,12 +1,11 @@
 import Foundation
+#if os(macOS)
+import Darwin
+#endif
 
-/// BORROW layer (conn-006: compute over cleverness).
-/// Instead of copying expiring OAuth tokens, shell out to the CLIs Adam already
-/// pays for (Codex = ChatGPT sub, Grok = xAI sub). They manage their own auth +
-/// refresh, so the app never has to re-authenticate or store a secret.
 public enum Backend: String, CaseIterable, Identifiable, Sendable, Codable {
-    case codex   = "Codex"      // ChatGPT subscription
-    case grok    = "Grok"       // xAI subscription
+    case codex   = "Codex"      // macOS CLI or OpenAI API
+    case grok    = "Grok"       // macOS CLI or xAI API
     case claude  = "Claude API" // direct API key (optional)
     case hermes  = "Hermes local" // local Ollama model, no subscription or key
     public var id: String { rawValue }
@@ -35,18 +34,26 @@ public struct AgentRunner: Sendable {
         let fullPrompt = system + "\n\n---\nUser: " + user
         switch backend {
         case .codex:
+            let key = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !key.isEmpty {
+                return try await OpenAIClient(apiKey: key).send(messages: [(role: "user", text: user)], system: system)
+            }
             #if os(macOS)
             guard let bin = codexPath else { throw RunError.notFound("codex CLI") }
             return try shell(bin, ["exec", "--skip-git-repo-check", fullPrompt])
             #else
-            throw RunError.notFound("codex CLI (desktop only)")
+            throw RunError.notFound("OpenAI API key")
             #endif
         case .grok:
+            let key = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !key.isEmpty {
+                return try await XAIClient(apiKey: key).send(messages: [(role: "user", text: user)], system: system)
+            }
             #if os(macOS)
             guard let bin = grokPath else { throw RunError.notFound("grok CLI") }
             return try shell(bin, [fullPrompt, "--output-format", "json"])
             #else
-            throw RunError.notFound("grok CLI (desktop only)")
+            throw RunError.notFound("xAI API key")
             #endif
         case .claude:
             let c = ClaudeClient(apiKey: apiKey)
@@ -92,7 +99,7 @@ public struct AgentRunner: Sendable {
 
     /// Run a CLI to completion, capturing stdout. Uses a PTY-free pipe.
     #if os(macOS)
-    private func shell(_ launchPath: String, _ args: [String]) throws -> String {
+    private func shell(_ launchPath: String, _ args: [String], timeout: TimeInterval = 90) throws -> String {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: launchPath)
         proc.arguments = args
@@ -104,8 +111,16 @@ public struct AgentRunner: Sendable {
         proc.standardOutput = out
         proc.standardError = err
         try proc.run()
+        let completion = DispatchSemaphore(value: 0)
+        proc.terminationHandler = { _ in completion.signal() }
+        if completion.wait(timeout: .now() + timeout) == .timedOut {
+            proc.terminate()
+            if completion.wait(timeout: .now() + 3) == .timedOut {
+                kill(proc.processIdentifier, SIGKILL)
+            }
+            throw RunError.failed("\(URL(fileURLWithPath: launchPath).lastPathComponent) timed out after \(Int(timeout)) seconds.")
+        }
         let data = out.fileHandleForReading.readDataToEndOfFile()
-        proc.waitUntilExit()
         let text = String(data: data, encoding: .utf8) ?? ""
         if proc.terminationStatus != 0 && text.isEmpty {
             let e = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "exit \(proc.terminationStatus)"

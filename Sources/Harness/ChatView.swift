@@ -14,8 +14,8 @@ struct ChatView: View {
     @State private var draft = ""
     @State private var thinking = false
     @State private var backend: Backend = ChatView.defaultBackend
-    @State private var apiKey = ChatView.initialAPIKey()
-    @State private var hasConfiguredAPIKey = !ChatView.initialAPIKey().isEmpty
+    @State private var apiKey = ChatView.initialAPIKey(for: ChatView.defaultBackend)
+    @State private var hasConfiguredAPIKey = ChatView.hasConfiguredAPIKey(for: ChatView.defaultBackend)
     @State private var mode: HarnessLaunchMode = .ask
     @State private var selectedQuickAction: HarnessQuickAction.ID?
     @State private var showingAttachmentMenu = false
@@ -58,11 +58,13 @@ struct ChatView: View {
                     backend: $backend,
                     apiKey: $apiKey,
                     hasConfiguredAPIKey: hasConfiguredAPIKey,
+                    requiresAPIKey: requiresAPIKey(for: backend),
+                    apiKeyLabel: backend.apiKeyLabel,
                     thinking: thinking,
                     mode: mode,
                     onAttach: { showingAttachmentMenu = true },
                     onSpeak: beginVoice,
-                    onSaveAPIKey: { _ = saveClaudeKey() },
+                    onSaveAPIKey: { _ = saveAPIKey() },
                     onSubmit: send,
                     focus: $composerFocused
                 )
@@ -82,6 +84,9 @@ struct ChatView: View {
         #if os(iOS)
         .toolbar(.hidden, for: .navigationBar)
         #endif
+        .onChange(of: backend) { _, newBackend in
+            loadAPIKey(for: newBackend)
+        }
     }
 
     private func selectQuickAction(_ action: HarnessQuickAction) {
@@ -98,12 +103,13 @@ struct ChatView: View {
         guard !text.isEmpty, !thinking else { return }
         composerFocused = false
         let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        if backend == .claude && trimmedKey.isEmpty {
-            ledgerStatus = "Claude API key required"
+        let needsKey = requiresAPIKey(for: backend)
+        if needsKey && trimmedKey.isEmpty {
+            ledgerStatus = "\(backend.apiKeyLabel) required"
             return
         }
 
-        if backend == .claude && !hasConfiguredAPIKey && !saveClaudeKey() {
+        if needsKey && !hasConfiguredAPIKey && !saveAPIKey() {
             return
         }
 
@@ -111,7 +117,7 @@ struct ChatView: View {
         draft = ""
         thinking = true
         let chosen = backend
-        let key = trimmedKey.isEmpty ? nil : trimmedKey
+        let key = needsKey ? trimmedKey : nil
         let service = HarnessRunService(ledger: ledger)
         Task {
             do {
@@ -129,8 +135,8 @@ struct ChatView: View {
                 }
             } catch {
                 await MainActor.run {
-                    if chosen == .claude && ChatView.isClaudeAuthenticationError(error) {
-                        try? APIKeyStore.deleteClaudeKey()
+                    if requiresAPIKey(for: chosen) && ChatView.isAuthenticationError(error) {
+                        try? APIKeyStore.deleteKey(for: chosen)
                         hasConfiguredAPIKey = false
                         apiKey = ""
                     }
@@ -143,23 +149,36 @@ struct ChatView: View {
     }
 
     @discardableResult
-    private func saveClaudeKey() -> Bool {
+    private func saveAPIKey() -> Bool {
         let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedKey.isEmpty else {
-            ledgerStatus = "Claude API key required"
+            ledgerStatus = "\(backend.apiKeyLabel) required"
             return false
         }
 
         do {
-            try APIKeyStore.saveClaudeKey(trimmedKey)
+            try APIKeyStore.saveKey(trimmedKey, for: backend)
             apiKey = trimmedKey
             hasConfiguredAPIKey = true
-            ledgerStatus = "Claude key saved locally"
+            ledgerStatus = "\(backend.apiKeyLabel) saved"
             return true
         } catch {
             ledgerStatus = error.localizedDescription
             return false
         }
+    }
+
+    private func loadAPIKey(for backend: Backend) {
+        apiKey = ChatView.initialAPIKey(for: backend)
+        hasConfiguredAPIKey = !apiKey.isEmpty
+    }
+
+    private func requiresAPIKey(for backend: Backend) -> Bool {
+        #if os(iOS)
+        backend.requiresMobileAPIKey
+        #else
+        backend == .claude
+        #endif
     }
 
     private static func makeLedger() -> RunLedgerStore {
@@ -172,23 +191,40 @@ struct ChatView: View {
 
     private static var defaultBackend: Backend {
         #if os(iOS)
-        .claude
+        if APIKeyStore.loadKey(for: .codex) != nil { return .codex }
+        if APIKeyStore.loadKey(for: .grok) != nil { return .grok }
+        return .claude
         #else
         .codex
         #endif
     }
 
-    private static func initialAPIKey() -> String {
+    private static func initialAPIKey(for backend: Backend) -> String {
         #if os(iOS)
-        APIKeyStore.loadClaudeKey() ?? ""
+        APIKeyStore.loadKey(for: backend) ?? ""
         #else
-        ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] ?? APIKeyStore.loadClaudeKey() ?? ""
+        switch backend {
+        case .codex:
+            return ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? APIKeyStore.loadKey(for: backend) ?? ""
+        case .grok:
+            return ProcessInfo.processInfo.environment["XAI_API_KEY"] ?? APIKeyStore.loadKey(for: backend) ?? ""
+        case .claude:
+            return ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] ?? APIKeyStore.loadKey(for: backend) ?? ""
+        case .hermes:
+            return ""
+        }
         #endif
     }
 
-    private static func isClaudeAuthenticationError(_ error: Error) -> Bool {
+    private static func hasConfiguredAPIKey(for backend: Backend) -> Bool {
+        !initialAPIKey(for: backend).isEmpty
+    }
+
+    private static func isAuthenticationError(_ error: Error) -> Bool {
         let message = error.localizedDescription.lowercased()
         return message.contains("authentication") ||
+            message.contains("unauthorized") ||
+            message.contains("bearer") ||
             message.contains("x-api-key") ||
             message.contains("api key") ||
             message.contains("401")
@@ -278,7 +314,7 @@ private struct HarnessConversationStage: View {
                             HStack(spacing: 8) {
                                 ProgressView()
                                     .controlSize(.small)
-                                Text("\(backend.rawValue) thinking")
+                                Text("\(backend.phoneDisplayName) thinking")
                                     .font(.system(size: 14, weight: .medium))
                                     .foregroundStyle(Theme.iosMuted)
                             }
@@ -357,7 +393,7 @@ private struct HarnessMessageBubble: View {
         HStack {
             if message.fromMe { Spacer(minLength: 42) }
             VStack(alignment: .leading, spacing: 6) {
-                Text(message.fromMe ? "You" : backend.rawValue)
+                Text(message.fromMe ? "You" : backend.phoneDisplayName)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Theme.iosMuted)
                 Text(message.text)
@@ -418,6 +454,8 @@ private struct HarnessComposer: View {
     @Binding var apiKey: String
 
     let hasConfiguredAPIKey: Bool
+    let requiresAPIKey: Bool
+    let apiKeyLabel: String
     let thinking: Bool
     let mode: HarnessLaunchMode
     let onAttach: () -> Void
@@ -442,9 +480,9 @@ private struct HarnessComposer: View {
                 .textInputAutocapitalization(.sentences)
                 #endif
 
-            if needsClaudeKey {
+            if needsAPIKey {
                 HStack(spacing: 8) {
-                    SecureField("Claude API key", text: $apiKey)
+                    SecureField(apiKeyLabel, text: $apiKey)
                         .textFieldStyle(.plain)
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(Theme.iosText)
@@ -463,7 +501,7 @@ private struct HarnessComposer: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(saveDisabled)
-                    .accessibilityLabel("Save Claude API key")
+                    .accessibilityLabel("Save \(apiKeyLabel)")
                 }
             }
 
@@ -497,15 +535,15 @@ private struct HarnessComposer: View {
     private var sendDisabled: Bool {
         thinking ||
             draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-            (needsClaudeKey && apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            (needsAPIKey && apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
     private var saveDisabled: Bool {
         thinking || apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private var needsClaudeKey: Bool {
-        backend == .claude && !hasConfiguredAPIKey
+    private var needsAPIKey: Bool {
+        requiresAPIKey && !hasConfiguredAPIKey
     }
 }
 
@@ -518,20 +556,20 @@ private struct BackendMenuPill: View {
                 Button {
                     backend = candidate
                 } label: {
-                    Label(candidate.rawValue, systemImage: candidate == backend ? "checkmark" : "circle")
+                    Label(candidate.phoneDisplayName, systemImage: candidate == backend ? "checkmark" : "circle")
                 }
             }
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "square.grid.2x2")
                     .font(.system(size: 18, weight: .bold))
-                Text(backend.rawValue)
+                Text(backend.phoneDisplayName)
                     .font(.system(size: 17, weight: .bold))
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
             }
             .foregroundStyle(Theme.iosText)
-            .frame(width: 96, height: 50)
+            .frame(width: 116, height: 50)
             .background(Theme.iosControlActive, in: Capsule())
         }
         .menuStyle(.button)
@@ -542,10 +580,45 @@ private struct BackendMenuPill: View {
 private extension Backend {
     static var phoneVisibleCases: [Backend] {
         #if os(iOS)
-        [.claude]
+        [.codex, .grok, .claude]
         #else
         Backend.allCases
         #endif
+    }
+
+    var phoneDisplayName: String {
+        switch self {
+        case .codex:
+            return "ChatGPT"
+        case .grok:
+            return "Grok"
+        case .claude:
+            return "Claude"
+        case .hermes:
+            return "Hermes"
+        }
+    }
+
+    var apiKeyLabel: String {
+        switch self {
+        case .codex:
+            return "OpenAI API key"
+        case .grok:
+            return "xAI API key"
+        case .claude:
+            return "Claude API key"
+        case .hermes:
+            return ""
+        }
+    }
+
+    var requiresMobileAPIKey: Bool {
+        switch self {
+        case .codex, .grok, .claude:
+            return true
+        case .hermes:
+            return false
+        }
     }
 }
 

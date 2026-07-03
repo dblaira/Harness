@@ -1,12 +1,42 @@
 import Foundation
+import OntologyKit
 import Security
 
 enum APIKeyStore {
     private static let service = "com.adamblair.Harness"
     private static let claudeAccount = "anthropic_api_key"
+    private static let openAIAccount = "openai_api_key"
+    private static let xAIAccount = "xai_api_key"
+
+    static func loadKey(for backend: Backend) -> String? {
+        guard let account = account(for: backend) else { return nil }
+        return loadKey(account: account)
+    }
+
+    static func saveKey(_ key: String, for backend: Backend) throws {
+        guard let account = account(for: backend) else { return }
+        try saveKey(key, account: account)
+    }
+
+    static func deleteKey(for backend: Backend) throws {
+        guard let account = account(for: backend) else { return }
+        try deleteKey(account: account)
+    }
 
     static func loadClaudeKey() -> String? {
-        var query = baseQuery(account: claudeAccount)
+        loadKey(account: claudeAccount)
+    }
+
+    static func saveClaudeKey(_ key: String) throws {
+        try saveKey(key, account: claudeAccount)
+    }
+
+    static func deleteClaudeKey() throws {
+        try deleteKey(account: claudeAccount)
+    }
+
+    private static func loadKey(account: String) -> String? {
+        var query = baseQuery(account: account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
 
@@ -21,12 +51,12 @@ enum APIKeyStore {
         return key
     }
 
-    static func saveClaudeKey(_ key: String) throws {
+    private static func saveKey(_ key: String, account: String) throws {
         let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedKey.isEmpty else { return }
 
         let data = Data(trimmedKey.utf8)
-        let query = baseQuery(account: claudeAccount)
+        let query = baseQuery(account: account)
         let update: [String: Any] = [
             kSecValueData as String: data
         ]
@@ -44,10 +74,23 @@ enum APIKeyStore {
         guard status == errSecSuccess else { throw KeychainError(status: status) }
     }
 
-    static func deleteClaudeKey() throws {
-        let status = SecItemDelete(baseQuery(account: claudeAccount) as CFDictionary)
+    private static func deleteKey(account: String) throws {
+        let status = SecItemDelete(baseQuery(account: account) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw KeychainError(status: status)
+        }
+    }
+
+    private static func account(for backend: Backend) -> String? {
+        switch backend {
+        case .codex:
+            return openAIAccount
+        case .grok:
+            return xAIAccount
+        case .claude:
+            return claudeAccount
+        case .hermes:
+            return nil
         }
     }
 

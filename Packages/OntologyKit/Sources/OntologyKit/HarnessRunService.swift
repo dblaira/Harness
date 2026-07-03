@@ -162,8 +162,8 @@ public struct AgentRunnerBackendAdapter: ModelBackendAdapter {
 public extension Backend {
     var defaultModelName: String {
         switch self {
-        case .codex: return "codex-cli"
-        case .grok: return "grok-cli"
+        case .codex: return "gpt-4.1"
+        case .grok: return "grok-4.3"
         case .claude: return "claude-sonnet-4-20250514"
         case .hermes: return "hermes3:8b"
         }
@@ -171,7 +171,8 @@ public extension Backend {
 
     var invocationMethod: String {
         switch self {
-        case .codex, .grok: return "local-cli"
+        case .codex: return "openai-api-or-local-cli"
+        case .grok: return "xAI-api-or-local-cli"
         case .claude: return "https-api"
         case .hermes: return "local-http"
         }

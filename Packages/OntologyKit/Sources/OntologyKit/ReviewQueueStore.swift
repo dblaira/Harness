@@ -96,6 +96,7 @@ public struct PythonSHACLConnectionValidator: TurtleParsing {
     }
 
     public func parse(_ turtle: String) throws {
+        #if os(macOS)
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("harness-turtle-\(UUID().uuidString).ttl")
         try turtle.write(to: tempURL, atomically: true, encoding: .utf8)
@@ -119,6 +120,9 @@ public struct PythonSHACLConnectionValidator: TurtleParsing {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             throw TurtleParseError(message?.isEmpty == false ? message! : "Claim does not match the accepted connection grammar.")
         }
+        #else
+        throw TurtleParseError("SHACL validation is macOS-only.")
+        #endif
     }
 
     private func resolvePython() throws -> String {
@@ -177,7 +181,7 @@ public struct PythonSHACLConnectionValidator: TurtleParsing {
             append(URL(fileURLWithPath: repoRoot, isDirectory: true))
         }
         appendHarnessAncestors(from: URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true))
-        append(FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Developer/GitHub/Harness"))
+        append(Self.homeURL.appendingPathComponent("Developer/GitHub/Harness"))
         if let home = environment["HOME"], !home.isEmpty {
             append(URL(fileURLWithPath: home, isDirectory: true).appendingPathComponent("Developer/GitHub/Harness"))
         }
@@ -223,6 +227,10 @@ public struct PythonSHACLConnectionValidator: TurtleParsing {
         }
         return messages.joined(separator: "; ")
     }
+
+    private static var homeURL: URL {
+        URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+    }
 }
 
 public final class ReviewQueueStore: Sendable {
@@ -244,7 +252,7 @@ public final class ReviewQueueStore: Sendable {
     }
 
     public static func defaultOntologyRoot() -> URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
             .appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs/Documents/Main/Ontology", isDirectory: true)
     }
 
