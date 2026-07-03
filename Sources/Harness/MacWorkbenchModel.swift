@@ -7,7 +7,9 @@ final class MacWorkbenchModel: ObservableObject {
     @Published var ontology: Ontology = .empty
     @Published var runs: [HarnessRun] = []
     @Published var selectedDetail: HarnessRunDetail?
-    @Published var draft = ""
+    @Published var draft = "" {
+        didSet { refreshRoutePlan() }
+    }
     @Published var backend: Backend = .codex
     @Published var apiKey = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] ?? ""
     @Published var isRunning = false
@@ -17,6 +19,8 @@ final class MacWorkbenchModel: ObservableObject {
     @Published var reviewQueueCandidates: [MemoryCandidate] = []
     @Published var connectors: [HarnessConnector] = HarnessConnectorRegistry.defaultConnectors()
     @Published var capabilities: [HarnessCapability] = HarnessCapabilityRegistry.defaultCapabilities()
+    @Published var routePlan = HarnessExecutionRoutePlan(prompt: "", steps: [])
+    @Published var routeExecutionResult: HarnessRouteExecutionResult?
     let toolGroups = WorkbenchToolGroup.defaults
 
     private let ledger: RunLedgerStore
@@ -96,6 +100,81 @@ final class MacWorkbenchModel: ObservableObject {
     func refreshConnectors() {
         connectors = HarnessConnectorRegistry.defaultConnectors()
         capabilities = HarnessCapabilityRegistry.defaultCapabilities()
+        refreshRoutePlan()
+    }
+
+    func refreshRoutePlan() {
+        let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        routePlan = HarnessExecutionRouter.plan(
+            prompt: prompt,
+            connectors: connectors,
+            capabilities: capabilities
+        )
+        routeExecutionResult = nil
+    }
+
+    func runReadOnlyRoute() {
+        let plan = routePlan
+        guard !plan.steps.isEmpty else {
+            status = "No route to run."
+            return
+        }
+        status = "Running read-only route"
+        let connectors = connectors
+        let capabilities = capabilities
+        Task {
+            do {
+                let result = try await HarnessRouteExecutor(
+                    connectors: connectors,
+                    capabilities: capabilities
+                ).executeReadOnly(plan)
+                await MainActor.run {
+                    self.routeExecutionResult = result
+                    self.status = result.summary
+                }
+            } catch {
+                await MainActor.run {
+                    self.status = "Route run failed: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    func approveAndRunRouteStep(_ step: HarnessExecutionRouteStep) {
+        let plan = routePlan
+        guard plan.steps.contains(where: { $0.id == step.id }) else {
+            status = "Route step is no longer current."
+            return
+        }
+        guard step.guardrail == .approvalRequired else {
+            status = "Only approval-gated steps need this action."
+            return
+        }
+
+        status = "Running approved step"
+        let connectors = connectors
+        let capabilities = capabilities
+        Task {
+            do {
+                let result = try await HarnessRouteExecutor(
+                    connectors: connectors,
+                    capabilities: capabilities
+                ).executeApproved(
+                    plan,
+                    approvedStepIDs: [step.id]
+                )
+                await MainActor.run {
+                    self.refreshConnectors()
+                    self.routeExecutionResult = result
+                    self.status = result.summary
+                }
+            } catch {
+                await MainActor.run {
+                    self.refreshConnectors()
+                    self.status = "Approved step failed: \(error.localizedDescription)"
+                }
+            }
+        }
     }
 
     func syncAppleNotes() {
@@ -241,9 +320,12 @@ final class MacWorkbenchModel: ObservableObject {
     func send() {
         let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, !isRunning else { return }
+        refreshRoutePlan()
+        let plannedRoute = routePlan
         draft = ""
+        routePlan = plannedRoute
         isRunning = true
-        status = "Checking graph authority"
+        status = plannedRoute.requiresApproval ? "Route planned; approval-gated steps detected" : "Checking graph authority"
         let selectedBackend = backend
         let key = apiKey.isEmpty ? nil : apiKey
 
@@ -345,6 +427,7 @@ final class MacWorkbenchModel: ObservableObject {
 
 enum WorkbenchInspectorTab: String, CaseIterable, Identifiable {
     case authority = "Authority"
+    case route = "Route"
     case memory = "Memory"
     case connectors = "Connectors"
     case skills = "Skills"

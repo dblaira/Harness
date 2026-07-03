@@ -921,6 +921,509 @@ import Testing
     #expect(HarnessCapabilityRegistry.groupCounts(capabilities).contains { $0.key == "Hermes / apple" && $0.value == 1 })
 }
 
+@Test func executionRouterPlansGuardedPersonalKnowledgeResearch() throws {
+    let home = FileManager.default.temporaryDirectory
+        .appendingPathComponent("HarnessExecutionRouterTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+
+    for path in [
+        "Developer/GitHub/Understood",
+        "Documents/Main",
+        "Documents/Harness/Apple Notes Export",
+        ".hermes/skills/research/llm-wiki",
+        ".claude/skills/research-response",
+        ".agents/skills/firecrawl-deep-research",
+        ".hermes/skills/autonomous-ai-agents/codex",
+        ".claude/skills/web-artifacts-builder"
+    ] {
+        try FileManager.default.createDirectory(
+            at: home.appendingPathComponent(path, isDirectory: true),
+            withIntermediateDirectories: true
+        )
+    }
+    try writeSkill(
+        home.appendingPathComponent(".hermes/skills/research/llm-wiki/SKILL.md"),
+        name: "llm-wiki",
+        description: "Research and summarize AI topics."
+    )
+    try writeSkill(
+        home.appendingPathComponent(".claude/skills/research-response/SKILL.md"),
+        name: "research-response",
+        description: "Source-rich research responses matched to Adam."
+    )
+    try writeSkill(
+        home.appendingPathComponent(".agents/skills/firecrawl-deep-research/SKILL.md"),
+        name: "firecrawl-deep-research",
+        description: "Produce cited deep research."
+    )
+    try writeSkill(
+        home.appendingPathComponent(".hermes/skills/autonomous-ai-agents/codex/SKILL.md"),
+        name: "codex",
+        description: "Delegate coding to OpenAI Codex CLI."
+    )
+    try writeSkill(
+        home.appendingPathComponent(".claude/skills/web-artifacts-builder/SKILL.md"),
+        name: "web-artifacts-builder",
+        description: "Build polished web artifacts."
+    )
+
+    let connectors = HarnessConnectorRegistry.defaultConnectors(homeDirectory: home)
+    let capabilities = HarnessCapabilityRegistry.defaultCapabilities(homeDirectory: home)
+    let plan = HarnessExecutionRouter.plan(
+        prompt: "Research the Understood suite in my GitHub repos and create an outline for marketing their features.",
+        connectors: connectors,
+        capabilities: capabilities
+    )
+
+    #expect(plan.steps.contains { $0.action == .inspectRepository && $0.targetName == "GitHub repositories" && $0.guardrail == .readOnly })
+    #expect(plan.steps.contains { $0.action == .searchMemory && $0.targetName.contains("Obsidian") && $0.guardrail == .readOnly })
+    #expect(plan.steps.contains { $0.action == .runSkill && $0.targetName == "research-response" && $0.guardrail == .readOnly })
+    #expect(plan.steps.contains { $0.action == .runSkill && $0.targetName == "firecrawl-deep-research" && $0.guardrail == .approvalRequired })
+    #expect(plan.steps.contains { $0.action == .createArtifact && $0.targetName == "web-artifacts-builder" })
+    #expect(plan.steps.first?.action == .inspectRepository)
+}
+
+@Test func executionRouterRequiresApprovalForAppleNotesSyncAndAgentDelegation() throws {
+    let home = FileManager.default.temporaryDirectory
+        .appendingPathComponent("HarnessExecutionRouterApprovalTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+
+    for path in [
+        "Developer/GitHub",
+        ".hermes/skills/apple/apple-notes",
+        ".hermes/skills/autonomous-ai-agents/claude-code",
+        ".hermes/skills/autonomous-ai-agents/codex"
+    ] {
+        try FileManager.default.createDirectory(
+            at: home.appendingPathComponent(path, isDirectory: true),
+            withIntermediateDirectories: true
+        )
+    }
+    try writeSkill(
+        home.appendingPathComponent(".hermes/skills/apple/apple-notes/SKILL.md"),
+        name: "apple-notes",
+        description: "Manage Apple Notes via memo CLI: create, search, edit."
+    )
+    try writeSkill(
+        home.appendingPathComponent(".hermes/skills/autonomous-ai-agents/claude-code/SKILL.md"),
+        name: "claude-code",
+        description: "Delegate coding to Claude Code CLI."
+    )
+    try writeSkill(
+        home.appendingPathComponent(".hermes/skills/autonomous-ai-agents/codex/SKILL.md"),
+        name: "codex",
+        description: "Delegate coding to OpenAI Codex CLI."
+    )
+
+    let connectors = HarnessConnectorRegistry.defaultConnectors(homeDirectory: home)
+    let capabilities = HarnessCapabilityRegistry.defaultCapabilities(homeDirectory: home)
+    let plan = HarnessExecutionRouter.plan(
+        prompt: "Sync Apple Notes, then delegate the repo implementation to Codex or Claude Code.",
+        connectors: connectors,
+        capabilities: capabilities
+    )
+
+    #expect(plan.requiresApproval)
+    #expect(plan.steps.contains { $0.action == .syncSource && $0.targetName == "Apple Notes export" && $0.guardrail == .approvalRequired })
+    #expect(plan.steps.contains { $0.action == .delegateAgent && $0.targetName == "codex" && $0.guardrail == .approvalRequired })
+    #expect(plan.steps.contains { $0.action == .delegateAgent && $0.targetName == "claude-code" && $0.guardrail == .approvalRequired })
+}
+
+@Test func routeExecutorRunsReadOnlyLocalEvidenceSteps() async throws {
+    let home = FileManager.default.temporaryDirectory
+        .appendingPathComponent("HarnessRouteExecutorTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+
+    let repo = home.appendingPathComponent("Developer/GitHub/UnderstoodSuite", isDirectory: true)
+    let vault = home.appendingPathComponent("Documents/Main", isDirectory: true)
+    let notes = home.appendingPathComponent("Documents/Harness/Apple Notes Export", isDirectory: true)
+    try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: notes, withIntermediateDirectories: true)
+
+    try "Understood suite feature: repo inspection explains graph authority and agent routing.".write(
+        to: repo.appendingPathComponent("README.md"),
+        atomically: true,
+        encoding: .utf8
+    )
+    try "Understood suite note: marketing should lead with personalized judgement.".write(
+        to: vault.appendingPathComponent("positioning.md"),
+        atomically: true,
+        encoding: .utf8
+    )
+    try "Understood suite Apple Notes capture: explain safe local execution.".write(
+        to: notes.appendingPathComponent("capture.txt"),
+        atomically: true,
+        encoding: .utf8
+    )
+
+    let connectors = HarnessConnectorRegistry.defaultConnectors(homeDirectory: home)
+    let capabilities = HarnessCapabilityRegistry.defaultCapabilities(homeDirectory: home)
+    let plan = HarnessExecutionRouter.plan(
+        prompt: "Research the Understood suite from my GitHub repos, notes, and Obsidian.",
+        connectors: connectors,
+        capabilities: capabilities
+    )
+
+    let result = try await HarnessRouteExecutor(
+        connectors: connectors,
+        memoryLimitPerStep: 3,
+        maxFiles: 40
+    ).executeReadOnly(plan)
+
+    #expect(result.executedSteps.contains { $0.action == .inspectRepository })
+    #expect(result.executedSteps.contains { $0.action == .searchMemory })
+    #expect(result.memoryHits.contains { $0.reasonSelected.contains("local-source github") })
+    #expect(result.memoryHits.contains { $0.reasonSelected.contains("local-source obsidian") })
+    #expect(result.memoryHits.contains { $0.reasonSelected.contains("local-source apple-notes") })
+    #expect(result.blockedSteps.allSatisfy { $0.guardrail != .readOnly })
+}
+
+@Test func routeExecutorBlocksApprovalRequiredSteps() async throws {
+    let home = FileManager.default.temporaryDirectory
+        .appendingPathComponent("HarnessRouteExecutorBlockTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+
+    for path in [
+        "Developer/GitHub",
+        ".hermes/skills/autonomous-ai-agents/codex",
+        ".hermes/skills/apple/apple-notes"
+    ] {
+        try FileManager.default.createDirectory(
+            at: home.appendingPathComponent(path, isDirectory: true),
+            withIntermediateDirectories: true
+        )
+    }
+    try writeSkill(
+        home.appendingPathComponent(".hermes/skills/autonomous-ai-agents/codex/SKILL.md"),
+        name: "codex",
+        description: "Delegate coding to OpenAI Codex CLI."
+    )
+    try writeSkill(
+        home.appendingPathComponent(".hermes/skills/apple/apple-notes/SKILL.md"),
+        name: "apple-notes",
+        description: "Manage Apple Notes via memo CLI."
+    )
+
+    let connectors = HarnessConnectorRegistry.defaultConnectors(homeDirectory: home)
+    let capabilities = HarnessCapabilityRegistry.defaultCapabilities(homeDirectory: home)
+    let plan = HarnessExecutionRouter.plan(
+        prompt: "Sync Apple Notes and delegate implementation to Codex.",
+        connectors: connectors,
+        capabilities: capabilities
+    )
+
+    let result = try await HarnessRouteExecutor(connectors: connectors).executeReadOnly(plan)
+
+    #expect(result.blockedSteps.contains { $0.action == .syncSource && $0.targetName == "Apple Notes export" })
+    #expect(result.blockedSteps.contains { $0.action == .delegateAgent && $0.targetName == "codex" })
+    #expect(!result.executedSteps.contains { $0.guardrail == .approvalRequired })
+}
+
+@Test func routeExecutorRunsApprovedAppleNotesSyncOnly() async throws {
+    let home = FileManager.default.temporaryDirectory
+        .appendingPathComponent("HarnessRouteExecutorApprovalTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+
+    for path in [
+        "Developer/GitHub",
+        ".hermes/skills/autonomous-ai-agents/codex"
+    ] {
+        try FileManager.default.createDirectory(
+            at: home.appendingPathComponent(path, isDirectory: true),
+            withIntermediateDirectories: true
+        )
+    }
+    try writeSkill(
+        home.appendingPathComponent(".hermes/skills/autonomous-ai-agents/codex/SKILL.md"),
+        name: "codex",
+        description: "Delegate coding to OpenAI Codex CLI."
+    )
+
+    let connectors = HarnessConnectorRegistry.defaultConnectors(homeDirectory: home)
+    let capabilities = HarnessCapabilityRegistry.defaultCapabilities(homeDirectory: home)
+    let plan = HarnessExecutionRouter.plan(
+        prompt: "Sync Apple Notes and delegate implementation to Codex.",
+        connectors: connectors,
+        capabilities: capabilities
+    )
+    let syncStep = try #require(plan.steps.first { $0.action == .syncSource })
+    let codexStep = try #require(plan.steps.first { $0.action == .delegateAgent })
+
+    let result = try await HarnessRouteExecutor(connectors: connectors).executeApproved(
+        plan,
+        approvedStepIDs: [syncStep.id],
+        appleNotesSync: { step in
+            return AppleNotesExportResult(
+                outputDirectory: URL(fileURLWithPath: "/tmp/Harness Notes"),
+                exportedCount: step.targetName == "Apple Notes export" ? 3 : 0,
+                rawOutput: "3"
+            )
+        }
+    )
+
+    #expect(result.executedSteps.contains { $0.id == syncStep.id })
+    #expect(result.actionResults.contains { $0.stepID == syncStep.id && $0.summary.contains("3 notes") })
+    #expect(result.blockedSteps.contains { $0.id == codexStep.id })
+    #expect(!result.executedSteps.contains { $0.id == codexStep.id })
+}
+
+@Test func routeExecutorRunsApprovedCodexDelegation() async throws {
+    let home = FileManager.default.temporaryDirectory
+        .appendingPathComponent("HarnessRouteExecutorCodexTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+
+    for path in [
+        "Developer/GitHub",
+        ".hermes/skills/autonomous-ai-agents/codex",
+        ".hermes/skills/autonomous-ai-agents/claude-code"
+    ] {
+        try FileManager.default.createDirectory(
+            at: home.appendingPathComponent(path, isDirectory: true),
+            withIntermediateDirectories: true
+        )
+    }
+    try writeSkill(
+        home.appendingPathComponent(".hermes/skills/autonomous-ai-agents/codex/SKILL.md"),
+        name: "codex",
+        description: "Delegate coding to OpenAI Codex CLI."
+    )
+    try writeSkill(
+        home.appendingPathComponent(".hermes/skills/autonomous-ai-agents/claude-code/SKILL.md"),
+        name: "claude-code",
+        description: "Delegate coding to Claude Code CLI."
+    )
+
+    let connectors = HarnessConnectorRegistry.defaultConnectors(homeDirectory: home)
+    let capabilities = HarnessCapabilityRegistry.defaultCapabilities(homeDirectory: home)
+    let plan = HarnessExecutionRouter.plan(
+        prompt: "Delegate implementation to Codex or Claude Code.",
+        connectors: connectors,
+        capabilities: capabilities
+    )
+    let codexStep = try #require(plan.steps.first { $0.action == .delegateAgent && $0.targetName == "codex" })
+    let claudeStep = try #require(plan.steps.first { $0.action == .delegateAgent && $0.targetName == "claude-code" })
+
+    let result = try await HarnessRouteExecutor(connectors: connectors).executeApproved(
+        plan,
+        approvedStepIDs: [codexStep.id],
+        codexDelegate: { prompt in
+            "Codex received: \(prompt)"
+        }
+    )
+
+    #expect(result.executedSteps.contains { $0.id == codexStep.id })
+    #expect(result.actionResults.contains { $0.stepID == codexStep.id && $0.summary.contains("Codex received") })
+    #expect(result.blockedSteps.contains { $0.id == claudeStep.id })
+    #expect(!result.executedSteps.contains { $0.id == claudeStep.id })
+}
+
+@Test func routeExecutorRunsApprovedClaudeAndHermesDelegation() async throws {
+    let home = FileManager.default.temporaryDirectory
+        .appendingPathComponent("HarnessRouteExecutorAgentTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+
+    for path in [
+        "Developer/GitHub",
+        ".hermes/skills/autonomous-ai-agents/claude-code",
+        ".hermes/skills/autonomous-ai-agents/hermes-agent",
+        ".hermes/skills/autonomous-ai-agents/codex"
+    ] {
+        try FileManager.default.createDirectory(
+            at: home.appendingPathComponent(path, isDirectory: true),
+            withIntermediateDirectories: true
+        )
+    }
+    try writeSkill(
+        home.appendingPathComponent(".hermes/skills/autonomous-ai-agents/claude-code/SKILL.md"),
+        name: "claude-code",
+        description: "Delegate coding to Claude Code CLI."
+    )
+    try writeSkill(
+        home.appendingPathComponent(".hermes/skills/autonomous-ai-agents/hermes-agent/SKILL.md"),
+        name: "hermes-agent",
+        description: "Configure, extend, or contribute to Hermes Agent."
+    )
+    try writeSkill(
+        home.appendingPathComponent(".hermes/skills/autonomous-ai-agents/codex/SKILL.md"),
+        name: "codex",
+        description: "Delegate coding to OpenAI Codex CLI."
+    )
+
+    let connectors = HarnessConnectorRegistry.defaultConnectors(homeDirectory: home)
+    let capabilities = HarnessCapabilityRegistry.defaultCapabilities(homeDirectory: home)
+    let plan = HarnessExecutionRouter.plan(
+        prompt: "Delegate implementation to Claude Code and Hermes Agent.",
+        connectors: connectors,
+        capabilities: capabilities
+    )
+    let claudeStep = try #require(plan.steps.first { $0.action == .delegateAgent && $0.targetName == "claude-code" })
+    let hermesStep = try #require(plan.steps.first { $0.action == .delegateAgent && $0.targetName == "hermes-agent" })
+    let codexStep = try #require(plan.steps.first { $0.action == .delegateAgent && $0.targetName == "codex" })
+
+    let result = try await HarnessRouteExecutor(connectors: connectors).executeApproved(
+        plan,
+        approvedStepIDs: [claudeStep.id, hermesStep.id],
+        claudeDelegate: { prompt in
+            "Claude received: \(prompt)"
+        },
+        hermesDelegate: { prompt in
+            "Hermes received: \(prompt)"
+        }
+    )
+
+    #expect(result.executedSteps.contains { $0.id == claudeStep.id })
+    #expect(result.executedSteps.contains { $0.id == hermesStep.id })
+    #expect(result.actionResults.contains { $0.stepID == claudeStep.id && $0.summary.contains("Claude received") })
+    #expect(result.actionResults.contains { $0.stepID == hermesStep.id && $0.summary.contains("Hermes received") })
+    #expect(result.blockedSteps.contains { $0.id == codexStep.id })
+}
+
+@Test func routeExecutorCreatesApprovedMarkdownArtifact() async throws {
+    let home = FileManager.default.temporaryDirectory
+        .appendingPathComponent("HarnessRouteExecutorArtifactTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+
+    let skill = home.appendingPathComponent(".claude/skills/web-artifacts-builder/SKILL.md")
+    try writeSkill(
+        skill,
+        name: "web-artifacts-builder",
+        description: "Build polished web artifacts."
+    )
+
+    let connectors = HarnessConnectorRegistry.defaultConnectors(homeDirectory: home)
+    let capabilities = HarnessCapabilityRegistry.defaultCapabilities(homeDirectory: home)
+    let plan = HarnessExecutionRouter.plan(
+        prompt: "Create an outline for marketing the Understood suite.",
+        connectors: connectors,
+        capabilities: capabilities
+    )
+    let artifactStep = try #require(plan.steps.first { $0.action == .createArtifact })
+    let outputDirectory = home.appendingPathComponent("Documents/Harness/Artifacts", isDirectory: true)
+
+    let result = try await HarnessRouteExecutor(connectors: connectors).executeApproved(
+        plan,
+        approvedStepIDs: [artifactStep.id],
+        artifactDirectory: outputDirectory
+    )
+
+    let action = try #require(result.actionResults.first { $0.stepID == artifactStep.id })
+    let artifactURL = try #require(action.artifactURL)
+    let text = try String(contentsOf: artifactURL, encoding: .utf8)
+
+    #expect(result.executedSteps.contains { $0.id == artifactStep.id })
+    #expect(artifactURL.path.hasPrefix(outputDirectory.path))
+    #expect(text.contains("# Harness Artifact"))
+    #expect(text.contains("Create an outline for marketing the Understood suite."))
+    #expect(action.summary.contains(artifactURL.path))
+}
+
+@Test func routeExecutorRunsApprovedResearchSkills() async throws {
+    let home = FileManager.default.temporaryDirectory
+        .appendingPathComponent("HarnessRouteExecutorResearchTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+
+    try writeSkill(
+        home.appendingPathComponent(".claude/skills/research-response/SKILL.md"),
+        name: "research-response",
+        description: "Source-rich research responses matched to Adam."
+    )
+    try writeSkill(
+        home.appendingPathComponent(".agents/skills/firecrawl-deep-research/SKILL.md"),
+        name: "firecrawl-deep-research",
+        description: "Produce cited deep research."
+    )
+
+    let connectors = HarnessConnectorRegistry.defaultConnectors(homeDirectory: home)
+    let capabilities = HarnessCapabilityRegistry.defaultCapabilities(homeDirectory: home)
+    let plan = HarnessExecutionRouter.plan(
+        prompt: "Research the Understood market and produce a concise synthesis.",
+        connectors: connectors,
+        capabilities: capabilities
+    )
+    let localResearch = try #require(plan.steps.first { $0.action == .runSkill && $0.targetName == "research-response" })
+    let externalResearch = try #require(plan.steps.first { $0.action == .runSkill && $0.targetName == "firecrawl-deep-research" })
+
+    let result = try await HarnessRouteExecutor(connectors: connectors).executeApproved(
+        plan,
+        approvedStepIDs: [localResearch.id],
+        researchDelegate: { prompt in
+            "Research brief: \(prompt)"
+        }
+    )
+
+    #expect(result.executedSteps.contains { $0.id == localResearch.id })
+    #expect(result.actionResults.contains { $0.stepID == localResearch.id && $0.summary.contains("Research brief") })
+    #expect(result.blockedSteps.contains { $0.id == externalResearch.id })
+}
+
+@Test func routeExecutorIncludesResearchSkillInstructionContext() async throws {
+    let home = FileManager.default.temporaryDirectory
+        .appendingPathComponent("HarnessRouteExecutorResearchContextTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+
+    try writeSkill(
+        home.appendingPathComponent(".claude/skills/research-response/SKILL.md"),
+        name: "research-response",
+        description: "Source-rich research responses matched to Adam."
+    )
+    let connectors = HarnessConnectorRegistry.defaultConnectors(homeDirectory: home)
+    let capabilities = HarnessCapabilityRegistry.defaultCapabilities(homeDirectory: home)
+    let plan = HarnessExecutionRouter.plan(
+        prompt: "Research positioning for Harness.",
+        connectors: connectors,
+        capabilities: capabilities
+    )
+    let localResearch = try #require(plan.steps.first { $0.action == .runSkill && $0.targetName == "research-response" })
+
+    let result = try await HarnessRouteExecutor(
+        connectors: connectors,
+        capabilities: capabilities
+    ).executeApproved(
+        plan,
+        approvedStepIDs: [localResearch.id],
+        researchDelegate: { prompt in
+            prompt.contains("Source-rich research responses matched to Adam.")
+                ? "Skill context present"
+                : "Skill context missing"
+        }
+    )
+
+    #expect(result.actionResults.contains { $0.stepID == localResearch.id && $0.summary == "Skill context present" })
+}
+
+@Test func routeExecutorRunsApprovedExternalResearchSkill() async throws {
+    let home = FileManager.default.temporaryDirectory
+        .appendingPathComponent("HarnessRouteExecutorExternalResearchTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+
+    try writeSkill(
+        home.appendingPathComponent(".agents/skills/firecrawl-deep-research/SKILL.md"),
+        name: "firecrawl-deep-research",
+        description: "Produce cited deep research."
+    )
+
+    let connectors = HarnessConnectorRegistry.defaultConnectors(homeDirectory: home)
+    let capabilities = HarnessCapabilityRegistry.defaultCapabilities(homeDirectory: home)
+    let plan = HarnessExecutionRouter.plan(
+        prompt: "Research competitors with deep web sources.",
+        connectors: connectors,
+        capabilities: capabilities
+    )
+    let externalResearch = try #require(plan.steps.first { $0.action == .runSkill && $0.targetName == "firecrawl-deep-research" })
+
+    let result = try await HarnessRouteExecutor(connectors: connectors).executeApproved(
+        plan,
+        approvedStepIDs: [externalResearch.id],
+        externalResearchDelegate: { prompt in
+            "External research brief: \(prompt)"
+        }
+    )
+
+    #expect(result.executedSteps.contains { $0.id == externalResearch.id })
+    #expect(result.actionResults.contains { $0.stepID == externalResearch.id && $0.summary.contains("External research brief") })
+}
+
 private struct StaticMemoryRetriever: SupportingMemoryRetrieving {
     let hit: MemoryHit?
 

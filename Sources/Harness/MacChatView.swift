@@ -367,6 +367,8 @@ struct MacChatView: View {
                     switch inspectorTab {
                     case .authority:
                         authorityPanel
+                    case .route:
+                        routePanel
                     case .memory:
                         memoryPanel
                     case .connectors:
@@ -407,6 +409,107 @@ struct MacChatView: View {
                 emptyInspectorText("No accepted graph authority selected yet.")
             }
         }
+    }
+
+    private var routePanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text(model.routePlan.summary)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.macInk.opacity(0.58))
+                    .lineLimit(2)
+                Spacer()
+                Button {
+                    model.runReadOnlyRoute()
+                } label: {
+                    Image(systemName: "play.fill")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(model.routePlan.steps.isEmpty ? Theme.macInk.opacity(0.28) : Theme.macInk.opacity(0.68))
+                        .frame(width: 28, height: 24)
+                        .background(Theme.macEntry.opacity(0.28), in: RoundedRectangle(cornerRadius: 7))
+                        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.macHair, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .disabled(model.routePlan.steps.isEmpty)
+                .help("Run read-only route steps")
+                statusBadge(model.routePlan.requiresApproval ? "approval" : "read-only")
+            }
+
+            if model.routePlan.steps.isEmpty {
+                emptyInspectorText("Type a prompt to preview the guarded route before execution.")
+            } else {
+                ForEach(model.routePlan.steps) { step in
+                    routeStepBlock(step)
+                }
+            }
+
+            if let result = model.routeExecutionResult {
+                inspectorBlock(
+                    title: "Read-only route result",
+                    subtitle: "\(result.executedSteps.count) executed - \(result.blockedSteps.count) blocked",
+                    body: result.summary,
+                    status: "executed"
+                )
+
+                ForEach(result.actionResults) { actionResult in
+                    inspectorBlock(
+                        title: actionResult.targetName,
+                        subtitle: actionResult.action.rawValue,
+                        body: actionResult.summary,
+                        status: "action"
+                    )
+                }
+
+                ForEach(result.memoryHits.prefix(5)) { hit in
+                    inspectorBlock(
+                        title: hit.source,
+                        subtitle: "supporting memory - score \(hit.score.formatted(.number.precision(.fractionLength(2))))",
+                        body: "\(hit.reasonSelected)\n\n\(hit.excerpt)",
+                        status: "evidence"
+                    )
+                }
+            }
+        }
+    }
+
+    private func routeStepBlock(_ step: HarnessExecutionRouteStep) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(step.targetName)
+                    .font(.system(size: 12).weight(.semibold))
+                    .foregroundStyle(Theme.macInk)
+                    .lineLimit(2)
+                Spacer(minLength: 8)
+                if step.guardrail == .approvalRequired {
+                    Button {
+                        model.approveAndRunRouteStep(step)
+                    } label: {
+                        Image(systemName: "checkmark.circle")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Theme.macInk.opacity(0.68))
+                            .frame(width: 24, height: 22)
+                            .background(Theme.macEntry.opacity(0.28), in: RoundedRectangle(cornerRadius: 7))
+                            .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.macHair, lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Approve and run this step")
+                }
+                statusBadge(step.guardrail.rawValue)
+            }
+            Text("\(step.sourceSystem) - \(step.action.rawValue)")
+                .font(.caption2)
+                .foregroundStyle(Theme.macInk.opacity(0.46))
+                .lineLimit(1)
+            Text("\(step.reason)\n\nState: \(step.state.rawValue)")
+                .font(.caption)
+                .foregroundStyle(Theme.macInk.opacity(0.72))
+                .textSelection(.enabled)
+                .lineLimit(8)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.macEntry.opacity(0.24), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
     }
 
     private var memoryPanel: some View {
