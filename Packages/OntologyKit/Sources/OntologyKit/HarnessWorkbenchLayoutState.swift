@@ -1,12 +1,12 @@
 import Foundation
 
 public struct HarnessWorkbenchLayoutState: Codable, Sendable, Equatable {
-    public static let defaultSidebarWidth: Double = 260
-    public static let minimumSidebarWidth: Double = 220
-    public static let maximumSidebarWidth: Double = 300
-    public static let defaultInspectorWidth: Double = 420
-    public static let minimumInspectorWidth: Double = 360
-    public static let maximumInspectorWidth: Double = 460
+    public static let defaultSidebarWidth: Double = 220
+    public static let minimumSidebarWidth: Double = 190
+    public static let maximumSidebarWidth: Double = 260
+    public static let defaultInspectorWidth: Double = 220
+    public static let minimumInspectorWidth: Double = 190
+    public static let maximumInspectorWidth: Double = 280
     public static let transcriptMinimumWidth: Double = 560
     public static let resizeHandleWidth: Double = 8
     public static let dividerWidth: Double = 1

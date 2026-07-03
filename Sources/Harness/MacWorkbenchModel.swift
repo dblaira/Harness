@@ -505,7 +505,7 @@ enum WorkbenchInspectorTab: String, CaseIterable, Identifiable {
     case authority = "Authority"
     case route = "Route"
     case memory = "Memory"
-    case connectors = "Connectors"
+    case connectors = "Connections"
     case skills = "Skills"
     case trace = "Trace"
     case candidates = "Candidates"

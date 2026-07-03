@@ -8,10 +8,11 @@ struct MacChatView: View {
     @State private var inspectorTab: WorkbenchInspectorTab = .authority
     @SceneStorage("MacChatView.isSidebarVisible") private var isSidebarVisible = true
     @SceneStorage("MacChatView.isInspectorVisible") private var isInspectorVisible = true
-    @SceneStorage("MacChatView.sidebarWidth") private var sidebarWidth = HarnessWorkbenchLayoutState.defaultSidebarWidth
-    @SceneStorage("MacChatView.inspectorWidth") private var inspectorWidth = HarnessWorkbenchLayoutState.defaultInspectorWidth
+    @SceneStorage("MacChatView.sidebarRailWidth") private var sidebarWidth = HarnessWorkbenchLayoutState.defaultSidebarWidth
+    @SceneStorage("MacChatView.inspectorRailWidth") private var inspectorWidth = HarnessWorkbenchLayoutState.defaultInspectorWidth
     @State private var sidebarDragStartWidth: Double?
     @State private var inspectorDragStartWidth: Double?
+    @State private var isInspectorDetailPresented = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -32,6 +33,9 @@ struct MacChatView: View {
         .onAppear {
             normalizePanelWidths()
             model.updateOntology(ontology)
+        }
+        .sheet(isPresented: $isInspectorDetailPresented) {
+            expandedInspectorSheet
         }
         .onChange(of: ontology.connections.count) { _, _ in model.updateOntology(ontology) }
         .onChange(of: model.searchText) { _, _ in Task { await model.searchRuns() } }
@@ -518,37 +522,58 @@ struct MacChatView: View {
     }
 
     private var inspector: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                Picker("Inspector", selection: $inspectorTab) {
-                    ForEach(WorkbenchInspectorTab.allCases) { tab in
-                        Text(tab.rawValue).tag(tab)
-                    }
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text("Analysis")
+                    .font(.system(size: 11).weight(.bold))
+                    .tracking(1.3)
+                    .foregroundStyle(Theme.macInk.opacity(0.58))
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Button {
+                    isInspectorDetailPresented = true
+                } label: {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .font(.system(size: 11).weight(.semibold))
+                        .foregroundStyle(Theme.macInk.opacity(0.66))
+                        .frame(width: 24, height: 22)
+                        .background(Theme.macEntry.opacity(0.28), in: RoundedRectangle(cornerRadius: 6))
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.macHair, lineWidth: 1))
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(minWidth: 520)
+                .buttonStyle(.plain)
+                .help("Open full analysis")
             }
-            .frame(maxWidth: .infinity)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    switch inspectorTab {
-                    case .authority:
-                        authorityPanel
-                    case .route:
-                        routePanel
-                    case .memory:
-                        memoryPanel
-                    case .connectors:
-                        connectorPanel
-                    case .skills:
-                        capabilityPanel
-                    case .trace:
-                        tracePanel
-                    case .candidates:
-                        candidatePanel
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(compactInspectorTabs) { tab in
+                        compactInspectorCard(tab)
                     }
+
+                    Menu {
+                        ForEach(WorkbenchInspectorTab.allCases.filter { !compactInspectorTabs.contains($0) }) { tab in
+                            Button {
+                                openInspectorDetail(tab)
+                            } label: {
+                                Label(tab.rawValue, systemImage: inspectorIcon(tab))
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "ellipsis.circle")
+                                .frame(width: 14)
+                            Text("More")
+                                .font(.caption.weight(.semibold))
+                            Spacer()
+                        }
+                        .foregroundStyle(Theme.macInk.opacity(0.62))
+                        .padding(9)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Theme.macEntry.opacity(0.18), in: RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -556,11 +581,208 @@ struct MacChatView: View {
             Text(model.status)
                 .font(.caption)
                 .foregroundStyle(Theme.macInk.opacity(0.45))
-                .lineLimit(2)
+                .lineLimit(3)
         }
-        .padding(14)
+        .padding(10)
         .frame(width: CGFloat(currentLayout.inspectorWidth), alignment: .leading)
         .background(Theme.macBg)
+    }
+
+    private var compactInspectorTabs: [WorkbenchInspectorTab] {
+        [.authority, .route, .memory, .connectors]
+    }
+
+    private func openInspectorDetail(_ tab: WorkbenchInspectorTab) {
+        inspectorTab = tab
+        isInspectorDetailPresented = true
+    }
+
+    private func compactInspectorCard(_ tab: WorkbenchInspectorTab) -> some View {
+        Button {
+            openInspectorDetail(tab)
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 7) {
+                    Image(systemName: inspectorIcon(tab))
+                        .font(.system(size: 11).weight(.semibold))
+                        .frame(width: 14)
+                        .foregroundStyle(Theme.macInk.opacity(0.62))
+                    Text(tab.rawValue)
+                        .font(.system(size: 12).weight(.semibold))
+                        .foregroundStyle(Theme.macInk.opacity(0.78))
+                        .lineLimit(1)
+                    Spacer(minLength: 6)
+                    Text(compactInspectorMetric(tab))
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(Theme.macInk.opacity(0.58))
+                        .lineLimit(1)
+                }
+
+                Text(compactInspectorSummary(tab))
+                    .font(.caption2)
+                    .foregroundStyle(Theme.macInk.opacity(0.48))
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.macEntry.opacity(inspectorTab == tab ? 0.3 : 0.18), in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .help("Open \(tab.rawValue)")
+    }
+
+    private var expandedInspectorSheet: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(inspectorTab.rawValue)
+                        .font(.system(.title2, design: .serif).weight(.semibold))
+                        .foregroundStyle(Theme.macInk)
+                    Text("Full analysis")
+                        .font(.caption)
+                        .foregroundStyle(Theme.macInk.opacity(0.52))
+                }
+
+                Spacer()
+
+                Button {
+                    isInspectorDetailPresented = false
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12).weight(.semibold))
+                        .foregroundStyle(Theme.macInk.opacity(0.66))
+                        .frame(width: 28, height: 26)
+                        .background(Theme.macEntry.opacity(0.28), in: RoundedRectangle(cornerRadius: 7))
+                        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.macHair, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .help("Close")
+            }
+            .padding(.horizontal, 22)
+            .padding(.vertical, 16)
+            .overlay(Rectangle().fill(Theme.macHair).frame(height: 1), alignment: .bottom)
+
+            HStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(WorkbenchInspectorTab.allCases) { tab in
+                        Button {
+                            inspectorTab = tab
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: inspectorIcon(tab))
+                                    .frame(width: 15)
+                                Text(tab.rawValue)
+                                    .lineLimit(1)
+                                Spacer()
+                            }
+                            .font(.system(size: 12).weight(.semibold))
+                            .foregroundStyle(inspectorTab == tab ? Theme.macInk : Theme.macInk.opacity(0.56))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .background(inspectorTab == tab ? Theme.macEntry.opacity(0.36) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    Spacer(minLength: 0)
+                }
+                .padding(14)
+                .frame(width: 180, alignment: .topLeading)
+                .background(Theme.macEntry.opacity(0.08))
+
+                Divider().overlay(Theme.macHair)
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        inspectorPanel(for: inspectorTab)
+                    }
+                    .padding(22)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .frame(minWidth: 980, idealWidth: 1_120, minHeight: 720, idealHeight: 820)
+        .background(Theme.macBg)
+    }
+
+    @ViewBuilder
+    private func inspectorPanel(for tab: WorkbenchInspectorTab) -> some View {
+        switch tab {
+        case .authority:
+            authorityPanel
+        case .route:
+            routePanel
+        case .memory:
+            memoryPanel
+        case .connectors:
+            connectorPanel
+        case .skills:
+            capabilityPanel
+        case .trace:
+            tracePanel
+        case .candidates:
+            candidatePanel
+        }
+    }
+
+    private func compactInspectorMetric(_ tab: WorkbenchInspectorTab) -> String {
+        switch tab {
+        case .authority:
+            return "\(model.selectedDetail?.authorityHits.count ?? 0)"
+        case .route:
+            return model.routePlan.steps.isEmpty ? "idle" : "\(model.routePlan.steps.count)"
+        case .memory:
+            return "\(model.selectedDetail?.memoryHits.count ?? 0)"
+        case .connectors:
+            let available = model.connectors.filter { $0.state == .available }.count
+            return "\(available)/\(model.connectors.count)"
+        case .skills:
+            return "\(model.capabilities.count)"
+        case .trace:
+            return "\(model.selectedDetail?.traceEvents.count ?? 0)"
+        case .candidates:
+            return "\(model.reviewQueueCandidates.count)"
+        }
+    }
+
+    private func compactInspectorSummary(_ tab: WorkbenchInspectorTab) -> String {
+        switch tab {
+        case .authority:
+            return model.selectedDetail?.authorityHits.first?.subject ?? "Accepted graph context"
+        case .route:
+            return model.routePlan.summary
+        case .memory:
+            return model.selectedDetail?.memoryHits.first?.source ?? "Local notes and repo memory"
+        case .connectors:
+            return "Sources, skills, plugins, and MCP"
+        case .skills:
+            return "Discovered agent abilities"
+        case .trace:
+            return model.selectedDetail?.traceEvents.first?.message ?? "Run ledger and eval checks"
+        case .candidates:
+            return model.reviewQueueCandidates.first?.plainEnglish ?? "Claims waiting for review"
+        }
+    }
+
+    private func inspectorIcon(_ tab: WorkbenchInspectorTab) -> String {
+        switch tab {
+        case .authority:
+            return "checkmark.seal"
+        case .route:
+            return "arrow.triangle.branch"
+        case .memory:
+            return "archivebox"
+        case .connectors:
+            return "point.3.connected.trianglepath.dotted"
+        case .skills:
+            return "wrench.and.screwdriver"
+        case .trace:
+            return "waveform.path.ecg"
+        case .candidates:
+            return "tray.and.arrow.down"
+        }
     }
 
     private var authorityPanel: some View {

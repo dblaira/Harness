@@ -941,12 +941,12 @@ import Testing
 
     #expect(layout.isSidebarVisible)
     #expect(layout.isInspectorVisible)
-    #expect(layout.minimumWindowWidth == 1_258)
+    #expect(layout.minimumWindowWidth == 1_018)
 
     layout.toggleSidebar()
     #expect(!layout.isSidebarVisible)
     #expect(layout.isInspectorVisible)
-    #expect(layout.minimumWindowWidth == 989)
+    #expect(layout.minimumWindowWidth == 789)
 
     layout.toggleInspector()
     #expect(!layout.isSidebarVisible)
@@ -956,7 +956,7 @@ import Testing
     layout.toggleSidebar()
     #expect(layout.isSidebarVisible)
     #expect(!layout.isInspectorVisible)
-    #expect(layout.minimumWindowWidth == 829)
+    #expect(layout.minimumWindowWidth == 789)
 }
 
 @Test func workbenchLayoutStateClampsSidePanelResize() {
@@ -965,19 +965,29 @@ import Testing
     #expect(layout.sidebarWidth == HarnessWorkbenchLayoutState.minimumSidebarWidth)
     #expect(layout.inspectorWidth == HarnessWorkbenchLayoutState.maximumInspectorWidth)
 
-    layout.resizeSidebar(to: 286)
-    layout.resizeInspector(to: 372)
+    layout.resizeSidebar(to: 244)
+    layout.resizeInspector(to: 236)
 
-    #expect(layout.sidebarWidth == 286)
-    #expect(layout.inspectorWidth == 372)
-    #expect(layout.minimumWindowWidth == 1_236)
+    #expect(layout.sidebarWidth == 244)
+    #expect(layout.inspectorWidth == 236)
+    #expect(layout.minimumWindowWidth == 1_058)
 
     layout.resizeSidebar(to: 999)
     layout.resizeInspector(to: 120)
 
     #expect(layout.sidebarWidth == HarnessWorkbenchLayoutState.maximumSidebarWidth)
     #expect(layout.inspectorWidth == HarnessWorkbenchLayoutState.minimumInspectorWidth)
-    #expect(layout.minimumWindowWidth == 1_238)
+    #expect(layout.minimumWindowWidth == 1_028)
+}
+
+@Test func workbenchLayoutStateDefaultsToNarrowSideRails() {
+    let layout = HarnessWorkbenchLayoutState()
+
+    #expect(layout.sidebarWidth == 220)
+    #expect(layout.inspectorWidth == 220)
+    #expect(HarnessWorkbenchLayoutState.maximumSidebarWidth == 260)
+    #expect(HarnessWorkbenchLayoutState.maximumInspectorWidth == 280)
+    #expect(layout.minimumWindowWidth == 1_018)
 }
 
 @Test func capabilityRegistryDiscoversAgentSkillsAndPluginManifests() throws {
