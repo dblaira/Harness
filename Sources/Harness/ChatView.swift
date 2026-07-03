@@ -396,10 +396,20 @@ private struct HarnessMessageBubble: View {
                 Text(message.fromMe ? "You" : backend.phoneDisplayName)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Theme.iosMuted)
-                Text(message.text)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(Theme.iosText)
-                    .fixedSize(horizontal: false, vertical: true)
+                if message.fromMe {
+                    Text(message.text)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(Theme.iosText)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    HarnessMarkdownText(
+                        text: message.text,
+                        textColor: Theme.iosText,
+                        bodyFont: .system(size: 16, weight: .medium),
+                        h1Font: .system(size: 22, weight: .bold),
+                        h2Font: .system(size: 18, weight: .semibold)
+                    )
+                }
             }
             .padding(14)
             .background(message.fromMe ? Theme.iosBubble : Theme.iosPanel, in: RoundedRectangle(cornerRadius: 18))
@@ -407,6 +417,84 @@ private struct HarnessMessageBubble: View {
             if !message.fromMe { Spacer(minLength: 42) }
         }
     }
+}
+
+struct HarnessMarkdownText: View {
+    let text: String
+    let textColor: Color
+    let bodyFont: Font
+    let h1Font: Font
+    let h2Font: Font
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                switch block {
+                case .heading(let level, let content):
+                    markdownText(content)
+                        .font(level == 1 ? h1Font : h2Font)
+                        .foregroundStyle(textColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, level == 1 ? 8 : 4)
+                case .paragraph(let content):
+                    markdownText(content)
+                        .font(bodyFont)
+                        .foregroundStyle(textColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var blocks: [MarkdownBlock] {
+        var parsed: [MarkdownBlock] = []
+        var paragraph: [String] = []
+
+        func flushParagraph() {
+            let content = paragraph.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !content.isEmpty {
+                parsed.append(.paragraph(content))
+            }
+            paragraph.removeAll()
+        }
+
+        for line in text.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty {
+                flushParagraph()
+            } else if trimmed.hasPrefix("## ") {
+                flushParagraph()
+                parsed.append(.heading(level: 2, content: String(trimmed.dropFirst(3))))
+            } else if trimmed.hasPrefix("# ") {
+                flushParagraph()
+                parsed.append(.heading(level: 1, content: String(trimmed.dropFirst(2))))
+            } else {
+                paragraph.append(line)
+            }
+        }
+        flushParagraph()
+
+        if parsed.isEmpty {
+            parsed.append(.paragraph(text))
+        }
+        return parsed
+    }
+
+    private func markdownText(_ content: String) -> Text {
+        if let attributed = try? AttributedString(
+            markdown: content,
+            options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        ) {
+            return Text(attributed)
+        }
+        return Text(content)
+    }
+}
+
+private enum MarkdownBlock {
+    case heading(level: Int, content: String)
+    case paragraph(String)
 }
 
 private struct HarnessQuickActionCarousel: View {

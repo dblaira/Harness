@@ -70,6 +70,7 @@ public struct HarnessRunService: Sendable {
             answer: redactedAnswer,
             authorityHits: authorityHits,
             memoryHits: memoryHits,
+            prompt: redactedPrompt,
             runId: runId
         )
         trace.append(TraceEvent(runId: runId, stage: .evaluation, message: "Evaluated \(evalResults.count) deterministic checks."))

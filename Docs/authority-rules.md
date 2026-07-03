@@ -8,3 +8,4 @@ When using `/candidates`, label it unreviewed.
 Never call vault bulk extraction Adam-approved.
 Never mix default graph data into authority.
 If graphs disagree, `/accepted` wins.
+Use `Docs/skills/pyramid-stimulus-response/SKILL.md` for substantive response shape.

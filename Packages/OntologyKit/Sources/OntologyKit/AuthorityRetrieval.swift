@@ -230,7 +230,23 @@ public enum PromptPacketBuilder {
                 system += "  - \(hit.source): \(hit.excerpt)\n"
             }
         }
-        system += "\nRules: answer plainly first; cite the accepted rule if one shaped the answer; include `Adam Pattern Step: 1-8` or `Adam Pattern Step: none`; never present candidate or supporting memory as accepted graph authority."
+        system += """
+
+        PYRAMID RESPONSE FORMAT:
+        For casual exchanges under 15 words, reply briefly.
+        For substantive answers, use markdown H1 chapters in this order:
+        # ☀️ Takeaway 💥 (Executive Conclusion)
+        - 2-4 short bullets.
+        # Consequence (Consequence)
+        - Bullets only; use ⚠️ only for serious items.
+        # Recommendation (Recommendation)
+        Short prose, no bullets; status and housekeeping belong here.
+        # Supporting Evidence on Request (Supporting Evidence on Request)
+        Full detail, rule citations, SPARQL counts, and Adam Pattern step naming belong here when not placed earlier.
+        Heading text is the takeaway; the chapter label stays in parentheses at the end.
+        Keep caveats inline in italics, never as trailing notes.
+        Existing rules still apply: cite the accepted rule if one shaped the answer; include `Rule: <id>` or `Rule: none`; include `Adam Pattern Step: 1-8` or `Adam Pattern Step: none`; never present candidate or supporting memory as accepted graph authority.
+        """
 
         let hashInput = prompt + "\n" + system
         return ModelPacket(

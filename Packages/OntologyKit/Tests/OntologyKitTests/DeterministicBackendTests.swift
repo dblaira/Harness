@@ -458,6 +458,97 @@ import Testing
     #expect(execution.contains { $0.checkName == "observational-zone-before-execution" && !$0.passed && $0.detail.contains("Warning") })
 }
 
+@Test func pyramidFormatEvalAcceptsCanonicalHeadings() {
+    let evaluator = DeterministicAnswerEvaluator()
+    let answer = """
+    # This is the takeaway (Executive Conclusion)
+
+    - First point.
+    - Second point.
+
+    # What changes now (Consequence)
+
+    - Serious items first.
+
+    # Do this next (Recommendation)
+
+    Keep the next step short.
+
+    # Details if needed (Supporting Evidence on Request)
+
+    Rule: none
+    Adam Pattern Step: none
+    """
+
+    let results = evaluator.evaluate(
+        answer: answer,
+        authorityHits: [],
+        memoryHits: [],
+        prompt: "Explain the pyramid format.",
+        runId: "run-pyramid-happy"
+    )
+
+    #expect(results.contains { $0.checkName == "plain-answer-first" && $0.passed })
+    #expect(results.contains { $0.checkName == "pyramid-format" && $0.passed })
+}
+
+@Test func pyramidFormatEvalRejectsWrongOrder() {
+    let evaluator = DeterministicAnswerEvaluator()
+    let answer = """
+    # This is the takeaway (Executive Conclusion)
+
+    # Do this next (Recommendation)
+
+    Rule: none
+    Adam Pattern Step: none
+
+    # What changes now (Consequence)
+    """
+
+    let results = evaluator.evaluate(
+        answer: answer,
+        authorityHits: [],
+        memoryHits: [],
+        prompt: "Explain the pyramid format.",
+        runId: "run-pyramid-order"
+    )
+
+    #expect(results.contains { $0.checkName == "pyramid-format" && !$0.passed })
+}
+
+@Test func pyramidFormatEvalRejectsLabelAtStart() {
+    let evaluator = DeterministicAnswerEvaluator()
+    let answer = """
+    # (Executive Conclusion) This is the takeaway
+
+    Rule: none
+    Adam Pattern Step: none
+    """
+
+    let results = evaluator.evaluate(
+        answer: answer,
+        authorityHits: [],
+        memoryHits: [],
+        prompt: "Explain the pyramid format.",
+        runId: "run-pyramid-label-start"
+    )
+
+    #expect(results.contains { $0.checkName == "pyramid-format" && !$0.passed })
+}
+
+@Test func pyramidFormatEvalExemptsCasualShortPrompts() {
+    let evaluator = DeterministicAnswerEvaluator()
+    let results = evaluator.evaluate(
+        answer: "You're welcome.\n\nRule: none\nAdam Pattern Step: none",
+        authorityHits: [],
+        memoryHits: [],
+        prompt: "thanks",
+        runId: "run-pyramid-casual"
+    )
+
+    #expect(results.contains { $0.checkName == "pyramid-format" && $0.passed && $0.detail == "exempt-casual" })
+}
+
 @Test func runLedgerPersistsSearchableRunDetail() async throws {
     let ontology = OntologyLoader.load()
     let ledger = try RunLedgerStore.inMemory()

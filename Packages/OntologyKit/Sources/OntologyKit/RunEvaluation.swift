@@ -1,13 +1,19 @@
 import Foundation
 
 public protocol AnswerEvaluating: Sendable {
-    func evaluate(answer: String, authorityHits: [GraphAuthorityHit], memoryHits: [MemoryHit], runId: String) -> [EvalResult]
+    func evaluate(answer: String, authorityHits: [GraphAuthorityHit], memoryHits: [MemoryHit], prompt: String, runId: String) -> [EvalResult]
+}
+
+public extension AnswerEvaluating {
+    func evaluate(answer: String, authorityHits: [GraphAuthorityHit], memoryHits: [MemoryHit], runId: String) -> [EvalResult] {
+        evaluate(answer: answer, authorityHits: authorityHits, memoryHits: memoryHits, prompt: "", runId: runId)
+    }
 }
 
 public struct DeterministicAnswerEvaluator: AnswerEvaluating {
     public init() {}
 
-    public func evaluate(answer: String, authorityHits: [GraphAuthorityHit], memoryHits: [MemoryHit], runId: String) -> [EvalResult] {
+    public func evaluate(answer: String, authorityHits: [GraphAuthorityHit], memoryHits: [MemoryHit], prompt: String, runId: String) -> [EvalResult] {
         let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
         let firstLine = trimmed.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init) ?? ""
         let namesRule = trimmed.range(of: #"Rule:\s*(conn-\d+|[A-Za-z0-9_\-]+|none)"#, options: .regularExpression) != nil
@@ -47,6 +53,7 @@ public struct DeterministicAnswerEvaluator: AnswerEvaluating {
                 detail: "Answer can be persisted after redaction."
             )
         ]
+        results.append(Self.pyramidFormatResult(answer: trimmed, prompt: prompt, runId: runId))
         if let patternStep, patternStep >= 5 {
             let observationalEvidence = Self.hasObservationalEvidence(answer: trimmed, authorityHits: authorityHits, memoryHits: memoryHits)
             results.append(
@@ -80,6 +87,79 @@ public struct DeterministicAnswerEvaluator: AnswerEvaluating {
             return step
         }
         return nil
+    }
+
+    private static func pyramidFormatResult(answer: String, prompt: String, runId: String) -> EvalResult {
+        if answer.isEmpty {
+            return EvalResult(runId: runId, checkName: "pyramid-format", passed: false, detail: "Answer is empty.")
+        }
+
+        let headings = pyramidHeadings(in: answer)
+        if headings.isEmpty {
+            let passed = isCasualPrompt(prompt)
+            return EvalResult(
+                runId: runId,
+                checkName: "pyramid-format",
+                passed: passed,
+                detail: passed ? "exempt-casual" : "Answer must include labeled H1 pyramid headings."
+            )
+        }
+
+        guard headings.first?.label == "Executive Conclusion" else {
+            return EvalResult(
+                runId: runId,
+                checkName: "pyramid-format",
+                passed: false,
+                detail: "First labeled H1 must end with (Executive Conclusion)."
+            )
+        }
+
+        let order = ["Executive Conclusion", "Consequence", "Recommendation", "Supporting Evidence on Request"]
+        var previousIndex = -1
+        var seen: Set<String> = []
+        for heading in headings {
+            guard let index = order.firstIndex(of: heading.label) else { continue }
+            if seen.contains(heading.label) || index <= previousIndex {
+                return EvalResult(
+                    runId: runId,
+                    checkName: "pyramid-format",
+                    passed: false,
+                    detail: "Pyramid chapters must appear once in canonical order."
+                )
+            }
+            seen.insert(heading.label)
+            previousIndex = index
+        }
+
+        let missing = order.filter { !seen.contains($0) }
+        let detail = missing.isEmpty
+            ? "All pyramid chapters present."
+            : "Pyramid order valid; optional chapters omitted: \(missing.joined(separator: ", "))."
+        return EvalResult(runId: runId, checkName: "pyramid-format", passed: true, detail: detail)
+    }
+
+    private static func pyramidHeadings(in answer: String) -> [(title: String, label: String)] {
+        let pattern = #"(?m)^#\s+(.+?)\s+\((Executive Conclusion|Consequence|Recommendation|Supporting Evidence on Request)\)\s*$"#
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let range = NSRange(answer.startIndex..., in: answer)
+        return re.matches(in: answer, range: range).compactMap { match in
+            guard match.numberOfRanges == 3,
+                  let titleRange = Range(match.range(at: 1), in: answer),
+                  let labelRange = Range(match.range(at: 2), in: answer)
+            else { return nil }
+            return (String(answer[titleRange]), String(answer[labelRange]))
+        }
+    }
+
+    private static func isCasualPrompt(_ prompt: String) -> Bool {
+        let words = prompt.split { $0.isWhitespace || $0.isNewline }
+        guard !words.isEmpty, words.count < 15 else { return false }
+        let lower = prompt.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let casualPatterns = [
+            "thanks", "thank you", "ok", "okay", "got it", "done",
+            "yes", "no", "cool", "sure", "hi", "hello", "forget it"
+        ]
+        return casualPatterns.contains { lower == $0 || lower.hasPrefix("\($0).") || lower.hasPrefix("\($0)!") }
     }
 
     private static func hasObservationalEvidence(answer: String, authorityHits: [GraphAuthorityHit], memoryHits: [MemoryHit]) -> Bool {

@@ -296,10 +296,21 @@ struct MacChatView: View {
                 .font(.caption2.weight(.bold))
                 .tracking(1.2)
                 .foregroundStyle(Theme.macInk.opacity(0.48))
-            Text(message.text)
-                .font(.body)
-                .foregroundStyle(Theme.macInk)
+            if message.role == .assistant {
+                HarnessMarkdownText(
+                    text: message.text,
+                    textColor: Theme.macInk,
+                    bodyFont: .body,
+                    h1Font: .system(.title2, design: .serif).weight(.semibold),
+                    h2Font: .headline
+                )
                 .textSelection(.enabled)
+            } else {
+                Text(message.text)
+                    .font(.body)
+                    .foregroundStyle(Theme.macInk)
+                    .textSelection(.enabled)
+            }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
