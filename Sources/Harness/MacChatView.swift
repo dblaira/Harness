@@ -369,6 +369,8 @@ struct MacChatView: View {
                         authorityPanel
                     case .memory:
                         memoryPanel
+                    case .connectors:
+                        connectorPanel
                     case .trace:
                         tracePanel
                     case .candidates:
@@ -406,7 +408,9 @@ struct MacChatView: View {
     }
 
     private var memoryPanel: some View {
-        Group {
+        VStack(alignment: .leading, spacing: 12) {
+            memorySourcesPanel
+
             if let detail = model.selectedDetail, !detail.memoryHits.isEmpty {
                 ForEach(detail.memoryHits) { hit in
                     inspectorBlock(
@@ -418,6 +422,89 @@ struct MacChatView: View {
                 }
             } else {
                 emptyInspectorText("Supporting memory appears here after graph authority is checked.")
+            }
+        }
+    }
+
+    private var memorySourcesPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("Local Sources")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.macInk.opacity(0.58))
+                Spacer()
+                Button {
+                    model.syncAppleNotes()
+                } label: {
+                    Label("Sync Notes", systemImage: "arrow.triangle.2.circlepath")
+                        .font(.caption.weight(.semibold))
+                        .labelStyle(.titleAndIcon)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        .background(Theme.macEntry.opacity(0.28), in: RoundedRectangle(cornerRadius: 7))
+                        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.macHair, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+            }
+
+            ForEach(model.connectors.filter { $0.role == .supportingMemory }) { source in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: memorySourceIcon(source.kind))
+                        .frame(width: 14)
+                        .foregroundStyle(Theme.macInk.opacity(source.state == .available ? 0.62 : 0.32))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(source.title)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Theme.macInk.opacity(source.state == .available ? 0.72 : 0.42))
+                            .lineLimit(1)
+                        Text(source.root.path)
+                            .font(.caption2)
+                            .foregroundStyle(Theme.macInk.opacity(0.38))
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 8)
+                    statusBadge(source.state.rawValue)
+                }
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.macEntry.opacity(0.18), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
+    }
+
+    private func memorySourceIcon(_ kind: HarnessConnectorKind) -> String {
+        switch kind {
+        case .github:
+            return "folder"
+        case .obsidian:
+            return "doc.text.magnifyingglass"
+        case .appleNotes:
+            return "note.text"
+        case .acceptedGraph:
+            return "checkmark.seal"
+        case .skillDirectory:
+            return "wrench.and.screwdriver"
+        case .pluginDirectory:
+            return "shippingbox"
+        case .agentBridge:
+            return "point.3.connected.trianglepath.dotted"
+        case .mcpServer:
+            return "network"
+        case .custom:
+            return "externaldrive"
+        }
+    }
+
+    private var connectorPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(model.connectors) { connector in
+                inspectorBlock(
+                    title: connector.title,
+                    subtitle: "\(connector.sourceSystem) - \(connector.role.rawValue) - \(connector.state.rawValue)",
+                    body: "\(connector.summary)\n\nPermission: \(connector.permission)\n\nProvenance: \(connector.provenance)\n\nPath: \(connector.root.path)",
+                    status: connector.kind.rawValue
+                )
             }
         }
     }

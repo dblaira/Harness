@@ -214,6 +214,12 @@ public enum PromptPacketBuilder {
         memoryHits: [MemoryHit]
     ) -> ModelPacket {
         var system = ClaudeClient.systemPrompt(from: ontology)
+        let policyDirectives = AgentPolicyCompiler.compile(
+            prompt: prompt,
+            ontology: ontology,
+            authorityHits: authorityHits
+        )
+
         system += "\n\nACCEPTED GRAPH AUTHORITY RETRIEVED FIRST:\n"
         if authorityHits.isEmpty {
             system += "  none\n"
@@ -229,6 +235,15 @@ public enum PromptPacketBuilder {
             for hit in memoryHits {
                 system += "  - \(hit.source): \(hit.excerpt)\n"
             }
+        }
+        system += "\nRDF POLICY DIRECTIVES:\n"
+        if policyDirectives.isEmpty {
+            system += "  none\n"
+        } else {
+            for directive in policyDirectives {
+                system += "  - \(directive.promptLine)\n"
+            }
+            system += "When a directive shapes the answer, include its required marker exactly.\n"
         }
         system += """
 
@@ -254,6 +269,7 @@ public enum PromptPacketBuilder {
             system: system,
             authorityHits: authorityHits,
             memoryHits: memoryHits,
+            policyDirectives: policyDirectives,
             promptPacketHash: StableHash.hex(hashInput)
         )
     }

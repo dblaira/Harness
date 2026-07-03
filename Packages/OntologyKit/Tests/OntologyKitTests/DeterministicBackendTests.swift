@@ -58,7 +58,8 @@ import Testing
             score: 0.8,
             reasonSelected: "token overlap",
             authorityLevel: .supporting
-        ))
+        )),
+        graphHealthChecker: StaticGraphHealthChecker(report: .unavailableFixture)
     )
 
     let detail = try await service.createRun(
@@ -73,12 +74,91 @@ import Testing
     #expect(detail.run.modelName == "test-codex")
     #expect(detail.traceEvents.map(\.stage) == [
         .createRun,
+        .graphHealth,
         .authorityRetrieval,
         .supportingRetrieval,
         .modelExecution,
         .evaluation,
         .traceSaved
     ])
+}
+
+@Test func promptPacketCompilesCodingPolicyFromAcceptedOntology() {
+    let ontology = OntologyLoader.load()
+    let packet = PromptPacketBuilder.makePacket(
+        prompt: "Implement the next coding agent feature.",
+        ontology: ontology,
+        authorityHits: [],
+        memoryHits: []
+    )
+
+    #expect(packet.system.contains("RDF POLICY DIRECTIVES"))
+    #expect(packet.system.contains("Policy: reusable-systems"))
+    #expect(packet.system.contains("Rule: conn-019"))
+    #expect(packet.system.contains("Prefer reusable systems over one-time wins"))
+}
+
+@Test func answerEvalRequiresReusableSystemsPolicyMarkerWhenPolicyApplies() {
+    let evaluator = DeterministicAnswerEvaluator()
+    let authorityHit = GraphAuthorityHit(
+        subject: "understood:connection/conn-019",
+        predicate: "understood:label",
+        object: "Adam prefers reusable systems over one-time wins. When there's a choice, build what compounds.",
+        source: "unit-test accepted graph",
+        queryTrace: "unit-test",
+        authorityLevel: .accepted,
+        score: 1
+    )
+
+    let missing = evaluator.evaluate(
+        answer: "Plain answer first.\n\nRule: conn-019\nAdam Pattern Step: 5",
+        authorityHits: [authorityHit],
+        memoryHits: [],
+        prompt: "Implement the next coding agent feature.",
+        runId: "run-policy-missing"
+    )
+    #expect(missing.contains { $0.checkName == "policy-reusable-systems" && !$0.passed })
+
+    let present = evaluator.evaluate(
+        answer: "Plain answer first.\n\nPolicy: reusable-systems\nRule: conn-019\nAdam Pattern Step: 5",
+        authorityHits: [authorityHit],
+        memoryHits: [],
+        prompt: "Implement the next coding agent feature.",
+        runId: "run-policy-present"
+    )
+    #expect(present.contains { $0.checkName == "policy-reusable-systems" && $0.passed })
+}
+
+@Test func runRecordsWarningWhenAcceptedNamedGraphIsMissing() async throws {
+    let ontology = OntologyLoader.load()
+    let ledger = try RunLedgerStore.inMemory()
+    let backend = StaticBackendAdapter(
+        metadata: .init(backend: .codex, modelName: "test-codex", invocationMethod: "unit-test"),
+        answer: "Plain answer first.\n\nRule: conn-019\nAdam Pattern Step: 1"
+    )
+    let service = HarnessRunService(
+        ledger: ledger,
+        authorityRetriever: OntologyAuthorityRetriever(sparqlEndpoint: URL(string: "http://127.0.0.1:9/understood/sparql")!),
+        memoryRetriever: StaticMemoryRetriever(hit: nil),
+        graphHealthChecker: StaticGraphHealthChecker(report: GraphHealthReport(
+            status: .missingAcceptedNamedGraph,
+            acceptedGraphIRI: "https://understood.app/graph/accepted",
+            sparqlEndpoint: "http://example.invalid/understood/sparql",
+            namedGraphCount: 0,
+            defaultGraphTripleCount: 334_931,
+            detail: "Accepted named graph is missing; default graph has 334931 triples and must not be treated as authority."
+        ))
+    )
+
+    let detail = try await service.createRun(
+        prompt: "Explain the Fuseki caveat.",
+        ontology: ontology,
+        backend: backend
+    )
+
+    #expect(detail.traceEvents.contains { $0.stage == .graphHealth && $0.message.contains("default graph has 334931") })
+    #expect(detail.evalResults.contains { $0.checkName == "graph-health-accepted-named-graph" && !$0.passed })
+    #expect(detail.evalResults.contains { $0.detail.contains("must not be treated as authority") })
 }
 
 @Test func candidateMemoryDoesNotBecomeAcceptedAuthority() async throws {
@@ -373,6 +453,24 @@ import Testing
     #expect(posted.first?.contains("conn-obs-seed-001") == true)
 }
 
+@Test func reviewQueueCanReplaceFusekiAcceptedNamedGraphFromSnapshot() async throws {
+    let root = try makeReviewQueueFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let poster = RecordingAcceptedGraphPoster()
+    let store = ReviewQueueStore(
+        ontologyRoot: root,
+        ledger: try RunLedgerStore.inMemory(),
+        turtleParser: AcceptingTurtleParser(),
+        acceptedGraphPoster: poster
+    )
+
+    try await store.syncAcceptedGraphSnapshot()
+    let replaced = await poster.replaced
+
+    #expect(replaced.count == 1)
+    #expect(replaced.first?.contains("@prefix understood:") == true)
+}
+
 @Test func reviewQueueFusekiPostFailureDoesNotBlockFileAuthority() async throws {
     let root = try makeReviewQueueFixture()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -663,6 +761,111 @@ import Testing
     #expect(hits.first?.source.contains("Docs/memory.md") == true)
 }
 
+@Test func localMemorySourceRegistryDiscoversPersonalSourceRoots() throws {
+    let home = FileManager.default.temporaryDirectory
+        .appendingPathComponent("HarnessLocalSourceRegistryTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+
+    let github = home.appendingPathComponent("Developer/GitHub", isDirectory: true)
+    let obsidian = home.appendingPathComponent("Documents/Main", isDirectory: true)
+    let notes = home.appendingPathComponent("Documents/Harness/Apple Notes Export", isDirectory: true)
+    try FileManager.default.createDirectory(at: github, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: obsidian, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: notes, withIntermediateDirectories: true)
+
+    let sources = LocalMemorySourceRegistry.defaultSources(homeDirectory: home)
+    let existing = sources.filter(\.exists)
+
+    #expect(existing.contains { $0.kind == .github && $0.root == github })
+    #expect(existing.contains { $0.kind == .obsidian && $0.root == obsidian })
+    #expect(existing.contains { $0.kind == .appleNotes && $0.root == notes })
+}
+
+@Test func directoryMemorySearchesGitHubObsidianAndAppleNotesSources() async throws {
+    let home = FileManager.default.temporaryDirectory
+        .appendingPathComponent("HarnessLocalSourceSearchTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+
+    let repo = home.appendingPathComponent("Developer/GitHub/UnderstoodSuite", isDirectory: true)
+    let vault = home.appendingPathComponent("Documents/Main", isDirectory: true)
+    let notes = home.appendingPathComponent("Documents/Harness/Apple Notes Export", isDirectory: true)
+    try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: notes, withIntermediateDirectories: true)
+
+    try "Understood suite marketing feature: graph authority and repo research workflow.".write(
+        to: repo.appendingPathComponent("README.md"),
+        atomically: true,
+        encoding: .utf8
+    )
+    try "Understood suite market outline should explain ontology-backed judgement.".write(
+        to: vault.appendingPathComponent("understood.md"),
+        atomically: true,
+        encoding: .utf8
+    )
+    try "Understood suite marketing note: make the product feel personal and useful.".write(
+        to: notes.appendingPathComponent("positioning.txt"),
+        atomically: true,
+        encoding: .utf8
+    )
+
+    let sources = LocalMemorySourceRegistry.defaultSources(homeDirectory: home)
+    let retriever = DirectoryMemoryRetriever(sources: sources, maxFiles: 50)
+    let hits = try await retriever.retrieve(
+        prompt: "Research the Understood suite and outline market features.",
+        limit: 5
+    )
+
+    #expect(hits.contains { $0.reasonSelected.contains("local-source github") })
+    #expect(hits.contains { $0.reasonSelected.contains("local-source obsidian") })
+    #expect(hits.contains { $0.reasonSelected.contains("local-source apple-notes") })
+}
+
+@Test func appleNotesExporterBuildsAutomationScriptForExportFolder() {
+    let output = URL(fileURLWithPath: "/tmp/Harness Apple Notes", isDirectory: true)
+    let script = AppleNotesExporter.appleScript(outputDirectory: output)
+
+    #expect(script.contains("tell application \"Notes\""))
+    #expect(script.contains("/tmp/Harness Apple Notes"))
+    #expect(script.contains(".html"))
+    #expect(script.contains("exportedCount"))
+}
+
+@Test func connectorRegistrySurfacesSourcesSkillsPluginsAndAgentBridges() throws {
+    let home = FileManager.default.temporaryDirectory
+        .appendingPathComponent("HarnessConnectorRegistryTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+
+    let paths = [
+        "Developer/GitHub",
+        "Documents/Main",
+        "Documents/Harness/Apple Notes Export",
+        ".claude/skills",
+        ".claude/plugins/cache/example-plugin/example/1.0.0",
+        ".codex/skills",
+        ".codex/plugins/cache/openai-curated/github/3fdeeb49",
+        ".hermes/skills",
+        ".hermes/hermes-agent/tools",
+        ".hermes/ontology-steward"
+    ]
+    for path in paths {
+        try FileManager.default.createDirectory(
+            at: home.appendingPathComponent(path, isDirectory: true),
+            withIntermediateDirectories: true
+        )
+    }
+
+    let connectors = HarnessConnectorRegistry.defaultConnectors(homeDirectory: home)
+
+    #expect(connectors.contains { $0.kind == .github && $0.role == .supportingMemory && $0.state == .available })
+    #expect(connectors.contains { $0.kind == .obsidian && $0.role == .supportingMemory && $0.state == .available })
+    #expect(connectors.contains { $0.kind == .appleNotes && $0.role == .supportingMemory && $0.state == .available })
+    #expect(connectors.contains { $0.kind == .skillDirectory && $0.role == .proceduralMemory && $0.sourceSystem == "Claude" })
+    #expect(connectors.contains { $0.kind == .pluginDirectory && $0.role == .plugin && $0.sourceSystem == "Codex" })
+    #expect(connectors.contains { $0.kind == .agentBridge && $0.role == .toolBridge && $0.sourceSystem == "Hermes" })
+    #expect(HarnessConnectorRegistry.memorySources(from: connectors).contains { $0.kind == .github })
+}
+
 private struct StaticMemoryRetriever: SupportingMemoryRetrieving {
     let hit: MemoryHit?
 
@@ -678,6 +881,25 @@ private struct StaticBackendAdapter: ModelBackendAdapter {
     func execute(packet: ModelPacket) async throws -> BackendResponse {
         BackendResponse(text: answer, tokenCount: 12, cost: nil)
     }
+}
+
+private struct StaticGraphHealthChecker: GraphHealthChecking {
+    let report: GraphHealthReport
+
+    func checkAcceptedGraph() async -> GraphHealthReport {
+        report
+    }
+}
+
+private extension GraphHealthReport {
+    static let unavailableFixture = GraphHealthReport(
+        status: .unavailable,
+        acceptedGraphIRI: "https://understood.app/graph/accepted",
+        sparqlEndpoint: "http://127.0.0.1:9/understood/sparql",
+        namedGraphCount: nil,
+        defaultGraphTripleCount: nil,
+        detail: "SPARQL graph health check unavailable in unit test."
+    )
 }
 
 private func makeReviewQueueFixture() throws -> URL {
@@ -735,18 +957,28 @@ private struct RejectingTurtleParser: TurtleParsing {
 
 private struct NoopAcceptedGraphPoster: AcceptedGraphPosting {
     func postAcceptedTriples(_ turtle: String) async throws {}
+    func replaceAcceptedGraph(_ turtle: String) async throws {}
 }
 
 private actor RecordingAcceptedGraphPoster: AcceptedGraphPosting {
     private(set) var posted: [String] = []
+    private(set) var replaced: [String] = []
 
     func postAcceptedTriples(_ turtle: String) async throws {
         posted.append(turtle)
+    }
+
+    func replaceAcceptedGraph(_ turtle: String) async throws {
+        replaced.append(turtle)
     }
 }
 
 private struct FailingAcceptedGraphPoster: AcceptedGraphPosting {
     func postAcceptedTriples(_ turtle: String) async throws {
+        throw URLError(.cannotConnectToHost)
+    }
+
+    func replaceAcceptedGraph(_ turtle: String) async throws {
         throw URLError(.cannotConnectToHost)
     }
 }

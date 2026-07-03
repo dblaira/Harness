@@ -22,6 +22,7 @@ public enum MessageRole: String, Codable, Sendable, Equatable {
 
 public enum TraceStage: String, Codable, Sendable, Equatable {
     case createRun
+    case graphHealth
     case authorityRetrieval
     case supportingRetrieval
     case modelExecution
@@ -370,6 +371,7 @@ public struct ModelPacket: Codable, Sendable, Equatable {
     public let system: String
     public let authorityHits: [GraphAuthorityHit]
     public let memoryHits: [MemoryHit]
+    public let policyDirectives: [AgentPolicyDirective]
     public let promptPacketHash: String
 
     public init(
@@ -377,12 +379,14 @@ public struct ModelPacket: Codable, Sendable, Equatable {
         system: String,
         authorityHits: [GraphAuthorityHit],
         memoryHits: [MemoryHit],
+        policyDirectives: [AgentPolicyDirective] = [],
         promptPacketHash: String
     ) {
         self.userPrompt = userPrompt
         self.system = system
         self.authorityHits = authorityHits
         self.memoryHits = memoryHits
+        self.policyDirectives = policyDirectives
         self.promptPacketHash = promptPacketHash
     }
 }

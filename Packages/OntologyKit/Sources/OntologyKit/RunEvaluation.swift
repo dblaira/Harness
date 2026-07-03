@@ -1,10 +1,29 @@
 import Foundation
 
 public protocol AnswerEvaluating: Sendable {
-    func evaluate(answer: String, authorityHits: [GraphAuthorityHit], memoryHits: [MemoryHit], prompt: String, runId: String) -> [EvalResult]
+    func evaluate(
+        answer: String,
+        authorityHits: [GraphAuthorityHit],
+        memoryHits: [MemoryHit],
+        prompt: String,
+        runId: String,
+        policyDirectives: [AgentPolicyDirective]
+    ) -> [EvalResult]
 }
 
 public extension AnswerEvaluating {
+    func evaluate(answer: String, authorityHits: [GraphAuthorityHit], memoryHits: [MemoryHit], prompt: String, runId: String) -> [EvalResult] {
+        let policyDirectives = AgentPolicyCompiler.compile(prompt: prompt, authorityHits: authorityHits)
+        return evaluate(
+            answer: answer,
+            authorityHits: authorityHits,
+            memoryHits: memoryHits,
+            prompt: prompt,
+            runId: runId,
+            policyDirectives: policyDirectives
+        )
+    }
+
     func evaluate(answer: String, authorityHits: [GraphAuthorityHit], memoryHits: [MemoryHit], runId: String) -> [EvalResult] {
         evaluate(answer: answer, authorityHits: authorityHits, memoryHits: memoryHits, prompt: "", runId: runId)
     }
@@ -13,7 +32,14 @@ public extension AnswerEvaluating {
 public struct DeterministicAnswerEvaluator: AnswerEvaluating {
     public init() {}
 
-    public func evaluate(answer: String, authorityHits: [GraphAuthorityHit], memoryHits: [MemoryHit], prompt: String, runId: String) -> [EvalResult] {
+    public func evaluate(
+        answer: String,
+        authorityHits: [GraphAuthorityHit],
+        memoryHits: [MemoryHit],
+        prompt: String,
+        runId: String,
+        policyDirectives: [AgentPolicyDirective]
+    ) -> [EvalResult] {
         let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
         let firstLine = trimmed.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init) ?? ""
         let namesRule = trimmed.range(of: #"Rule:\s*(conn-\d+|[A-Za-z0-9_\-]+|none)"#, options: .regularExpression) != nil
@@ -54,6 +80,7 @@ public struct DeterministicAnswerEvaluator: AnswerEvaluating {
             )
         ]
         results.append(Self.pyramidFormatResult(answer: trimmed, prompt: prompt, runId: runId))
+        results.append(contentsOf: Self.policyResults(answer: trimmed, directives: policyDirectives, runId: runId))
         if let patternStep, patternStep >= 5 {
             let observationalEvidence = Self.hasObservationalEvidence(answer: trimmed, authorityHits: authorityHits, memoryHits: memoryHits)
             results.append(
@@ -68,6 +95,20 @@ public struct DeterministicAnswerEvaluator: AnswerEvaluating {
             )
         }
         return results
+    }
+
+    private static func policyResults(answer: String, directives: [AgentPolicyDirective], runId: String) -> [EvalResult] {
+        directives.map { directive in
+            let passed = answer.localizedCaseInsensitiveContains(directive.requiredMarker)
+            return EvalResult(
+                runId: runId,
+                checkName: "policy-\(directive.id)",
+                passed: passed,
+                detail: passed
+                    ? "\(directive.requiredMarker) marker found."
+                    : "Answer must include \(directive.requiredMarker) when \(directive.sourceRuleId) shapes the run."
+            )
+        }
     }
 
     private static func patternStep(in text: String) -> Int? {

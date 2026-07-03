@@ -15,6 +15,7 @@ final class MacWorkbenchModel: ObservableObject {
     @Published var searchText = ""
     @Published var selectedTool: WorkbenchTool?
     @Published var reviewQueueCandidates: [MemoryCandidate] = []
+    @Published var connectors: [HarnessConnector] = HarnessConnectorRegistry.defaultConnectors()
     let toolGroups = WorkbenchToolGroup.defaults
 
     private let ledger: RunLedgerStore
@@ -34,6 +35,7 @@ final class MacWorkbenchModel: ObservableObject {
         Task {
             await refreshRuns()
             await refreshReviewQueue()
+            refreshConnectors()
         }
     }
 
@@ -87,6 +89,29 @@ final class MacWorkbenchModel: ObservableObject {
         } catch {
             reviewQueueCandidates = []
             status = "Candidates unavailable: \(error.localizedDescription)"
+        }
+    }
+
+    func refreshConnectors() {
+        connectors = HarnessConnectorRegistry.defaultConnectors()
+    }
+
+    func syncAppleNotes() {
+        status = "Syncing Apple Notes"
+        let exporter = AppleNotesExporter()
+        Task.detached(priority: .userInitiated) {
+            do {
+                let result = try await exporter.export()
+                await MainActor.run {
+                    self.refreshConnectors()
+                    self.status = "Apple Notes synced: \(result.exportedCount) note\(result.exportedCount == 1 ? "" : "s")."
+                }
+            } catch {
+                await MainActor.run {
+                    self.refreshConnectors()
+                    self.status = "Apple Notes sync failed: \(error.localizedDescription)"
+                }
+            }
         }
     }
 
@@ -319,6 +344,7 @@ final class MacWorkbenchModel: ObservableObject {
 enum WorkbenchInspectorTab: String, CaseIterable, Identifiable {
     case authority = "Authority"
     case memory = "Memory"
+    case connectors = "Connectors"
     case trace = "Trace"
     case candidates = "Candidates"
 
@@ -373,18 +399,27 @@ struct WorkbenchToolGroup: Identifiable, Equatable {
                     icon: "doc.text.magnifyingglass",
                     state: .readOnly,
                     detail: "supporting memory",
-                    summary: "Finds local notes as supporting memory after authority retrieval.",
-                    permission: "Read-only markdown, text, and Turtle files.",
+                    summary: "Finds Obsidian and markdown notes as supporting memory after authority retrieval.",
+                    permission: "Read-only markdown, text, Turtle, HTML, and RTF files.",
                     provenance: "Memory hits are labeled supporting, not accepted."
                 ),
                 WorkbenchTool(
-                    title: "Repo context",
+                    title: "GitHub repos",
                     icon: "folder",
                     state: .available,
-                    detail: "local files",
-                    summary: "Keeps Harness project docs and source files visible to retrieval.",
-                    permission: "Read-only project context for this surface.",
+                    detail: "local repos",
+                    summary: "Searches local GitHub repositories for code, docs, and product context.",
+                    permission: "Read-only filesystem access under configured repo roots.",
                     provenance: "Source file paths are shown in memory cards."
+                ),
+                WorkbenchTool(
+                    title: "Apple Notes",
+                    icon: "note.text",
+                    state: .available,
+                    detail: "local export",
+                    summary: "Exports Apple Notes into a local Harness folder, then searches them as supporting memory.",
+                    permission: "Requires macOS Automation permission for Notes on first sync.",
+                    provenance: "Exported note files are searched as supporting memory, not accepted authority."
                 ),
                 WorkbenchTool(
                     title: "Run ledger",

@@ -7,6 +7,7 @@ public struct HarnessRunService: Sendable {
     public let ledger: RunLedgerStore
     public let authorityRetriever: any AuthorityRetrieving
     public let memoryRetriever: any SupportingMemoryRetrieving
+    public let graphHealthChecker: any GraphHealthChecking
     public let evaluator: any AnswerEvaluating
     public let candidateExtractor: any CandidateMemoryExtracting
     public let redactor: any SecretRedacting
@@ -15,6 +16,7 @@ public struct HarnessRunService: Sendable {
         ledger: RunLedgerStore,
         authorityRetriever: any AuthorityRetrieving = OntologyAuthorityRetriever(),
         memoryRetriever: any SupportingMemoryRetrieving = DirectoryMemoryRetriever(),
+        graphHealthChecker: any GraphHealthChecking = FusekiGraphHealthChecker(),
         evaluator: any AnswerEvaluating = DeterministicAnswerEvaluator(),
         candidateExtractor: any CandidateMemoryExtracting = HeuristicCandidateMemoryExtractor(),
         redactor: any SecretRedacting = SecretRedactor()
@@ -22,6 +24,7 @@ public struct HarnessRunService: Sendable {
         self.ledger = ledger
         self.authorityRetriever = authorityRetriever
         self.memoryRetriever = memoryRetriever
+        self.graphHealthChecker = graphHealthChecker
         self.evaluator = evaluator
         self.candidateExtractor = candidateExtractor
         self.redactor = redactor
@@ -32,6 +35,9 @@ public struct HarnessRunService: Sendable {
         var trace: [TraceEvent] = [
             TraceEvent(runId: runId, stage: .createRun, message: "Created local Harness run.")
         ]
+
+        let graphHealth = await graphHealthChecker.checkAcceptedGraph()
+        trace.append(TraceEvent(runId: runId, stage: .graphHealth, message: "Graph health: \(graphHealth.detail)"))
 
         let authorityHits = try await authorityRetriever
             .retrieve(prompt: prompt, ontology: ontology, limit: 6)
@@ -66,13 +72,15 @@ public struct HarnessRunService: Sendable {
 
         let redactedPrompt = redactor.redact(prompt)
         let redactedAnswer = redactor.redact(response.text)
-        let evalResults = evaluator.evaluate(
+        var evalResults = evaluator.evaluate(
             answer: redactedAnswer,
             authorityHits: authorityHits,
             memoryHits: memoryHits,
             prompt: redactedPrompt,
-            runId: runId
+            runId: runId,
+            policyDirectives: packet.policyDirectives
         )
+        evalResults.insert(graphHealth.evalResult(runId: runId), at: 0)
         trace.append(TraceEvent(runId: runId, stage: .evaluation, message: "Evaluated \(evalResults.count) deterministic checks."))
 
         let candidates = candidateExtractor.candidates(

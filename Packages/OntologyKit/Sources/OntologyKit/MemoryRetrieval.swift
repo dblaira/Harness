@@ -5,20 +5,49 @@ public protocol SupportingMemoryRetrieving: Sendable {
 }
 
 public struct DirectoryMemoryRetriever: SupportingMemoryRetrieving {
+    public let sources: [LocalMemorySource]
     public let roots: [URL]
     public let allowedExtensions: Set<String>
     public let maxFiles: Int
     public let excludedPathComponents: Set<String>
     public let preferredPathComponents: Set<String>
 
+    public init() {
+        self.init(sources: LocalMemorySourceRegistry.defaultSources())
+    }
+
     public init(
-        roots: [URL] = DirectoryMemoryRetriever.defaultRoots(),
-        allowedExtensions: Set<String> = ["md", "txt", "ttl"],
+        roots: [URL],
+        allowedExtensions: Set<String> = DirectoryMemoryRetriever.defaultAllowedExtensions(),
         maxFiles: Int = 300,
         excludedPathComponents: Set<String> = DirectoryMemoryRetriever.defaultExcludedPathComponents(),
         preferredPathComponents: Set<String> = DirectoryMemoryRetriever.defaultPreferredPathComponents()
     ) {
+        self.sources = roots.map {
+            LocalMemorySource(
+                title: $0.lastPathComponent.isEmpty ? $0.path : $0.lastPathComponent,
+                kind: .custom,
+                root: $0,
+                weight: 1,
+                allowedExtensions: allowedExtensions
+            )
+        }
         self.roots = roots
+        self.allowedExtensions = allowedExtensions
+        self.maxFiles = maxFiles
+        self.excludedPathComponents = excludedPathComponents
+        self.preferredPathComponents = preferredPathComponents
+    }
+
+    public init(
+        sources: [LocalMemorySource],
+        allowedExtensions: Set<String> = DirectoryMemoryRetriever.defaultAllowedExtensions(),
+        maxFiles: Int = 1_500,
+        excludedPathComponents: Set<String> = DirectoryMemoryRetriever.defaultExcludedPathComponents(),
+        preferredPathComponents: Set<String> = DirectoryMemoryRetriever.defaultPreferredPathComponents()
+    ) {
+        self.sources = sources
+        self.roots = sources.map(\.root)
         self.allowedExtensions = allowedExtensions
         self.maxFiles = maxFiles
         self.excludedPathComponents = excludedPathComponents
@@ -31,15 +60,15 @@ public struct DirectoryMemoryRetriever: SupportingMemoryRetrieving {
 
         var hits: [(MemoryHit, Double)] = []
         let files = Self.files(
-            in: roots,
+            in: sources,
             allowedExtensions: allowedExtensions,
             excludedPathComponents: excludedPathComponents,
             maxFiles: maxFiles
         )
 
-        for file in files {
+        for (file, source) in files {
             guard let text = try? String(contentsOf: file, encoding: .utf8) else { continue }
-            let classification = Self.classify(file: file, preferredPathComponents: preferredPathComponents)
+            let classification = Self.classify(file: file, source: source, preferredPathComponents: preferredPathComponents)
             let score = Self.score(queryTokens, text: text, classification: classification)
             guard score > 0 else { continue }
             hits.append((
@@ -64,10 +93,11 @@ public struct DirectoryMemoryRetriever: SupportingMemoryRetrieving {
     }
 
     public static func defaultRoots() -> [URL] {
-        [
-            URL(fileURLWithPath: "\(NSHomeDirectory())/Developer/GitHub/obsidian-vault"),
-            URL(fileURLWithPath: "\(NSHomeDirectory())/Developer/GitHub/Harness/Docs")
-        ]
+        LocalMemorySourceRegistry.defaultSources().map(\.root)
+    }
+
+    public static func defaultAllowedExtensions() -> Set<String> {
+        LocalMemorySourceRegistry.codeAndTextExtensions()
     }
 
     public static func defaultExcludedPathComponents() -> Set<String> {
@@ -80,7 +110,6 @@ public struct DirectoryMemoryRetriever: SupportingMemoryRetrieving {
             "DerivedData",
             "Harness.xcodeproj",
             "ibooks",
-            "Library",
             "node_modules"
         ]
     }
@@ -89,9 +118,11 @@ public struct DirectoryMemoryRetriever: SupportingMemoryRetrieving {
         [
             "Docs",
             "Harness",
+            "Main",
             "Packages",
             "Sources",
             "Tests",
+            "Understood",
             "obsidian-vault"
         ]
     }
@@ -107,14 +138,16 @@ public struct DirectoryMemoryRetriever: SupportingMemoryRetrieving {
     }
 
     private static func files(
-        in roots: [URL],
+        in sources: [LocalMemorySource],
         allowedExtensions: Set<String>,
         excludedPathComponents: Set<String>,
         maxFiles: Int
-    ) -> [URL] {
-        var files: [URL] = []
-        for root in roots {
+    ) -> [(URL, LocalMemorySource)] {
+        var files: [(URL, LocalMemorySource)] = []
+        for source in sources {
             guard files.count < maxFiles else { break }
+            let root = source.root
+            let sourceExtensions = source.allowedExtensions ?? allowedExtensions
             guard FileManager.default.fileExists(atPath: root.path) else { continue }
             guard let enumerator = FileManager.default.enumerator(
                 at: root,
@@ -128,8 +161,8 @@ public struct DirectoryMemoryRetriever: SupportingMemoryRetrieving {
                     enumerator.skipDescendants()
                     continue
                 }
-                guard allowedExtensions.contains(file.pathExtension.lowercased()) else { continue }
-                files.append(file)
+                guard sourceExtensions.contains(file.pathExtension.lowercased()) else { continue }
+                files.append((file, source))
             }
         }
         return files
@@ -141,7 +174,18 @@ public struct DirectoryMemoryRetriever: SupportingMemoryRetrieving {
         }
     }
 
-    private static func classify(file: URL, preferredPathComponents: Set<String>) -> MemorySourceClassification {
+    private static func classify(
+        file: URL,
+        source: LocalMemorySource,
+        preferredPathComponents: Set<String>
+    ) -> MemorySourceClassification {
+        if source.kind != .custom {
+            return MemorySourceClassification(
+                reason: "local-source \(source.kind.rawValue)",
+                weight: source.weight
+            )
+        }
+
         let components = Set(file.pathComponents)
         if !components.intersection(preferredPathComponents).isEmpty {
             return MemorySourceClassification(reason: "project-context", weight: 1.25)

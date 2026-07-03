@@ -45,6 +45,7 @@ public protocol TurtleParsing: Sendable {
 
 public protocol AcceptedGraphPosting: Sendable {
     func postAcceptedTriples(_ turtle: String) async throws
+    func replaceAcceptedGraph(_ turtle: String) async throws
 }
 
 public struct FusekiAcceptedGraphPoster: AcceptedGraphPosting {
@@ -67,6 +68,14 @@ public struct FusekiAcceptedGraphPoster: AcceptedGraphPosting {
     }
 
     public func postAcceptedTriples(_ turtle: String) async throws {
+        try await send(turtle: turtle, method: "POST")
+    }
+
+    public func replaceAcceptedGraph(_ turtle: String) async throws {
+        try await send(turtle: turtle, method: "PUT")
+    }
+
+    private func send(turtle: String, method: String) async throws {
         var components = URLComponents(url: dataEndpoint, resolvingAgainstBaseURL: false)!
         var queryItems = components.queryItems ?? []
         queryItems.append(URLQueryItem(name: "graph", value: graphIRI))
@@ -76,7 +85,7 @@ public struct FusekiAcceptedGraphPoster: AcceptedGraphPosting {
         }
 
         var request = URLRequest(url: url)
-        request.httpMethod = "POST"
+        request.httpMethod = method
         request.setValue("text/turtle", forHTTPHeaderField: "Content-Type")
         let (_, response) = try await URLSession.shared.upload(for: request, from: Data(turtle.utf8))
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
@@ -316,6 +325,11 @@ public final class ReviewQueueStore: Sendable {
         try await ledger.recordReviewQueueDecision(record)
         mirrorDecisionToCanonicalLedger(record)
         return ReviewQueueOutcome(claimId: claimId, accepted: false)
+    }
+
+    public func syncAcceptedGraphSnapshot() async throws {
+        let turtle = try String(contentsOf: acceptedGraphURL, encoding: .utf8)
+        try await acceptedGraphPoster.replaceAcceptedGraph(turtle)
     }
 
     private func loadQueue() throws -> [ReviewQueueClaim] {
