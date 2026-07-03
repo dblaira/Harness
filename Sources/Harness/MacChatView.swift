@@ -432,7 +432,7 @@ struct MacChatView: View {
                 .buttonStyle(.plain)
                 .disabled(model.routePlan.steps.isEmpty)
                 .help("Run read-only route steps")
-                statusBadge(model.routePlan.requiresApproval ? "approval" : "read-only")
+                statusBadge(model.routePlan.requiresApproval ? "Needs Approval" : "Read-only")
             }
 
             if model.routePlan.steps.isEmpty {
@@ -445,7 +445,7 @@ struct MacChatView: View {
 
             if let result = model.routeExecutionResult {
                 inspectorBlock(
-                    title: "Read-only route result",
+                    title: "Route Result",
                     subtitle: "\(result.executedSteps.count) executed - \(result.blockedSteps.count) blocked",
                     body: result.summary,
                     status: "executed"
@@ -453,9 +453,9 @@ struct MacChatView: View {
 
                 ForEach(result.actionResults) { actionResult in
                     inspectorBlock(
-                        title: actionResult.targetName,
-                        subtitle: actionResult.action.rawValue,
-                        body: actionResult.summary,
+                        title: HarnessExecutionRouteStep.displayName(actionResult.targetName.replacingOccurrences(of: "-", with: " ")),
+                        subtitle: actionResultSubtitle(actionResult),
+                        body: actionResultBody(actionResult),
                         status: "action"
                     )
                 }
@@ -475,7 +475,7 @@ struct MacChatView: View {
     private func routeStepBlock(_ step: HarnessExecutionRouteStep) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(step.targetName)
+                Text(step.displayTitle)
                     .font(.system(size: 12).weight(.semibold))
                     .foregroundStyle(Theme.macInk)
                     .lineLimit(2)
@@ -494,9 +494,9 @@ struct MacChatView: View {
                     .buttonStyle(.plain)
                     .help("Approve and run this step")
                 }
-                statusBadge(step.guardrail.rawValue)
+                statusBadge(step.guardrail.displayLabel)
             }
-            Text("\(step.sourceSystem) - \(step.action.rawValue)")
+            Text("\(step.displaySubtitle) - \(step.action.displayLabel)")
                 .font(.caption2)
                 .foregroundStyle(Theme.macInk.opacity(0.46))
                 .lineLimit(1)
@@ -510,6 +510,24 @@ struct MacChatView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.macEntry.opacity(0.24), in: RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
+    }
+
+    private func actionResultSubtitle(_ result: HarnessRouteActionResult) -> String {
+        if let adapterName = result.adapterName {
+            return "\(result.action.displayLabel) - \(adapterName)"
+        }
+        return result.action.displayLabel
+    }
+
+    private func actionResultBody(_ result: HarnessRouteActionResult) -> String {
+        var parts = [result.summary]
+        if let artifactURL = result.artifactURL {
+            parts.append("Markdown: \(artifactURL.path)")
+        }
+        if let pdfURL = result.pdfURL {
+            parts.append("PDF: \(pdfURL.path)")
+        }
+        return parts.joined(separator: "\n\n")
     }
 
     private var memoryPanel: some View {

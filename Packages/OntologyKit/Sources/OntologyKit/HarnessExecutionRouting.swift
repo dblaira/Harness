@@ -7,12 +7,185 @@ public enum HarnessRouteAction: String, Codable, Sendable, Equatable, CaseIterab
     case runSkill = "run-skill"
     case delegateAgent = "delegate-agent"
     case createArtifact = "create-artifact"
+
+    public var displayLabel: String {
+        switch self {
+        case .inspectRepository:
+            return "Inspect Repository"
+        case .searchMemory:
+            return "Search Memory"
+        case .syncSource:
+            return "Sync Source"
+        case .runSkill:
+            return "Run Skill"
+        case .delegateAgent:
+            return "Delegate Agent"
+        case .createArtifact:
+            return "Create Artifact"
+        }
+    }
 }
 
 public enum HarnessRouteGuardrail: String, Codable, Sendable, Equatable, CaseIterable {
     case readOnly = "read-only"
     case approvalRequired = "approval-required"
     case unavailable = "unavailable"
+
+    public var displayLabel: String {
+        switch self {
+        case .readOnly:
+            return "Read-only"
+        case .approvalRequired:
+            return "Needs Approval"
+        case .unavailable:
+            return "Unavailable"
+        }
+    }
+}
+
+public enum HarnessResearchSourceScope: String, Codable, Sendable, Equatable, CaseIterable {
+    case localContext = "local-context"
+    case externalWeb = "external-web"
+    case literature = "literature"
+
+    public var displayLabel: String {
+        switch self {
+        case .localContext:
+            return "Local Context"
+        case .externalWeb:
+            return "External Web"
+        case .literature:
+            return "Literature"
+        }
+    }
+}
+
+public struct HarnessResearchAdapter: Identifiable, Codable, Sendable, Equatable {
+    public let id: String
+    public let skillName: String
+    public let displayName: String
+    public let sourceScope: HarnessResearchSourceScope
+    public let requiresApproval: Bool
+    public let systemInstruction: String
+    public let outputContract: String
+    public let citationContract: String
+
+    public init(
+        id: String,
+        skillName: String,
+        displayName: String,
+        sourceScope: HarnessResearchSourceScope,
+        requiresApproval: Bool,
+        systemInstruction: String,
+        outputContract: String,
+        citationContract: String
+    ) {
+        self.id = id
+        self.skillName = skillName
+        self.displayName = displayName
+        self.sourceScope = sourceScope
+        self.requiresApproval = requiresApproval
+        self.systemInstruction = systemInstruction
+        self.outputContract = outputContract
+        self.citationContract = citationContract
+    }
+
+    public static let all: [HarnessResearchAdapter] = [
+        HarnessResearchAdapter(
+            id: "research-response",
+            skillName: "research-response",
+            displayName: "Research Response",
+            sourceScope: .localContext,
+            requiresApproval: false,
+            systemInstruction: "You are the Research Response adapter. Synthesize local graph, repository, and note context in Adam's preferred decision-first format.",
+            outputContract: "Executive Conclusion, Consequence, Recommendation, Supporting Evidence.",
+            citationContract: "Use local source names and file paths when available."
+        ),
+        HarnessResearchAdapter(
+            id: "firecrawl-deep-research",
+            skillName: "firecrawl-deep-research",
+            displayName: "Firecrawl Deep Research",
+            sourceScope: .externalWeb,
+            requiresApproval: true,
+            systemInstruction: "You are the Firecrawl Deep Research adapter. Use approved external web research for competitive, market, and source-rich investigations.",
+            outputContract: "Executive Conclusion, Consequence, Recommendation, Sources.",
+            citationContract: "Cite every material claim with source URLs."
+        ),
+        HarnessResearchAdapter(
+            id: "llm-wiki",
+            skillName: "llm-wiki",
+            displayName: "LLM Wiki",
+            sourceScope: .localContext,
+            requiresApproval: false,
+            systemInstruction: "You are the LLM Wiki adapter. Convert local knowledge and skill context into a concise wiki-style explanation.",
+            outputContract: "Short synthesis, key distinctions, reusable references.",
+            citationContract: "Name the local notes, repos, or skill files used."
+        ),
+        HarnessResearchAdapter(
+            id: "arxiv",
+            skillName: "arxiv",
+            displayName: "arXiv",
+            sourceScope: .literature,
+            requiresApproval: true,
+            systemInstruction: "You are the arXiv literature adapter. Find, compare, and summarize relevant papers with careful claims.",
+            outputContract: "Executive Conclusion, paper map, practical implication, open questions.",
+            citationContract: "Cite paper titles, authors, years, and arXiv URLs."
+        )
+    ]
+
+    public static func adapter(forSkillName skillName: String) -> HarnessResearchAdapter? {
+        all.first { $0.skillName.caseInsensitiveCompare(skillName) == .orderedSame }
+    }
+}
+
+public struct HarnessResearchRequest: Codable, Sendable, Equatable {
+    public let adapter: HarnessResearchAdapter
+    public let stepID: String
+    public let skillName: String
+    public let action: HarnessRouteAction
+    public let guardrail: HarnessRouteGuardrail
+    public let reason: String
+    public let skillContext: String
+    public let userPrompt: String
+
+    public var routePrompt: String {
+        """
+        Approved Harness research adapter:
+        Adapter: \(adapter.displayName)
+        Source scope: \(adapter.sourceScope.rawValue)
+        Action: \(action.rawValue)
+        Guardrail: \(guardrail.displayLabel)
+        Reason: \(reason)
+        Citation contract: \(adapter.citationContract)
+        Output contract: \(adapter.outputContract)
+
+        Skill context:
+        \(skillContext)
+
+        User request:
+        \(userPrompt)
+        """
+    }
+
+    public init(
+        adapter: HarnessResearchAdapter,
+        stepID: String,
+        skillName: String,
+        action: HarnessRouteAction,
+        guardrail: HarnessRouteGuardrail,
+        reason: String,
+        skillContext: String,
+        userPrompt: String
+    ) {
+        self.adapter = adapter
+        self.stepID = stepID
+        self.skillName = skillName
+        self.action = action
+        self.guardrail = guardrail
+        self.reason = reason
+        self.skillContext = skillContext
+        self.userPrompt = userPrompt
+    }
 }
 
 public struct HarnessExecutionRouteStep: Identifiable, Codable, Sendable, Equatable {
@@ -26,6 +199,15 @@ public struct HarnessExecutionRouteStep: Identifiable, Codable, Sendable, Equata
     public let priority: Int
     public let connectorID: String?
     public let capabilityID: String?
+
+    public var displayTitle: String {
+        let action = action.displayLabel.replacingOccurrences(of: " Repository", with: "")
+        return "\(action) \(Self.displayName(targetName))"
+    }
+
+    public var displaySubtitle: String {
+        "\(sourceSystem) - \(guardrail.displayLabel)"
+    }
 
     public init(
         id: String? = nil,
@@ -49,6 +231,24 @@ public struct HarnessExecutionRouteStep: Identifiable, Codable, Sendable, Equata
         self.priority = priority
         self.connectorID = connectorID
         self.capabilityID = capabilityID
+    }
+
+    public static func displayName(_ name: String) -> String {
+        name
+            .split(separator: " ")
+            .map { word in
+                switch word.lowercased() {
+                case "github":
+                    return "GitHub"
+                case "api":
+                    return "API"
+                case "pdf":
+                    return "PDF"
+                default:
+                    return word.prefix(1).uppercased() + word.dropFirst()
+                }
+            }
+            .joined(separator: " ")
     }
 }
 
@@ -205,7 +405,8 @@ public enum HarnessExecutionRouter {
             guard let capability = capabilities.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else {
                 return nil
             }
-            let externalResearch = capability.name.contains("firecrawl") || capability.name == "arxiv"
+            let researchAdapter = HarnessResearchAdapter.adapter(forSkillName: capability.name)
+            let externalResearch = researchAdapter?.requiresApproval == true
             let delegation = defaultAction == .delegateAgent
             let guardrail: HarnessRouteGuardrail = (externalResearch || delegation) ? .approvalRequired : guardrail(for: capability)
             return HarnessExecutionRouteStep(
@@ -335,6 +536,8 @@ public struct HarnessRouteActionResult: Identifiable, Codable, Sendable, Equatab
     public let targetName: String
     public let summary: String
     public let artifactURL: URL?
+    public let pdfURL: URL?
+    public let adapterName: String?
 
     public init(
         id: String? = nil,
@@ -342,7 +545,9 @@ public struct HarnessRouteActionResult: Identifiable, Codable, Sendable, Equatab
         action: HarnessRouteAction,
         targetName: String,
         summary: String,
-        artifactURL: URL? = nil
+        artifactURL: URL? = nil,
+        pdfURL: URL? = nil,
+        adapterName: String? = nil
     ) {
         self.id = id ?? "\(stepID):result"
         self.stepID = stepID
@@ -350,6 +555,8 @@ public struct HarnessRouteActionResult: Identifiable, Codable, Sendable, Equatab
         self.targetName = targetName
         self.summary = summary
         self.artifactURL = artifactURL
+        self.pdfURL = pdfURL
+        self.adapterName = adapterName
     }
 }
 
@@ -434,18 +641,18 @@ public struct HarnessRouteExecutor: Sendable {
                 user: prompt
             )
         },
-        researchDelegate: @Sendable (String) async throws -> String = { prompt in
+        researchDelegate: @Sendable (HarnessResearchRequest) async throws -> String = { request in
             try await AgentRunner().run(
                 backend: .codex,
-                system: "You are a research-response skill. Produce a concise, source-aware brief from available context.",
-                user: prompt
+                system: request.adapter.systemInstruction,
+                user: request.routePrompt
             )
         },
-        externalResearchDelegate: @Sendable (String) async throws -> String = { prompt in
+        externalResearchDelegate: @Sendable (HarnessResearchRequest) async throws -> String = { request in
             try await AgentRunner().run(
                 backend: .codex,
-                system: "You are an approved external research skill. Use external research only for the approved request and report sources clearly.",
-                user: prompt
+                system: request.adapter.systemInstruction,
+                user: request.routePrompt
             )
         }
     ) async throws -> HarnessRouteExecutionResult {
@@ -510,26 +717,32 @@ public struct HarnessRouteExecutor: Sendable {
                     summary: output
                 ))
                 executed.append(step)
-            } else if step.action == .runSkill && ["research-response", "llm-wiki"].contains(step.targetName) {
-                let output = try await researchDelegate(skillPrompt(for: step, plan: plan))
+            } else if step.action == .runSkill,
+                      let request = researchRequest(for: step, plan: plan),
+                      !request.adapter.requiresApproval {
+                let output = try await researchDelegate(request)
                 actionResults.append(HarnessRouteActionResult(
                     stepID: step.id,
                     action: step.action,
                     targetName: step.targetName,
-                    summary: output
+                    summary: output,
+                    adapterName: request.adapter.displayName
                 ))
                 executed.append(step)
-            } else if step.action == .runSkill && ["firecrawl-deep-research", "arxiv"].contains(step.targetName) {
-                let output = try await externalResearchDelegate(skillPrompt(for: step, plan: plan))
+            } else if step.action == .runSkill,
+                      let request = researchRequest(for: step, plan: plan),
+                      request.adapter.requiresApproval {
+                let output = try await externalResearchDelegate(request)
                 actionResults.append(HarnessRouteActionResult(
                     stepID: step.id,
                     action: step.action,
                     targetName: step.targetName,
-                    summary: output
+                    summary: output,
+                    adapterName: request.adapter.displayName
                 ))
                 executed.append(step)
             } else if step.action == .createArtifact {
-                let artifact = try writeMarkdownArtifact(
+                let artifact = try writeArtifactFiles(
                     step: step,
                     plan: plan,
                     memoryHits: hits,
@@ -539,8 +752,9 @@ public struct HarnessRouteExecutor: Sendable {
                     stepID: step.id,
                     action: step.action,
                     targetName: step.targetName,
-                    summary: "Created markdown artifact at \(artifact.path).",
-                    artifactURL: artifact
+                    summary: "Created markdown artifact at \(artifact.markdown.path) and PDF at \(artifact.pdf.path).",
+                    artifactURL: artifact.markdown,
+                    pdfURL: artifact.pdf
                 ))
                 executed.append(step)
             } else {
@@ -578,23 +792,23 @@ public struct HarnessRouteExecutor: Sendable {
         """
     }
 
-    private func skillPrompt(
+    private func researchRequest(
         for step: HarnessExecutionRouteStep,
         plan: HarnessExecutionRoutePlan
-    ) -> String {
-        """
-        Approved Harness skill route:
-        Skill: \(step.targetName)
-        Action: \(step.action.rawValue)
-        Guardrail: \(step.guardrail.rawValue)
-        Reason: \(step.reason)
-
-        Skill context:
-        \(skillContext(for: step))
-
-        User request:
-        \(plan.prompt)
-        """
+    ) -> HarnessResearchRequest? {
+        guard let adapter = HarnessResearchAdapter.adapter(forSkillName: step.targetName) else {
+            return nil
+        }
+        return HarnessResearchRequest(
+            adapter: adapter,
+            stepID: step.id,
+            skillName: step.targetName,
+            action: step.action,
+            guardrail: step.guardrail,
+            reason: step.reason,
+            skillContext: skillContext(for: step),
+            userPrompt: plan.prompt
+        )
     }
 
     private func skillContext(for step: HarnessExecutionRouteStep) -> String {
@@ -611,15 +825,21 @@ public struct HarnessRouteExecutor: Sendable {
         return String(trimmed.prefix(1_600)) + "\n..."
     }
 
-    private func writeMarkdownArtifact(
+    private struct ArtifactFiles {
+        let markdown: URL
+        let pdf: URL
+    }
+
+    private func writeArtifactFiles(
         step: HarnessExecutionRouteStep,
         plan: HarnessExecutionRoutePlan,
         memoryHits: [MemoryHit],
         directory: URL
-    ) throws -> URL {
+    ) throws -> ArtifactFiles {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let filename = "harness-\(Self.slug(plan.prompt))-\(Self.timestamp()).md"
-        let file = directory.appendingPathComponent(filename)
+        let stem = "harness-\(Self.slug(plan.prompt))-\(Self.timestamp())"
+        let markdown = directory.appendingPathComponent("\(stem).md")
+        let pdf = directory.appendingPathComponent("\(stem).pdf")
         let evidence = memoryHits.prefix(8).map { hit in
             "- \(hit.source): \(hit.excerpt)"
         }.joined(separator: "\n")
@@ -637,8 +857,61 @@ public struct HarnessRouteExecutor: Sendable {
         Supporting evidence:
         \(evidence.isEmpty ? "No supporting evidence was attached to this artifact." : evidence)
         """
-        try body.write(to: file, atomically: true, encoding: .utf8)
-        return file
+        try body.write(to: markdown, atomically: true, encoding: .utf8)
+        try Self.pdfData(for: body).write(to: pdf, options: .atomic)
+        return ArtifactFiles(markdown: markdown, pdf: pdf)
+    }
+
+    private static func pdfData(for text: String) -> Data {
+        let lines = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .prefix(44)
+            .map { escapePDFText(String($0.prefix(95))) }
+        let stream = """
+        BT
+        /F1 11 Tf
+        72 760 Td
+        14 TL
+        \(lines.map { "(\($0)) Tj\nT*" }.joined(separator: "\n"))
+        ET
+
+        """
+        let streamLength = Data(stream.utf8).count
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            "<< /Length \(streamLength) >>\nstream\n\(stream)endstream"
+        ]
+        var pdf = "%PDF-1.4\n"
+        var offsets: [Int] = [0]
+        for (index, object) in objects.enumerated() {
+            offsets.append(Data(pdf.utf8).count)
+            pdf += "\(index + 1) 0 obj\n\(object)\nendobj\n"
+        }
+        let xrefOffset = Data(pdf.utf8).count
+        pdf += "xref\n0 \(objects.count + 1)\n"
+        pdf += "0000000000 65535 f \n"
+        for offset in offsets.dropFirst() {
+            pdf += String(format: "%010d 00000 n \n", offset)
+        }
+        pdf += """
+        trailer
+        << /Size \(objects.count + 1) /Root 1 0 R >>
+        startxref
+        \(xrefOffset)
+        %%EOF
+        """
+        return Data(pdf.utf8)
+    }
+
+    private static func escapePDFText(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "(", with: "\\(")
+            .replacingOccurrences(of: ")", with: "\\)")
     }
 
     private static func slug(_ text: String) -> String {

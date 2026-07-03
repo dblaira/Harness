@@ -1309,13 +1309,18 @@ import Testing
 
     let action = try #require(result.actionResults.first { $0.stepID == artifactStep.id })
     let artifactURL = try #require(action.artifactURL)
+    let pdfURL = try #require(action.pdfURL)
     let text = try String(contentsOf: artifactURL, encoding: .utf8)
+    let pdfData = try Data(contentsOf: pdfURL)
 
     #expect(result.executedSteps.contains { $0.id == artifactStep.id })
     #expect(artifactURL.path.hasPrefix(outputDirectory.path))
+    #expect(pdfURL.path.hasPrefix(outputDirectory.path))
     #expect(text.contains("# Harness Artifact"))
     #expect(text.contains("Create an outline for marketing the Understood suite."))
     #expect(action.summary.contains(artifactURL.path))
+    #expect(action.summary.contains(pdfURL.path))
+    #expect(String(data: pdfData.prefix(4), encoding: .utf8) == "%PDF")
 }
 
 @Test func routeExecutorRunsApprovedResearchSkills() async throws {
@@ -1347,14 +1352,56 @@ import Testing
     let result = try await HarnessRouteExecutor(connectors: connectors).executeApproved(
         plan,
         approvedStepIDs: [localResearch.id],
-        researchDelegate: { prompt in
-            "Research brief: \(prompt)"
+        researchDelegate: { request in
+            "Research brief: \(request.routePrompt)"
         }
     )
 
     #expect(result.executedSteps.contains { $0.id == localResearch.id })
-    #expect(result.actionResults.contains { $0.stepID == localResearch.id && $0.summary.contains("Research brief") })
+    #expect(result.actionResults.contains(where: {
+        $0.stepID == localResearch.id
+        && $0.summary.contains("Research brief")
+        && $0.adapterName == "Research Response"
+    }))
     #expect(result.blockedSteps.contains { $0.id == externalResearch.id })
+}
+
+@Test func routeStepsExposePolishedLabels() throws {
+    let step = HarnessExecutionRouteStep(
+        action: .inspectRepository,
+        targetName: "GitHub repositories",
+        sourceSystem: "Local",
+        reason: "Prompt asks for repository context.",
+        guardrail: .readOnly,
+        state: .available,
+        priority: 10
+    )
+
+    #expect(step.displayTitle == "Inspect GitHub Repositories")
+    #expect(step.displaySubtitle == "Local - Read-only")
+    #expect(HarnessRouteAction.createArtifact.displayLabel == "Create Artifact")
+    #expect(HarnessRouteGuardrail.approvalRequired.displayLabel == "Needs Approval")
+}
+
+@Test func researchAdapterRegistryExposesConnectorSpecificContracts() throws {
+    let local = try #require(HarnessResearchAdapter.adapter(forSkillName: "research-response"))
+    let firecrawl = try #require(HarnessResearchAdapter.adapter(forSkillName: "firecrawl-deep-research"))
+    let arxiv = try #require(HarnessResearchAdapter.adapter(forSkillName: "arxiv"))
+
+    #expect(local.displayName == "Research Response")
+    #expect(local.sourceScope == .localContext)
+    #expect(!local.requiresApproval)
+    #expect(local.outputContract.contains("Executive Conclusion"))
+
+    #expect(firecrawl.displayName == "Firecrawl Deep Research")
+    #expect(firecrawl.sourceScope == .externalWeb)
+    #expect(firecrawl.requiresApproval)
+    #expect(firecrawl.citationContract.contains("source URLs"))
+
+    #expect(arxiv.displayName == "arXiv")
+    #expect(arxiv.sourceScope == .literature)
+    #expect(arxiv.requiresApproval)
+    #expect(arxiv.systemInstruction.contains("papers"))
 }
 
 @Test func routeExecutorIncludesResearchSkillInstructionContext() async throws {
@@ -1382,8 +1429,8 @@ import Testing
     ).executeApproved(
         plan,
         approvedStepIDs: [localResearch.id],
-        researchDelegate: { prompt in
-            prompt.contains("Source-rich research responses matched to Adam.")
+        researchDelegate: { request in
+            request.routePrompt.contains("Source-rich research responses matched to Adam.")
                 ? "Skill context present"
                 : "Skill context missing"
         }
@@ -1415,13 +1462,22 @@ import Testing
     let result = try await HarnessRouteExecutor(connectors: connectors).executeApproved(
         plan,
         approvedStepIDs: [externalResearch.id],
-        externalResearchDelegate: { prompt in
-            "External research brief: \(prompt)"
+        externalResearchDelegate: { request in
+            #expect(request.adapter.displayName == "Firecrawl Deep Research")
+            #expect(request.adapter.sourceScope == .externalWeb)
+            #expect(request.routePrompt.contains("Adapter: Firecrawl Deep Research"))
+            #expect(request.routePrompt.contains("Citation contract: Cite every material claim with source URLs."))
+            #expect(request.routePrompt.contains("Output contract: Executive Conclusion, Consequence, Recommendation, Sources."))
+            return "External research brief: \(request.routePrompt)"
         }
     )
 
     #expect(result.executedSteps.contains { $0.id == externalResearch.id })
-    #expect(result.actionResults.contains { $0.stepID == externalResearch.id && $0.summary.contains("External research brief") })
+    #expect(result.actionResults.contains(where: {
+        $0.stepID == externalResearch.id
+        && $0.summary.contains("External research brief")
+        && $0.adapterName == "Firecrawl Deep Research"
+    }))
 }
 
 private struct StaticMemoryRetriever: SupportingMemoryRetrieving {
