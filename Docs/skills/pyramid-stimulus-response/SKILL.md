@@ -70,8 +70,8 @@ Format: `# ☀️ The point itself 💥 (Executive Conclusion)`
 
 # (Recommendation)
 
-Changes are committed and pushed. Rotate Re_Call's key this weekend;
-five-minute job, no urgency.
+Changes are committed and pushed. Rotate Re_Call's key next; one
+console action, nothing depends on it.
 
 # (Supporting Evidence on Request)
 
