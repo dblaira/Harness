@@ -4,6 +4,7 @@ public enum LocalMemorySourceKind: String, Codable, Sendable, Equatable, CaseIte
     case github
     case obsidian
     case appleNotes = "apple-notes"
+    case notebookLM = "notebooklm"
     case harness
     case custom
 }
@@ -63,6 +64,10 @@ public enum LocalMemorySourceRegistry {
 
     public static func noteExtensions() -> Set<String> {
         ["md", "markdown", "txt", "text", "ttl", "html", "rtf"]
+    }
+
+    public static func notebookLMExtensions() -> Set<String> {
+        noteExtensions().union(["pdf", "ppt", "pptx", "doc", "docx", "key"])
     }
 
     public static func codeAndTextExtensions() -> Set<String> {

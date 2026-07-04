@@ -407,11 +407,17 @@ public enum HarnessExecutionRouter {
     ) -> [HarnessExecutionRouteStep] {
         connectors
             .filter { connector in
-                connector.role == .supportingMemory && [.obsidian, .appleNotes].contains(connector.kind)
+                connector.role == .supportingMemory && [.obsidian, .appleNotes, .notebookLM].contains(connector.kind)
             }
             .filter { connector in
                 if connector.kind == .appleNotes {
                     return intent.contains("apple notes") || intent.contains("notes")
+                }
+                if connector.kind == .notebookLM {
+                    if connector.state != .available && !intent.needsNotebookLMContext {
+                        return false
+                    }
+                    return intent.needsNotebookLMContext || intent.needsResearch
                 }
                 return true
             }
@@ -420,13 +426,33 @@ public enum HarnessExecutionRouter {
                     action: .searchMemory,
                     targetName: connector.title,
                     sourceSystem: connector.sourceSystem,
-                    reason: "\(connector.sourceSystem) can provide personal context after accepted graph authority.",
+                    reason: personalKnowledgeReason(for: connector),
                     guardrail: guardrail(for: connector),
                     state: connector.state,
-                    priority: connector.kind == .obsidian ? 20 : 24,
+                    priority: personalKnowledgePriority(for: connector),
                     connectorID: connector.id
                 )
             }
+    }
+
+    private static func personalKnowledgeReason(for connector: HarnessConnector) -> String {
+        if connector.kind == .notebookLM {
+            return "NotebookLM can provide synthesized research context after accepted graph authority; unlabeled notebooks are treated as web-synthesis only."
+        }
+        return "\(connector.sourceSystem) can provide personal context after accepted graph authority."
+    }
+
+    private static func personalKnowledgePriority(for connector: HarnessConnector) -> Int {
+        switch connector.kind {
+        case .obsidian:
+            return 20
+        case .notebookLM:
+            return 22
+        case .appleNotes:
+            return 24
+        default:
+            return 26
+        }
     }
 
     private static func appleNotesSyncSteps(_ connectors: [HarnessConnector]) -> [HarnessExecutionRouteStep] {
@@ -1034,7 +1060,23 @@ private struct PromptIntent {
     }
 
     var needsPersonalKnowledge: Bool {
-        containsAny(["my ", "apple notes", "obsidian", "notes", "personal", "understood", "marketing", "features"])
+        containsAny([
+            "my ",
+            "apple notes",
+            "obsidian",
+            "notes",
+            "notebooklm",
+            "notebook lm",
+            "notebook",
+            "personal",
+            "understood",
+            "marketing",
+            "features"
+        ])
+    }
+
+    var needsNotebookLMContext: Bool {
+        containsAny(["notebooklm", "notebook lm", "notebook", "study guide", "source pack", "synthesized research"])
     }
 
     var needsAppleNotesSync: Bool {

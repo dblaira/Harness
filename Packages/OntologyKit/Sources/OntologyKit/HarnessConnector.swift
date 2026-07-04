@@ -4,6 +4,7 @@ public enum HarnessConnectorKind: String, Codable, Sendable, Equatable, CaseIter
     case github
     case obsidian
     case appleNotes = "apple-notes"
+    case notebookLM = "notebooklm"
     case acceptedGraph = "accepted-graph"
     case skillDirectory = "skill-directory"
     case pluginDirectory = "plugin-directory"
@@ -194,6 +195,7 @@ public enum HarnessConnectorRegistry {
             )
         ]
 
+        connectors.append(contentsOf: notebookLMConnectors(homeDirectory: homeDirectory, environment: environment))
         connectors.append(contentsOf: customMemoryConnectors(from: environment, homeDirectory: homeDirectory))
         return connectors
     }
@@ -308,14 +310,40 @@ public enum HarnessConnectorRegistry {
         return pathExists(exportRoot) ? .available : .needsPermission
     }
 
+    private static func notebookLMConnectors(homeDirectory: URL, environment: [String: String]) -> [HarnessConnector] {
+        let defaultRoots = [
+            homeDirectory.appendingPathComponent("Documents/Harness/NotebookLM", isDirectory: true),
+            homeDirectory.appendingPathComponent(
+                "Library/Mobile Documents/com~apple~CloudDocs/Harness/NotebookLM",
+                isDirectory: true
+            )
+        ]
+        let configuredRoots = configuredPathList(
+            environment["HARNESS_NOTEBOOKLM_ROOTS"],
+            homeDirectory: homeDirectory
+        )
+        return (defaultRoots + configuredRoots).map { root in
+            HarnessConnector(
+                title: "NotebookLM notebooks",
+                kind: .notebookLM,
+                role: .supportingMemory,
+                sourceSystem: "NotebookLM",
+                root: root,
+                state: pathExists(root) ? .available : .needsPermission,
+                summary: "Exported NotebookLM notebooks, study guides, briefs, and source packs used as synthesized research context.",
+                permission: "Read-only access to exported files; direct NotebookLM account control is not invoked.",
+                provenance: "Treated like external synthesized research unless a file labels source-class: personal-data or source-class: direct-thought.",
+                weight: 0.9,
+                allowedExtensions: LocalMemorySourceRegistry.notebookLMExtensions()
+            )
+        }
+    }
+
     private static func customMemoryConnectors(from environment: [String: String], homeDirectory: URL) -> [HarnessConnector] {
         guard let raw = environment["HARNESS_MEMORY_ROOTS"], !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return []
         }
-        return raw
-            .split { character in character == ":" || character == "\n" }
-            .map(String.init)
-            .map { expandHome($0.trimmingCharacters(in: .whitespacesAndNewlines), homeDirectory: homeDirectory) }
+        return configuredPathList(raw, homeDirectory: homeDirectory)
             .filter { !$0.path.isEmpty }
             .map {
                 HarnessConnector(
@@ -330,6 +358,16 @@ public enum HarnessConnectorRegistry {
                     allowedExtensions: LocalMemorySourceRegistry.codeAndTextExtensions()
                 )
             }
+    }
+
+    private static func configuredPathList(_ raw: String?, homeDirectory: URL) -> [URL] {
+        guard let raw, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return []
+        }
+        return raw
+            .split { character in character == ":" || character == "\n" }
+            .map(String.init)
+            .map { expandHome($0.trimmingCharacters(in: .whitespacesAndNewlines), homeDirectory: homeDirectory) }
     }
 
     private static func expandHome(_ path: String, homeDirectory: URL) -> URL {
@@ -350,6 +388,8 @@ public enum HarnessConnectorRegistry {
             return .obsidian
         case .appleNotes:
             return .appleNotes
+        case .notebookLM:
+            return .notebookLM
         default:
             return .custom
         }

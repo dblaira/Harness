@@ -68,7 +68,12 @@ public struct DirectoryMemoryRetriever: SupportingMemoryRetrieving {
 
         for (file, source) in files {
             guard let text = try? String(contentsOf: file, encoding: .utf8) else { continue }
-            let classification = Self.classify(file: file, source: source, preferredPathComponents: preferredPathComponents)
+            let classification = Self.classify(
+                file: file,
+                text: text,
+                source: source,
+                preferredPathComponents: preferredPathComponents
+            )
             let score = Self.score(queryTokens, text: text, classification: classification)
             guard score > 0 else { continue }
             hits.append((
@@ -176,9 +181,14 @@ public struct DirectoryMemoryRetriever: SupportingMemoryRetrieving {
 
     private static func classify(
         file: URL,
+        text: String,
         source: LocalMemorySource,
         preferredPathComponents: Set<String>
     ) -> MemorySourceClassification {
+        if source.kind == .notebookLM {
+            return notebookLMClassification(text: text, source: source)
+        }
+
         if source.kind != .custom {
             return MemorySourceClassification(
                 reason: "local-source \(source.kind.rawValue)",
@@ -191,6 +201,36 @@ public struct DirectoryMemoryRetriever: SupportingMemoryRetrieving {
             return MemorySourceClassification(reason: "project-context", weight: 1.25)
         }
         return MemorySourceClassification(reason: "local-note", weight: 0.72)
+    }
+
+    private static func notebookLMClassification(text: String, source: LocalMemorySource) -> MemorySourceClassification {
+        let prefix = text.prefix(2_000).lowercased()
+        if containsSourceClass("personal-data", in: prefix) || containsSourceClass("my-data", in: prefix) {
+            return MemorySourceClassification(
+                reason: "local-source notebooklm personal-data-label supporting-only",
+                weight: source.weight * 1.18
+            )
+        }
+        if containsSourceClass("direct-thought", in: prefix) || containsSourceClass("direct-thoughts", in: prefix) {
+            return MemorySourceClassification(
+                reason: "local-source notebooklm direct-thought-label supporting-only",
+                weight: source.weight * 1.18
+            )
+        }
+        return MemorySourceClassification(
+            reason: "local-source notebooklm web-synthesis supporting-only",
+            weight: source.weight * 0.92
+        )
+    }
+
+    private static func containsSourceClass(_ value: String, in text: String) -> Bool {
+        let labels = [
+            "source-class: \(value)",
+            "source_class: \(value)",
+            "harness-source-class: \(value)",
+            "notebooklm-source-class: \(value)"
+        ]
+        return labels.contains { text.contains($0) }
     }
 
     private static func excerpt(from text: String, matching tokens: Set<String>) -> String {

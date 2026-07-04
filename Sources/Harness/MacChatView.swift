@@ -490,6 +490,43 @@ struct MacChatView: View {
                 Label("Plugins", systemImage: "shippingbox")
             }
 
+            Menu {
+                Button {
+                    model.importNotebookLMSourceFromDownloads()
+                } label: {
+                    Label("Import from Downloads...", systemImage: "square.and.arrow.down")
+                }
+
+                Button {
+                    model.chooseNotebookLMSource()
+                } label: {
+                    Label("Choose File...", systemImage: "doc.badge.plus")
+                }
+
+                Button {
+                    model.openNotebookLMFolder()
+                } label: {
+                    Label("Open Folder", systemImage: "folder")
+                }
+
+                Divider()
+
+                let notebookFiles = model.notebookLMSourceFiles(limit: 20)
+                if notebookFiles.isEmpty {
+                    Text("No exports found")
+                } else {
+                    ForEach(notebookFiles) { source in
+                        Button {
+                            model.insertNotebookLMSourceReference(source)
+                        } label: {
+                            Label(source.menuTitle, systemImage: "text.book.closed")
+                        }
+                    }
+                }
+            } label: {
+                Label("NotebookLM", systemImage: "text.book.closed")
+            }
+
             Divider()
 
             Button {
@@ -507,7 +544,7 @@ struct MacChatView: View {
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
-        .help("Add skill or plugin")
+        .help("Add skill, plugin, or source")
     }
 
     private func menuCapabilities(kind: HarnessCapabilityKind) -> [HarnessCapability] {
@@ -966,6 +1003,8 @@ struct MacChatView: View {
             return "doc.text.magnifyingglass"
         case .appleNotes:
             return "note.text"
+        case .notebookLM:
+            return "text.book.closed"
         case .acceptedGraph:
             return "checkmark.seal"
         case .skillDirectory:

@@ -769,9 +769,11 @@ import Testing
     let github = home.appendingPathComponent("Developer/GitHub", isDirectory: true)
     let obsidian = home.appendingPathComponent("Documents/Main", isDirectory: true)
     let notes = home.appendingPathComponent("Documents/Harness/Apple Notes Export", isDirectory: true)
+    let notebookLM = home.appendingPathComponent("Documents/Harness/NotebookLM", isDirectory: true)
     try FileManager.default.createDirectory(at: github, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: obsidian, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: notes, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: notebookLM, withIntermediateDirectories: true)
 
     let sources = LocalMemorySourceRegistry.defaultSources(homeDirectory: home)
     let existing = sources.filter(\.exists)
@@ -779,9 +781,10 @@ import Testing
     #expect(existing.contains { $0.kind == .github && $0.root == github })
     #expect(existing.contains { $0.kind == .obsidian && $0.root == obsidian })
     #expect(existing.contains { $0.kind == .appleNotes && $0.root == notes })
+    #expect(existing.contains { $0.kind == .notebookLM && $0.root == notebookLM })
 }
 
-@Test func directoryMemorySearchesGitHubObsidianAndAppleNotesSources() async throws {
+@Test func directoryMemorySearchesGitHubObsidianAppleNotesAndNotebookLMSources() async throws {
     let home = FileManager.default.temporaryDirectory
         .appendingPathComponent("HarnessLocalSourceSearchTests-\(UUID().uuidString)", isDirectory: true)
     defer { try? FileManager.default.removeItem(at: home) }
@@ -789,9 +792,11 @@ import Testing
     let repo = home.appendingPathComponent("Developer/GitHub/UnderstoodSuite", isDirectory: true)
     let vault = home.appendingPathComponent("Documents/Main", isDirectory: true)
     let notes = home.appendingPathComponent("Documents/Harness/Apple Notes Export", isDirectory: true)
+    let notebooks = home.appendingPathComponent("Documents/Harness/NotebookLM", isDirectory: true)
     try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: notes, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: notebooks, withIntermediateDirectories: true)
 
     try "Understood suite marketing feature: graph authority and repo research workflow.".write(
         to: repo.appendingPathComponent("README.md"),
@@ -808,17 +813,68 @@ import Testing
         atomically: true,
         encoding: .utf8
     )
+    try "Understood suite NotebookLM research: synthesis says lead with communication artifacts and evidence packs.".write(
+        to: notebooks.appendingPathComponent("launch-research.md"),
+        atomically: true,
+        encoding: .utf8
+    )
 
     let sources = LocalMemorySourceRegistry.defaultSources(homeDirectory: home)
     let retriever = DirectoryMemoryRetriever(sources: sources, maxFiles: 50)
     let hits = try await retriever.retrieve(
         prompt: "Research the Understood suite and outline market features.",
-        limit: 5
+        limit: 8
     )
 
     #expect(hits.contains { $0.reasonSelected.contains("local-source github") })
     #expect(hits.contains { $0.reasonSelected.contains("local-source obsidian") })
     #expect(hits.contains { $0.reasonSelected.contains("local-source apple-notes") })
+    #expect(hits.contains { $0.reasonSelected.contains("local-source notebooklm") })
+    #expect(hits.contains { $0.reasonSelected.contains("web-synthesis") })
+}
+
+@Test func notebookLMMemoryLabelsWebSynthesisUnlessSourceClassIsExplicit() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("HarnessNotebookLMTrustTests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    try "Rabois fragmented-market research synthesis from public sources.".write(
+        to: root.appendingPathComponent("rabois-research.md"),
+        atomically: true,
+        encoding: .utf8
+    )
+    try """
+    ---
+    source-class: direct-thought
+    ---
+    Delegation insight from Adam: Harness should show candidates before connectors.
+    """.write(
+        to: root.appendingPathComponent("delegation-direct-thought.md"),
+        atomically: true,
+        encoding: .utf8
+    )
+
+    let retriever = DirectoryMemoryRetriever(
+        sources: [
+            LocalMemorySource(
+                title: "NotebookLM notebooks",
+                kind: .notebookLM,
+                root: root,
+                weight: 0.9,
+                allowedExtensions: LocalMemorySourceRegistry.noteExtensions()
+            )
+        ],
+        maxFiles: 20
+    )
+
+    let webHit = try #require(try await retriever.retrieve(prompt: "Rabois fragmented-market research", limit: 1).first)
+    let directThoughtHit = try #require(try await retriever.retrieve(prompt: "Delegation insight candidates connectors", limit: 1).first)
+
+    #expect(webHit.reasonSelected.contains("notebooklm web-synthesis supporting-only"))
+    #expect(webHit.authorityLevel == .supporting)
+    #expect(directThoughtHit.reasonSelected.contains("notebooklm direct-thought-label supporting-only"))
+    #expect(directThoughtHit.authorityLevel == .supporting)
 }
 
 @Test func appleNotesExporterBuildsAutomationScriptForExportFolder() {
@@ -840,6 +896,7 @@ import Testing
         "Developer/GitHub",
         "Documents/Main",
         "Documents/Harness/Apple Notes Export",
+        "Documents/Harness/NotebookLM",
         ".claude/skills",
         ".claude/plugins/cache/example-plugin/example/1.0.0",
         ".codex/skills",
@@ -860,10 +917,13 @@ import Testing
     #expect(connectors.contains { $0.kind == .github && $0.role == .supportingMemory && $0.state == .available })
     #expect(connectors.contains { $0.kind == .obsidian && $0.role == .supportingMemory && $0.state == .available })
     #expect(connectors.contains { $0.kind == .appleNotes && $0.role == .supportingMemory && $0.state == .available })
+    #expect(connectors.contains { $0.kind == .notebookLM && $0.role == .supportingMemory && $0.state == .available })
+    #expect(connectors.contains { $0.kind == .notebookLM && $0.provenance.contains("source-class: direct-thought") })
     #expect(connectors.contains { $0.kind == .skillDirectory && $0.role == .proceduralMemory && $0.sourceSystem == "Claude" })
     #expect(connectors.contains { $0.kind == .pluginDirectory && $0.role == .plugin && $0.sourceSystem == "Codex" })
     #expect(connectors.contains { $0.kind == .agentBridge && $0.role == .toolBridge && $0.sourceSystem == "Hermes" })
     #expect(HarnessConnectorRegistry.memorySources(from: connectors).contains { $0.kind == .github })
+    #expect(HarnessConnectorRegistry.memorySources(from: connectors).contains { $0.kind == .notebookLM })
 }
 
 @Test func connectorRegistrySurfacesFirecrawlMCPAsApprovalGatedToolBridge() throws {
@@ -1117,6 +1177,7 @@ import Testing
         "Developer/GitHub/Understood",
         "Documents/Main",
         "Documents/Harness/Apple Notes Export",
+        "Documents/Harness/NotebookLM",
         ".hermes/skills/research/llm-wiki",
         ".claude/skills/research-response",
         ".agents/skills/firecrawl-deep-research",
@@ -1164,6 +1225,7 @@ import Testing
 
     #expect(plan.steps.contains { $0.action == .inspectRepository && $0.targetName == "GitHub repositories" && $0.guardrail == .readOnly })
     #expect(plan.steps.contains { $0.action == .searchMemory && $0.targetName.contains("Obsidian") && $0.guardrail == .readOnly })
+    #expect(plan.steps.contains { $0.action == .searchMemory && $0.targetName == "NotebookLM notebooks" && $0.guardrail == .readOnly })
     #expect(plan.steps.contains { $0.action == .runSkill && $0.targetName == "research-response" && $0.guardrail == .readOnly })
     #expect(plan.steps.contains { $0.action == .runSkill && $0.targetName == "firecrawl-deep-research" && $0.guardrail == .approvalRequired })
     #expect(plan.steps.contains { $0.action == .createArtifact && $0.targetName == "web-artifacts-builder" })
@@ -1224,9 +1286,11 @@ import Testing
     let repo = home.appendingPathComponent("Developer/GitHub/UnderstoodSuite", isDirectory: true)
     let vault = home.appendingPathComponent("Documents/Main", isDirectory: true)
     let notes = home.appendingPathComponent("Documents/Harness/Apple Notes Export", isDirectory: true)
+    let notebooks = home.appendingPathComponent("Documents/Harness/NotebookLM", isDirectory: true)
     try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: notes, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: notebooks, withIntermediateDirectories: true)
 
     try "Understood suite feature: repo inspection explains graph authority and agent routing.".write(
         to: repo.appendingPathComponent("README.md"),
@@ -1240,6 +1304,11 @@ import Testing
     )
     try "Understood suite Apple Notes capture: explain safe local execution.".write(
         to: notes.appendingPathComponent("capture.txt"),
+        atomically: true,
+        encoding: .utf8
+    )
+    try "Understood suite NotebookLM source pack: synthesized research should be context, not authority.".write(
+        to: notebooks.appendingPathComponent("source-pack.md"),
         atomically: true,
         encoding: .utf8
     )
@@ -1263,6 +1332,7 @@ import Testing
     #expect(result.memoryHits.contains { $0.reasonSelected.contains("local-source github") })
     #expect(result.memoryHits.contains { $0.reasonSelected.contains("local-source obsidian") })
     #expect(result.memoryHits.contains { $0.reasonSelected.contains("local-source apple-notes") })
+    #expect(result.memoryHits.contains { $0.reasonSelected.contains("local-source notebooklm") })
     #expect(result.blockedSteps.allSatisfy { $0.guardrail != .readOnly })
 }
 

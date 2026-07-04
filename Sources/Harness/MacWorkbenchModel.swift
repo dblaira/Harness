@@ -1,6 +1,8 @@
 #if os(macOS)
+import AppKit
 import Foundation
 import OntologyKit
+import UniformTypeIdentifiers
 
 @MainActor
 final class MacWorkbenchModel: ObservableObject {
@@ -125,6 +127,213 @@ final class MacWorkbenchModel: ObservableObject {
             draft += "\n\(insertion) "
         }
         status = "\(capability.name) added to draft."
+    }
+
+    func notebookLMSourceFiles(limit: Int = 20) -> [NotebookLMSourceFile] {
+        let fileManager = FileManager.default
+        let roots = connectors
+            .filter { $0.kind == .notebookLM }
+            .map(\.root)
+        let extensions = LocalMemorySourceRegistry.notebookLMExtensions()
+
+        var files: [NotebookLMSourceFile] = []
+        for root in roots {
+            guard files.count < limit * 2,
+                  fileManager.fileExists(atPath: root.path),
+                  let enumerator = fileManager.enumerator(
+                    at: root,
+                    includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
+                    options: [.skipsHiddenFiles, .skipsPackageDescendants]
+                  )
+            else { continue }
+
+            for case let file as URL in enumerator {
+                guard extensions.contains(file.pathExtension.lowercased()) else { continue }
+                guard !file.lastPathComponent.hasSuffix(".harness.md") else { continue }
+                guard (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+                let modifiedAt = try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+                files.append(NotebookLMSourceFile(
+                    url: file,
+                    rootTitle: root.lastPathComponent.isEmpty ? "NotebookLM" : root.lastPathComponent,
+                    modifiedAt: modifiedAt ?? .distantPast
+                ))
+            }
+        }
+
+        return Array(files
+            .sorted {
+                if $0.modifiedAt == $1.modifiedAt {
+                    return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+                }
+                return $0.modifiedAt > $1.modifiedAt
+            }
+            .prefix(limit))
+    }
+
+    func insertNotebookLMSourceReference(_ source: NotebookLMSourceFile) {
+        let insertion = Self.notebookLMReferenceText(for: source)
+        if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            draft = insertion
+        } else if !draft.contains(source.url.path) {
+            draft += "\n\n\(insertion)"
+        }
+        status = "\(source.title) added from NotebookLM."
+    }
+
+    func importNotebookLMSourceFromDownloads() {
+        let downloads = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Downloads", isDirectory: true)
+        presentNotebookLMImportPanel(
+            startingDirectory: downloads,
+            title: "Import NotebookLM Download"
+        )
+    }
+
+    func chooseNotebookLMSource() {
+        presentNotebookLMImportPanel(
+            startingDirectory: ensureNotebookLMDirectory(),
+            title: "Choose NotebookLM Export"
+        )
+    }
+
+    private func presentNotebookLMImportPanel(startingDirectory: URL, title: String) {
+        let panel = NSOpenPanel()
+        panel.title = title
+        panel.prompt = "Import"
+        panel.directoryURL = startingDirectory
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = LocalMemorySourceRegistry.notebookLMExtensions()
+            .compactMap { UTType(filenameExtension: $0) }
+
+        guard panel.runModal() == .OK, let url = panel.url else {
+            return
+        }
+
+        do {
+            let imported = try importNotebookLMFile(url)
+            insertNotebookLMSourceReference(imported)
+            refreshConnectors()
+        } catch {
+            status = "NotebookLM import failed: \(error.localizedDescription)"
+        }
+    }
+
+    func openNotebookLMFolder() {
+        let directory = ensureNotebookLMDirectory()
+        NSWorkspace.shared.open(directory)
+        refreshConnectors()
+        status = "NotebookLM folder opened."
+    }
+
+    nonisolated static func notebookLMReferenceText(for source: NotebookLMSourceFile) -> String {
+        var parts = [
+            """
+        [NotebookLM: \(source.title)]
+        Source: \(source.url.path)
+        """
+        ]
+        if let indexURL = source.indexURL {
+            parts.append("Index: \(indexURL.path)")
+        }
+        parts.append(
+            """
+        Use as supporting research context only; not accepted authority unless promoted through review.
+        """
+        )
+        return parts.joined(separator: "\n")
+    }
+
+    func importNotebookLMFile(_ sourceURL: URL) throws -> NotebookLMSourceFile {
+        let destinationDirectory = ensureNotebookLMDirectory()
+        let destinationURL = try Self.copyFileIfNeeded(
+            sourceURL,
+            to: destinationDirectory,
+            fileManager: .default
+        )
+        let indexURL = try Self.createNotebookLMIndexIfNeeded(
+            for: destinationURL,
+            originalURL: sourceURL,
+            fileManager: .default
+        )
+        let modifiedAt = (try? destinationURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date()
+        return NotebookLMSourceFile(
+            url: destinationURL,
+            rootTitle: destinationDirectory.lastPathComponent.isEmpty ? "NotebookLM" : destinationDirectory.lastPathComponent,
+            modifiedAt: modifiedAt,
+            indexURL: indexURL
+        )
+    }
+
+    nonisolated static func copyFileIfNeeded(
+        _ sourceURL: URL,
+        to directory: URL,
+        fileManager: FileManager
+    ) throws -> URL {
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let standardizedSource = sourceURL.standardizedFileURL
+        if standardizedSource.deletingLastPathComponent().standardizedFileURL == directory.standardizedFileURL {
+            return standardizedSource
+        }
+
+        let destination = uniqueDestinationURL(
+            for: sourceURL.lastPathComponent,
+            in: directory,
+            fileManager: fileManager
+        )
+        try fileManager.copyItem(at: sourceURL, to: destination)
+        return destination
+    }
+
+    nonisolated static func createNotebookLMIndexIfNeeded(
+        for importedURL: URL,
+        originalURL: URL,
+        fileManager: FileManager
+    ) throws -> URL? {
+        let textExtensions = LocalMemorySourceRegistry.noteExtensions()
+        guard !textExtensions.contains(importedURL.pathExtension.lowercased()) else {
+            return nil
+        }
+
+        let indexURL = importedURL
+            .deletingPathExtension()
+            .appendingPathExtension("harness")
+            .appendingPathExtension("md")
+        let body = """
+        # NotebookLM Import: \(importedURL.deletingPathExtension().lastPathComponent)
+
+        source-class: notebooklm-export
+        imported-file: \(importedURL.path)
+        original-file: \(originalURL.path)
+        file-type: \(importedURL.pathExtension.lowercased())
+
+        This file was imported from a NotebookLM-created document. Treat it as synthesized research context, like web evidence, unless the user explicitly marks it as personal-data or direct-thought.
+        """
+        try body.write(to: indexURL, atomically: true, encoding: .utf8)
+        return indexURL
+    }
+
+    nonisolated static func uniqueDestinationURL(
+        for fileName: String,
+        in directory: URL,
+        fileManager: FileManager
+    ) -> URL {
+        let original = directory.appendingPathComponent(fileName)
+        guard fileManager.fileExists(atPath: original.path) else { return original }
+
+        let stem = original.deletingPathExtension().lastPathComponent
+        let fileExtension = original.pathExtension
+        for index in 2...999 {
+            let candidateName = fileExtension.isEmpty
+                ? "\(stem)-\(index)"
+                : "\(stem)-\(index).\(fileExtension)"
+            let candidate = directory.appendingPathComponent(candidateName)
+            if !fileManager.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+        }
+        return directory.appendingPathComponent("\(UUID().uuidString)-\(fileName)")
     }
 
     func runReadOnlyRoute() {
@@ -512,6 +721,15 @@ final class MacWorkbenchModel: ObservableObject {
         return environment
     }
 
+    private func ensureNotebookLMDirectory() -> URL {
+        let preferred = connectors.first { $0.kind == .notebookLM && $0.state == .available }?.root
+            ?? connectors.first { $0.kind == .notebookLM }?.root
+            ?? FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Documents/Harness/NotebookLM", isDirectory: true)
+        try? FileManager.default.createDirectory(at: preferred, withIntermediateDirectories: true)
+        return preferred
+    }
+
     private static func loadFirecrawlAPIKey() -> String? {
         let environmentKey = ProcessInfo.processInfo.environment["FIRECRAWL_API_KEY"]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -519,6 +737,33 @@ final class MacWorkbenchModel: ObservableObject {
             return environmentKey
         }
         return APIKeyStore.loadFirecrawlKey()
+    }
+}
+
+struct NotebookLMSourceFile: Identifiable, Equatable {
+    let url: URL
+    let rootTitle: String
+    let modifiedAt: Date
+    let indexURL: URL?
+
+    init(url: URL, rootTitle: String, modifiedAt: Date) {
+        self.init(url: url, rootTitle: rootTitle, modifiedAt: modifiedAt, indexURL: nil)
+    }
+
+    init(url: URL, rootTitle: String, modifiedAt: Date, indexURL: URL?) {
+        self.url = url
+        self.rootTitle = rootTitle
+        self.modifiedAt = modifiedAt
+        self.indexURL = indexURL
+    }
+
+    var id: String { url.path }
+    var title: String { url.deletingPathExtension().lastPathComponent }
+
+    var menuTitle: String {
+        let base = title.isEmpty ? url.lastPathComponent : title
+        guard base.count > 36 else { return base }
+        return String(base.prefix(33)) + "..."
     }
 }
 
@@ -613,6 +858,15 @@ struct WorkbenchToolGroup: Identifiable, Equatable {
                     summary: "Exports Apple Notes into a local Harness folder, then searches them as supporting memory.",
                     permission: "Requires macOS Automation permission for Notes on first sync.",
                     provenance: "Exported note files are searched as supporting memory, not accepted authority."
+                ),
+                WorkbenchTool(
+                    title: "NotebookLM",
+                    icon: "text.book.closed",
+                    state: .readOnly,
+                    detail: "synthesis context",
+                    summary: "Searches exported NotebookLM notebooks, study guides, briefs, and source packs as supporting research context.",
+                    permission: "Read-only local exports; no direct NotebookLM account control.",
+                    provenance: "Unlabeled NotebookLM files are treated like web synthesis unless marked source-class: personal-data or source-class: direct-thought."
                 ),
                 WorkbenchTool(
                     title: "Run ledger",
