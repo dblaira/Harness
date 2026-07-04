@@ -387,6 +387,135 @@ public struct OpportunityBoardRow: Identifiable, Codable, Sendable, Equatable {
     }
 }
 
+public enum OpportunityBoardViewMode: String, Codable, Sendable, Equatable, Hashable, CaseIterable, Identifiable {
+    case scan = "scan"
+    case nowOnly = "now_only"
+    case byBand = "by_band"
+
+    public var id: String { rawValue }
+
+    public var label: String {
+        switch self {
+        case .scan:
+            return "Scan"
+        case .nowOnly:
+            return "Now"
+        case .byBand:
+            return "Band"
+        }
+    }
+}
+
+public struct OpportunityBoardBandGroup: Identifiable, Codable, Sendable, Equatable {
+    public var id: OpportunityBand { band }
+    public var band: OpportunityBand
+    public var rows: [OpportunityBoardRow]
+
+    public init(band: OpportunityBand, rows: [OpportunityBoardRow]) {
+        self.band = band
+        self.rows = rows
+    }
+}
+
+public struct OpportunityBoardProjection: Codable, Sendable, Equatable {
+    public var rows: [OpportunityBoardRow]
+
+    public init(rows: [OpportunityBoardRow]) {
+        self.rows = Self.sortedByPriority(rows)
+    }
+
+    public func rows(for mode: OpportunityBoardViewMode) -> [OpportunityBoardRow] {
+        switch mode {
+        case .scan:
+            return rows
+        case .nowOnly:
+            return Self.sortedByWindow(rows.filter { $0.card.band == .now })
+        case .byBand:
+            return groupsByBand().flatMap(\.rows)
+        }
+    }
+
+    public func groupsByBand() -> [OpportunityBoardBandGroup] {
+        OpportunityBand.allCases.compactMap { band in
+            let bandRows = Self.sortedByPriority(rows.filter { $0.card.band == band })
+            guard !bandRows.isEmpty else { return nil }
+            return OpportunityBoardBandGroup(band: band, rows: bandRows)
+        }
+    }
+
+    private static func sortedByPriority(_ rows: [OpportunityBoardRow]) -> [OpportunityBoardRow] {
+        rows.sorted { lhs, rhs in
+            if lhs.card.priority == rhs.card.priority {
+                return lhs.id < rhs.id
+            }
+            return lhs.card.priority > rhs.card.priority
+        }
+    }
+
+    private static func sortedByWindow(_ rows: [OpportunityBoardRow]) -> [OpportunityBoardRow] {
+        rows.sorted { lhs, rhs in
+            switch (lhs.card.windowDays, rhs.card.windowDays) {
+            case let (lhsWindow?, rhsWindow?) where lhsWindow != rhsWindow:
+                return lhsWindow < rhsWindow
+            case (nil, _?):
+                return false
+            case (_?, nil):
+                return true
+            default:
+                if lhs.card.priority == rhs.card.priority {
+                    return lhs.id < rhs.id
+                }
+                return lhs.card.priority > rhs.card.priority
+            }
+        }
+    }
+}
+
+public enum OpportunityBoardAction: String, Codable, Sendable, Equatable, Hashable, CaseIterable {
+    case pass
+    case hold
+    case bookmark
+    case pursue
+
+    public var label: String {
+        switch self {
+        case .pass:
+            return "Pass"
+        case .hold:
+            return "Hold"
+        case .bookmark:
+            return "Bookmark"
+        case .pursue:
+            return "Pursue"
+        }
+    }
+}
+
+public struct OpportunityBoardActionRecord: Identifiable, Codable, Sendable, Equatable {
+    public var id: String
+    public var batchID: String
+    public var opportunityID: String
+    public var canonicalResource: String
+    public var action: OpportunityBoardAction
+    public var createdAt: Date
+
+    public init(
+        id: String = UUID().uuidString,
+        batchID: String,
+        opportunityID: String,
+        canonicalResource: String,
+        action: OpportunityBoardAction,
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.batchID = batchID
+        self.opportunityID = opportunityID
+        self.canonicalResource = canonicalResource
+        self.action = action
+        self.createdAt = createdAt
+    }
+}
+
 public struct OpportunityBoardDeduper: Sendable {
     public init() {}
 

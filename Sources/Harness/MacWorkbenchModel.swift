@@ -21,6 +21,8 @@ final class MacWorkbenchModel: ObservableObject {
     @Published var searchText = ""
     @Published var selectedTool: WorkbenchTool?
     @Published var reviewQueueCandidates: [MemoryCandidate] = []
+    @Published var opportunityBoardRows: [OpportunityBoardRow] = []
+    @Published var opportunityBoardLoadIssue: String?
     @Published var connectors: [HarnessConnector] = HarnessConnectorRegistry.defaultConnectors()
     @Published var capabilities: [HarnessCapability] = HarnessCapabilityRegistry.defaultCapabilities()
     @Published var routePlan = HarnessExecutionRoutePlan(prompt: "", steps: [])
@@ -45,6 +47,7 @@ final class MacWorkbenchModel: ObservableObject {
         Task {
             await refreshRuns()
             await refreshReviewQueue()
+            refreshOpportunityBoard()
             refreshConnectors()
         }
     }
@@ -99,6 +102,91 @@ final class MacWorkbenchModel: ObservableObject {
         } catch {
             reviewQueueCandidates = []
             status = "Candidates unavailable: \(error.localizedDescription)"
+        }
+    }
+
+    func refreshOpportunityBoard() {
+        do {
+            opportunityBoardRows = try Self.loadOpportunityBoardRows(from: Self.defaultOpportunityBoardDirectory())
+            opportunityBoardLoadIssue = nil
+        } catch {
+            opportunityBoardRows = []
+            opportunityBoardLoadIssue = error.localizedDescription
+        }
+    }
+
+    nonisolated static func defaultOpportunityBoardDirectory() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Documents", isDirectory: true)
+            .appendingPathComponent("Harness", isDirectory: true)
+            .appendingPathComponent("Opportunities", isDirectory: true)
+    }
+
+    nonisolated static func loadOpportunityBoardRows(
+        from directory: URL,
+        fileManager: FileManager = .default
+    ) throws -> [OpportunityBoardRow] {
+        guard fileManager.fileExists(atPath: directory.path) else {
+            return []
+        }
+        guard let enumerator = fileManager.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else {
+            return []
+        }
+
+        let parser = OpportunityCardParser()
+        let validator = OpportunityCardValidator()
+        var cards: [OpportunityCard] = []
+
+        for case let file as URL in enumerator {
+            guard file.pathExtension.lowercased() == "md" else { continue }
+            guard (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+            let markdown = try String(contentsOf: file, encoding: .utf8)
+            guard case let .opportunity(card) = try? parser.parse(markdown: markdown, source: file.path),
+                  validator.validate(card).passed
+            else { continue }
+            cards.append(card)
+        }
+
+        return OpportunityBoardDeduper().deduplicate(cards)
+    }
+
+    func recordOpportunityBoardAction(_ action: OpportunityBoardAction, rows: [OpportunityBoardRow]) {
+        let records = Self.opportunityBoardActionRecords(action: action, rows: rows)
+        guard !records.isEmpty else { return }
+
+        let ledger = ledger
+        Task { [weak self] in
+            do {
+                try await ledger.recordOpportunityBoardActions(records)
+                await MainActor.run {
+                    self?.status = "\(action.label) recorded for \(records.count) opportunity row\(records.count == 1 ? "" : "s")."
+                }
+            } catch {
+                await MainActor.run {
+                    self?.status = "\(action.label) failed: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    nonisolated static func opportunityBoardActionRecords(
+        action: OpportunityBoardAction,
+        rows: [OpportunityBoardRow],
+        batchID: String = UUID().uuidString,
+        createdAt: Date = Date()
+    ) -> [OpportunityBoardActionRecord] {
+        rows.map { row in
+            OpportunityBoardActionRecord(
+                batchID: batchID,
+                opportunityID: row.id,
+                canonicalResource: row.canonicalResource,
+                action: action,
+                createdAt: createdAt
+            )
         }
     }
 

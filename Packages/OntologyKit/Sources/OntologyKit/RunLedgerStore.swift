@@ -133,6 +133,26 @@ public actor RunLedgerStore {
         }
     }
 
+    public func recordOpportunityBoardActions(_ records: [OpportunityBoardActionRecord]) throws {
+        guard !records.isEmpty else { return }
+        try dbQueue.write { db in
+            for record in records {
+                try insertOpportunityBoardAction(record, db: db)
+            }
+        }
+    }
+
+    public func listOpportunityBoardActions(limit: Int = 100) throws -> [OpportunityBoardActionRecord] {
+        try dbQueue.read { db in
+            try Row.fetchAll(
+                db,
+                sql: "SELECT * FROM opportunity_board_actions ORDER BY createdAt DESC LIMIT ?",
+                arguments: [limit]
+            )
+            .map(mapOpportunityBoardAction)
+        }
+    }
+
     private static var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
         migrator.registerMigration("v1") { db in
@@ -247,6 +267,16 @@ public actor RunLedgerStore {
                 try db.alter(table: "memory_hits") { t in
                     t.add(column: "sourceCardJSON", .text)
                 }
+            }
+        }
+        migrator.registerMigration("v4-opportunity-board-actions") { db in
+            try db.create(table: "opportunity_board_actions", ifNotExists: true) { t in
+                t.column("id", .text).primaryKey()
+                t.column("batchID", .text).notNull().indexed()
+                t.column("opportunityID", .text).notNull().indexed()
+                t.column("canonicalResource", .text).notNull()
+                t.column("action", .text).notNull().indexed()
+                t.column("createdAt", .double).notNull()
             }
         }
         return migrator
@@ -372,6 +402,24 @@ private func insertReviewQueueDecision(_ decision: ReviewQueueDecisionRecord, db
             decision.evidenceNote,
             decision.sourceRef,
             decision.createdAt.timeIntervalSince1970
+        ]
+    )
+}
+
+private func insertOpportunityBoardAction(_ record: OpportunityBoardActionRecord, db: Database) throws {
+    try db.execute(
+        sql: """
+        INSERT OR REPLACE INTO opportunity_board_actions
+        (id, batchID, opportunityID, canonicalResource, action, createdAt)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        arguments: [
+            record.id,
+            record.batchID,
+            record.opportunityID,
+            record.canonicalResource,
+            record.action.rawValue,
+            record.createdAt.timeIntervalSince1970
         ]
     )
 }
@@ -506,6 +554,17 @@ private func mapReviewQueueDecision(_ row: Row) -> ReviewQueueDecisionRecord {
         claim: row["claim"],
         evidenceNote: row["evidenceNote"],
         sourceRef: row["sourceRef"],
+        createdAt: Date(timeIntervalSince1970: row["createdAt"])
+    )
+}
+
+private func mapOpportunityBoardAction(_ row: Row) -> OpportunityBoardActionRecord {
+    OpportunityBoardActionRecord(
+        id: row["id"],
+        batchID: row["batchID"],
+        opportunityID: row["opportunityID"],
+        canonicalResource: row["canonicalResource"],
+        action: OpportunityBoardAction(rawValue: row["action"]) ?? .hold,
         createdAt: Date(timeIntervalSince1970: row["createdAt"])
     )
 }

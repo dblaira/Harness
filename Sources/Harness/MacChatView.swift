@@ -10,9 +10,12 @@ struct MacChatView: View {
     @SceneStorage("MacChatView.isInspectorVisible") private var isInspectorVisible = true
     @SceneStorage("MacChatView.sidebarRailWidth") private var sidebarWidth = HarnessWorkbenchLayoutState.defaultSidebarWidth
     @SceneStorage("MacChatView.inspectorRailWidth") private var inspectorWidth = HarnessWorkbenchLayoutState.defaultInspectorWidth
+    @SceneStorage("MacChatView.centerSurface") private var centerSurfaceRaw = WorkbenchCenterSurface.chat.rawValue
+    @AppStorage("MacChatView.opportunityBoardViewMode") private var opportunityBoardViewModeRaw = OpportunityBoardViewMode.scan.rawValue
     @State private var sidebarDragStartWidth: Double?
     @State private var inspectorDragStartWidth: Double?
     @State private var isInspectorDetailPresented = false
+    @State private var selectedOpportunityIDs = Set<String>()
 
     var body: some View {
         HStack(spacing: 0) {
@@ -39,6 +42,9 @@ struct MacChatView: View {
         }
         .onChange(of: ontology.connections.count) { _, _ in model.updateOntology(ontology) }
         .onChange(of: model.searchText) { _, _ in Task { await model.searchRuns() } }
+        .onChange(of: model.opportunityBoardRows.map(\.id)) { _, ids in
+            selectedOpportunityIDs.formIntersection(Set(ids))
+        }
     }
 
     private var currentLayout: HarnessWorkbenchLayoutState {
@@ -53,6 +59,36 @@ struct MacChatView: View {
     private func normalizePanelWidths() {
         sidebarWidth = HarnessWorkbenchLayoutState.clampedSidebarWidth(sidebarWidth)
         inspectorWidth = HarnessWorkbenchLayoutState.clampedInspectorWidth(inspectorWidth)
+    }
+
+    private var centerSurface: WorkbenchCenterSurface {
+        WorkbenchCenterSurface(rawValue: centerSurfaceRaw) ?? .chat
+    }
+
+    private var centerSurfaceBinding: Binding<WorkbenchCenterSurface> {
+        Binding(
+            get: { centerSurface },
+            set: { centerSurfaceRaw = $0.rawValue }
+        )
+    }
+
+    private var opportunityBoardViewMode: OpportunityBoardViewMode {
+        OpportunityBoardViewMode(rawValue: opportunityBoardViewModeRaw) ?? .scan
+    }
+
+    private var opportunityBoardViewModeBinding: Binding<OpportunityBoardViewMode> {
+        Binding(
+            get: { opportunityBoardViewMode },
+            set: { opportunityBoardViewModeRaw = $0.rawValue }
+        )
+    }
+
+    private var opportunityBoardProjection: OpportunityBoardProjection {
+        OpportunityBoardProjection(rows: model.opportunityBoardRows)
+    }
+
+    private var visibleOpportunityRows: [OpportunityBoardRow] {
+        opportunityBoardProjection.rows(for: opportunityBoardViewMode)
     }
 
     private var sidebar: some View {
@@ -254,38 +290,344 @@ struct MacChatView: View {
     private var transcript: some View {
         VStack(spacing: 0) {
             topBar
-            ZStack {
-                MacHarnessWatermark()
-                    .frame(width: 260, height: 300)
-                    .opacity(model.selectedDetail == nil ? 0.18 : 0.08)
-
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        if let detail = model.selectedDetail {
-                            runSummary(detail)
-                            ForEach(detail.messages) { message in
-                                messageBubble(message)
-                            }
-                        }
-
-                        if model.isRunning {
-                            HStack(spacing: 10) {
-                                ProgressView().controlSize(.small)
-                                Text(model.status)
-                                    .foregroundStyle(Theme.macInk.opacity(0.55))
-                            }
-                            .padding(.top, 4)
-                        }
-                    }
-                    .padding(22)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
+            centerSurfaceContent
             delegateLabel
             composer
         }
         .frame(minWidth: CGFloat(HarnessWorkbenchLayoutState.transcriptMinimumWidth), maxWidth: .infinity)
         .background(Theme.macBg)
+    }
+
+    @ViewBuilder
+    private var centerSurfaceContent: some View {
+        switch centerSurface {
+        case .chat:
+            chatTranscriptSurface
+        case .board:
+            opportunityBoardSurface
+        }
+    }
+
+    private var chatTranscriptSurface: some View {
+        ZStack {
+            MacHarnessWatermark()
+                .frame(width: 260, height: 300)
+                .opacity(model.selectedDetail == nil ? 0.18 : 0.08)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if let detail = model.selectedDetail {
+                        runSummary(detail)
+                        ForEach(detail.messages) { message in
+                            messageBubble(message)
+                        }
+                    }
+
+                    if model.isRunning {
+                        HStack(spacing: 10) {
+                            ProgressView().controlSize(.small)
+                            Text(model.status)
+                                .foregroundStyle(Theme.macInk.opacity(0.55))
+                        }
+                        .padding(.top, 4)
+                    }
+                }
+                .padding(22)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private var opportunityBoardSurface: some View {
+        VStack(spacing: 0) {
+            opportunityBoardToolbar
+
+            if visibleOpportunityRows.isEmpty {
+                opportunityBoardEmptyState
+            } else {
+                ScrollView([.vertical, .horizontal]) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        opportunityBoardHeader
+                        if opportunityBoardViewMode == .byBand {
+                            ForEach(opportunityBoardProjection.groupsByBand()) { group in
+                                opportunityBandHeader(group.band, count: group.rows.count)
+                                ForEach(group.rows) { row in
+                                    opportunityBoardRow(row)
+                                }
+                            }
+                        } else {
+                            ForEach(visibleOpportunityRows) { row in
+                                opportunityBoardRow(row)
+                            }
+                        }
+                    }
+                    .padding(18)
+                }
+            }
+
+            opportunityBoardActionBar
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var opportunityBoardToolbar: some View {
+        HStack(spacing: 10) {
+            Picker("Board View", selection: opportunityBoardViewModeBinding) {
+                ForEach(OpportunityBoardViewMode.allCases) { mode in
+                    Text(mode.label).tag(mode)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .frame(width: 174)
+
+            statusBadge("\(model.opportunityBoardRows.count) rows")
+
+            if let issue = model.opportunityBoardLoadIssue {
+                Text(issue)
+                    .font(.caption)
+                    .foregroundStyle(Theme.macRed)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            Button {
+                model.refreshOpportunityBoard()
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.macInk.opacity(0.68))
+                    .frame(width: 28, height: 24)
+                    .background(Theme.macEntry.opacity(0.28), in: RoundedRectangle(cornerRadius: 7))
+                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.macHair, lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .help("Refresh Board")
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+        .overlay(Rectangle().fill(Theme.macHair).frame(height: 1), alignment: .bottom)
+    }
+
+    private var opportunityBoardEmptyState: some View {
+        ZStack {
+            MacHarnessWatermark()
+                .frame(width: 260, height: 300)
+                .opacity(0.12)
+
+            VStack(spacing: 8) {
+                Text("No opportunity cards")
+                    .font(.system(.title3, design: .serif).weight(.semibold))
+                    .foregroundStyle(Theme.macInk)
+                Text(MacWorkbenchModel.defaultOpportunityBoardDirectory().path)
+                    .font(.caption)
+                    .foregroundStyle(Theme.macInk.opacity(0.48))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .padding(.horizontal, 24)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var opportunityBoardHeader: some View {
+        HStack(spacing: 0) {
+            opportunityHeaderCell("", width: 28)
+            opportunityHeaderCell("Opportunity", width: 280)
+            opportunityHeaderCell("Band", width: 70)
+            opportunityHeaderCell("Fit", width: 58, alignment: .trailing)
+            opportunityHeaderCell("Priority", width: 76, alignment: .trailing)
+            opportunityHeaderCell("Window", width: 72, alignment: .trailing)
+            opportunityHeaderCell("Attention", width: 84, alignment: .trailing)
+            opportunityHeaderCell("Seen", width: 56, alignment: .trailing)
+            opportunityHeaderCell("Sources", width: 66, alignment: .trailing)
+            opportunityHeaderCell("Rules", width: 138)
+            opportunityHeaderCell("Scout", width: 118)
+            opportunityHeaderCell("$ Order", width: 78)
+            opportunityHeaderCell("Effort", width: 68)
+        }
+        .padding(.vertical, 7)
+        .background(Theme.macEntry.opacity(0.18))
+    }
+
+    private func opportunityBoardRow(_ row: OpportunityBoardRow) -> some View {
+        let selected = selectedOpportunityIDs.contains(row.id)
+        let card = row.card
+
+        return Button {
+            toggleOpportunitySelection(row)
+        } label: {
+            HStack(spacing: 0) {
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 12).weight(.semibold))
+                    .foregroundStyle(selected ? Theme.macInk : Theme.macInk.opacity(0.38))
+                    .frame(width: 28, alignment: .center)
+
+                opportunityCell(opportunityTitle(row), width: 280, weight: .semibold)
+                opportunityCell(card.band?.rawValue ?? card.rawBand ?? "-", width: 70)
+                opportunityCell(formatFit(card.fit), width: 58, alignment: .trailing)
+                opportunityCell(formatPriority(card.priority), width: 76, alignment: .trailing)
+                opportunityCell(card.windowDays.map { "\($0)d" } ?? "-", width: 72, alignment: .trailing)
+                opportunityCell("\(card.attention)", width: 84, alignment: .trailing)
+                opportunityCell("\(card.timesSeen)", width: 56, alignment: .trailing)
+                opportunityCell("\(card.sources)", width: 66, alignment: .trailing)
+                opportunityCell(card.rulesHit.joined(separator: ", "), width: 138)
+                opportunityCell(card.scoutID ?? "-", width: 118)
+                opportunityCell(card.dollarOrder ?? "-", width: 78)
+                opportunityCell(card.effort?.rawValue ?? card.rawEffort ?? "-", width: 68)
+            }
+            .padding(.vertical, 8)
+            .background(selected ? Theme.macEntry.opacity(0.38) : Theme.macEntry.opacity(0.12))
+            .overlay(Rectangle().fill(Theme.macHair).frame(height: 1), alignment: .bottom)
+        }
+        .buttonStyle(.plain)
+        .help(row.canonicalResource)
+    }
+
+    private func opportunityBandHeader(_ band: OpportunityBand, count: Int) -> some View {
+        HStack(spacing: 8) {
+            Text(band.rawValue)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(Theme.macInk.opacity(0.7))
+            statusBadge("\(count)")
+        }
+        .frame(width: 1_192, alignment: .leading)
+        .padding(.top, 12)
+        .padding(.bottom, 6)
+    }
+
+    private var opportunityBoardActionBar: some View {
+        HStack(spacing: 8) {
+            Text("\(selectedOpportunityCount) selected")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Theme.macInk.opacity(0.56))
+
+            Button {
+                selectedOpportunityIDs.removeAll()
+            } label: {
+                Image(systemName: "xmark.circle")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(selectedOpportunityCount == 0 ? Theme.macInk.opacity(0.28) : Theme.macInk.opacity(0.68))
+                    .frame(width: 28, height: 24)
+                    .background(Theme.macEntry.opacity(0.28), in: RoundedRectangle(cornerRadius: 7))
+                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.macHair, lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .disabled(selectedOpportunityCount == 0)
+            .help("Clear selection")
+
+            Spacer()
+
+            opportunityActionButton("Pass", systemImage: "hand.raised", disabled: selectedOpportunityCount == 0) {
+                model.recordOpportunityBoardAction(.pass, rows: selectedOpportunityRows)
+                selectedOpportunityIDs.removeAll()
+            }
+
+            opportunityActionButton("Hold", systemImage: "pause.circle", disabled: selectedOpportunityCount == 0) {
+                model.recordOpportunityBoardAction(.hold, rows: selectedOpportunityRows)
+            }
+
+            opportunityActionButton("Bookmark", systemImage: "bookmark", disabled: selectedOpportunityCount == 0) {
+                model.recordOpportunityBoardAction(.bookmark, rows: selectedOpportunityRows)
+            }
+
+            opportunityActionButton("Pursue", systemImage: "arrow.up.right.circle", disabled: selectedOpportunityCount != 1) {
+                pursueSelectedOpportunity()
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+        .overlay(Rectangle().fill(Theme.macHair).frame(height: 1), alignment: .top)
+    }
+
+    private func opportunityActionButton(
+        _ title: String,
+        systemImage: String,
+        disabled: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(.caption.weight(.semibold))
+                .labelStyle(.titleAndIcon)
+                .foregroundStyle(disabled ? Theme.macInk.opacity(0.28) : Theme.macInk.opacity(0.78))
+                .padding(.horizontal, 9)
+                .padding(.vertical, 7)
+                .background(Theme.macEntry.opacity(0.28), in: RoundedRectangle(cornerRadius: 7))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.macHair, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+    }
+
+    private func opportunityHeaderCell(_ text: String, width: CGFloat, alignment: Alignment = .leading) -> some View {
+        Text(text)
+            .font(.caption2.weight(.bold))
+            .foregroundStyle(Theme.macInk.opacity(0.54))
+            .lineLimit(1)
+            .frame(width: width, alignment: alignment)
+            .padding(.horizontal, 5)
+    }
+
+    private func opportunityCell(
+        _ text: String,
+        width: CGFloat,
+        alignment: Alignment = .leading,
+        weight: Font.Weight = .regular
+    ) -> some View {
+        Text(text)
+            .font(.system(size: 12).weight(weight))
+            .foregroundStyle(Theme.macInk.opacity(0.78))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(width: width, alignment: alignment)
+            .padding(.horizontal, 5)
+    }
+
+    private var selectedOpportunityCount: Int {
+        selectedOpportunityRows.count
+    }
+
+    private var selectedOpportunityRows: [OpportunityBoardRow] {
+        let selected = selectedOpportunityIDs
+        return model.opportunityBoardRows.filter { selected.contains($0.id) }
+    }
+
+    private func toggleOpportunitySelection(_ row: OpportunityBoardRow) {
+        if selectedOpportunityIDs.contains(row.id) {
+            selectedOpportunityIDs.remove(row.id)
+        } else {
+            selectedOpportunityIDs.insert(row.id)
+        }
+    }
+
+    private func pursueSelectedOpportunity() {
+        guard selectedOpportunityRows.count == 1, let row = selectedOpportunityRows.first else { return }
+        let card = row.card
+        model.recordOpportunityBoardAction(.pursue, rows: [row])
+        model.draft = """
+        Pursue opportunity \(row.id): \(opportunityTitle(row))
+        Resource: \(row.canonicalResource)
+        Rules: \(card.rulesHit.joined(separator: ", "))
+        Scout: \(card.scoutID ?? "unknown")
+        """
+        centerSurfaceRaw = WorkbenchCenterSurface.chat.rawValue
+    }
+
+    private func opportunityTitle(_ row: OpportunityBoardRow) -> String {
+        row.card.envelope.title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? row.card.envelope.title!
+            : row.id
+    }
+
+    private func formatFit(_ fit: Double?) -> String {
+        guard let fit else { return "-" }
+        return fit.formatted(.number.precision(.fractionLength(2)))
+    }
+
+    private func formatPriority(_ priority: Double) -> String {
+        priority.formatted(.number.precision(.fractionLength(1)))
     }
 
     private var topBar: some View {
@@ -298,13 +640,22 @@ struct MacChatView: View {
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(model.selectedDetail?.run.prompt ?? "The Adam Pattern")
+                Text(centerSurface == .board ? "Opportunity Board" : model.selectedDetail?.run.prompt ?? "The Adam Pattern")
                     .font(.system(size: 14).weight(.semibold))
                     .foregroundStyle(Theme.macInk)
                     .lineLimit(1)
             }
 
             Spacer()
+
+            Picker("Surface", selection: centerSurfaceBinding) {
+                ForEach(WorkbenchCenterSurface.allCases) { surface in
+                    Text(surface.label).tag(surface)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .frame(width: 132)
 
             Picker("Backend", selection: $model.backend) {
                 ForEach(Backend.allCases) { backend in
@@ -1459,6 +1810,22 @@ struct MacChatView: View {
             .padding(.vertical, 3)
             .background(Theme.macEntry.opacity(0.34), in: Capsule())
             .overlay(Capsule().stroke(Theme.macHair, lineWidth: 1))
+    }
+}
+
+enum WorkbenchCenterSurface: String, CaseIterable, Identifiable, Hashable {
+    case chat
+    case board
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .chat:
+            return "Chat"
+        case .board:
+            return "Board"
+        }
     }
 }
 

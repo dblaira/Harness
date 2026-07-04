@@ -72,3 +72,92 @@ import OntologyKit
 
     #expect(tools.contains { $0.title == "NotebookLM" })
 }
+
+@Test func opportunityBoardLoadsMarkdownCardsFromDirectory() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("HarnessOpportunityBoardTests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    try """
+    ---
+    type: opportunity
+    title: NotebookLM handoff scouts
+    resource: https://example.com/notebooklm
+    timestamp: 2026-07-04T10:00:00Z
+    trust_level: accepted
+    opp_id: OPP-NOTEBOOKLM
+    fit: 0.9
+    rules_hit: [R-01, R-07]
+    band: Now
+    window_days: 5
+    effort: in
+    attention: 40
+    times_seen: 1
+    sources: 2
+    scout_id: scout-context
+    ---
+    Turn NotebookLM exports into reviewable source cards.
+    """.write(to: root.appendingPathComponent("OPP-NOTEBOOKLM.md"), atomically: true, encoding: .utf8)
+
+    try """
+    ---
+    type: source_card
+    title: Supporting source
+    resource: https://example.com/source
+    retrieved_by: firecrawl-scrape
+    content_hash: sha256:test
+    linked_opportunities: [OPP-NOTEBOOKLM]
+    ---
+    Source cards should not become board rows.
+    """.write(to: root.appendingPathComponent("source.md"), atomically: true, encoding: .utf8)
+
+    let rows = try MacWorkbenchModel.loadOpportunityBoardRows(from: root)
+
+    #expect(rows.map(\.id) == ["OPP-NOTEBOOKLM"])
+    #expect(rows.first?.card.envelope.authorityLevel == .supporting)
+    #expect(rows.first?.card.envelope.trustNote == "Self-declared trust_level accepted ignored; connector ceiling is supporting.")
+}
+
+@Test func workbenchCenterSurfacesIncludeOpportunityBoard() {
+    #expect(WorkbenchCenterSurface.allCases.map(\.rawValue) == ["chat", "board"])
+    #expect(WorkbenchCenterSurface.board.label == "Board")
+}
+
+@Test func opportunityBoardActionRecordsShareBatchForMultiSelect() {
+    let rows = [
+        opportunityBoardRow(id: "OPP-ONE", resource: "https://example.com/one"),
+        opportunityBoardRow(id: "OPP-TWO", resource: "https://example.com/two")
+    ]
+    let records = MacWorkbenchModel.opportunityBoardActionRecords(
+        action: .pass,
+        rows: rows,
+        batchID: "batch-one",
+        createdAt: Date(timeIntervalSince1970: 100)
+    )
+
+    #expect(records.map(\.opportunityID) == ["OPP-ONE", "OPP-TWO"])
+    #expect(Set(records.map(\.batchID)) == ["batch-one"])
+    #expect(records.allSatisfy { $0.action == .pass })
+}
+
+private func opportunityBoardRow(id: String, resource: String) -> OpportunityBoardRow {
+    let envelope = OpportunityCardEnvelope(
+        source: "\(id).md",
+        type: "opportunity",
+        title: id,
+        resource: resource,
+        authorityLevel: .supporting
+    )
+    let card = OpportunityCard(
+        envelope: envelope,
+        oppID: id,
+        fit: 0.8,
+        rulesHit: ["R-01"],
+        band: .now,
+        windowDays: 5,
+        effort: .inBand,
+        sources: 1
+    )
+    return OpportunityBoardRow(canonicalResource: resource, card: card, history: [card])
+}

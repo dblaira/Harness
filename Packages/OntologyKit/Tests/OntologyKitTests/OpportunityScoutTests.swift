@@ -150,6 +150,81 @@ import Testing
     #expect(row.history.map(\.oppID) == ["OPP-0001", "OPP-0002"])
 }
 
+@Test func opportunityBoardProjectionSupportsScanNowAndBandViews() throws {
+    let now = try opportunityCard(
+        id: "OPP-NOW",
+        resource: "https://example.com/now",
+        fit: 0.8,
+        band: "Now",
+        windowDays: 3,
+        rules: ["R-01"],
+        attention: 20
+    )
+    let hold = try opportunityCard(
+        id: "OPP-HOLD",
+        resource: "https://example.com/hold",
+        fit: 0.65,
+        band: "Hold",
+        windowDays: 20,
+        rules: ["R-02"],
+        attention: 10
+    )
+    let out = try opportunityCard(
+        id: "OPP-OUT",
+        resource: "https://example.com/out",
+        fit: 0.2,
+        band: "Out",
+        windowDays: 120,
+        rules: ["R-03"],
+        attention: 5
+    )
+
+    let rows = OpportunityBoardDeduper().deduplicate([hold, out, now])
+    let board = OpportunityBoardProjection(rows: rows)
+
+    #expect(board.rows(for: .scan).map(\.id) == ["OPP-NOW", "OPP-HOLD", "OPP-OUT"])
+    #expect(board.rows(for: .nowOnly).map(\.id) == ["OPP-NOW"])
+    #expect(board.groupsByBand().map(\.band) == [.now, .hold, .out])
+    #expect(board.groupsByBand().flatMap(\.rows).map(\.id) == ["OPP-NOW", "OPP-HOLD", "OPP-OUT"])
+}
+
+@Test func opportunityBoardViewModeRawValuesAreStableForPersistence() {
+    #expect(OpportunityBoardViewMode.scan.rawValue == "scan")
+    #expect(OpportunityBoardViewMode.nowOnly.rawValue == "now_only")
+    #expect(OpportunityBoardViewMode.byBand.rawValue == "by_band")
+    #expect(OpportunityBoardViewMode(rawValue: "missing") == nil)
+}
+
+@Test func opportunityBoardActionsPersistWithBatchTags() async throws {
+    let ledger = try RunLedgerStore.inMemory()
+    let batchID = "batch-test"
+    let records = [
+        OpportunityBoardActionRecord(
+            id: "action-1",
+            batchID: batchID,
+            opportunityID: "OPP-001",
+            canonicalResource: "https://example.com/one",
+            action: .pass,
+            createdAt: Date(timeIntervalSince1970: 10)
+        ),
+        OpportunityBoardActionRecord(
+            id: "action-2",
+            batchID: batchID,
+            opportunityID: "OPP-002",
+            canonicalResource: "https://example.com/two",
+            action: .pass,
+            createdAt: Date(timeIntervalSince1970: 11)
+        )
+    ]
+
+    try await ledger.recordOpportunityBoardActions(records)
+    let saved = try await ledger.listOpportunityBoardActions()
+
+    #expect(saved.map(\.id) == ["action-2", "action-1"])
+    #expect(Set(saved.map(\.batchID)) == [batchID])
+    #expect(saved.allSatisfy { $0.action == .pass })
+}
+
 private func fixtureText(_ name: String) throws -> String {
     let testFile = URL(fileURLWithPath: #filePath)
     let repoRoot = testFile
@@ -160,4 +235,36 @@ private func fixtureText(_ name: String) throws -> String {
         .deletingLastPathComponent()
     let fixture = repoRoot.appendingPathComponent("Tests/fixtures/\(name)")
     return try String(contentsOf: fixture, encoding: .utf8)
+}
+
+private func opportunityCard(
+    id: String,
+    resource: String,
+    fit: Double,
+    band: String,
+    windowDays: Int,
+    rules: [String],
+    attention: Int
+) throws -> OpportunityCard {
+    let rulesText = rules.joined(separator: ", ")
+    let parsed = try OpportunityCardParser().parse(markdown: """
+    ---
+    type: opportunity
+    title: \(id)
+    resource: \(resource)
+    timestamp: 2026-07-04T10:00:00Z
+    opp_id: \(id)
+    fit: \(fit)
+    rules_hit: [\(rulesText)]
+    band: \(band)
+    window_days: \(windowDays)
+    effort: in
+    attention: \(attention)
+    times_seen: 1
+    sources: 1
+    scout_id: scout-test
+    ---
+    \(id) body.
+    """, source: "\(id).md")
+    return try #require(parsed.opportunity)
 }
