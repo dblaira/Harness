@@ -23,3 +23,4 @@ queue.json
 # Secrets — never commit API keys
 *.env
 secrets.plist
+.venv/
