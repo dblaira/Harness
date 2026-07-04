@@ -177,6 +177,7 @@ public actor RunLedgerStore {
                 t.column("score", .double).notNull()
                 t.column("reasonSelected", .text).notNull()
                 t.column("authorityLevel", .text).notNull()
+                t.column("sourceCardJSON", .text)
             }
             try db.create(table: "trace_events", ifNotExists: true) { t in
                 t.column("id", .text).primaryKey()
@@ -240,6 +241,14 @@ public actor RunLedgerStore {
                 t.column("createdAt", .double).notNull()
             }
         }
+        migrator.registerMigration("v3-source-cards") { db in
+            let memoryHitColumns = try db.columns(in: "memory_hits").map(\.name)
+            if !memoryHitColumns.contains("sourceCardJSON") {
+                try db.alter(table: "memory_hits") { t in
+                    t.add(column: "sourceCardJSON", .text)
+                }
+            }
+        }
         return migrator
     }
 }
@@ -291,10 +300,19 @@ private func insertMemoryHit(_ hit: MemoryHit, db: Database) throws {
     try db.execute(
         sql: """
         INSERT OR REPLACE INTO memory_hits
-        (id, runId, source, excerpt, score, reasonSelected, authorityLevel)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        (id, runId, source, excerpt, score, reasonSelected, authorityLevel, sourceCardJSON)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        arguments: [hit.id, hit.runId, hit.source, hit.excerpt, hit.score, hit.reasonSelected, hit.authorityLevel.rawValue]
+        arguments: [
+            hit.id,
+            hit.runId,
+            hit.source,
+            hit.excerpt,
+            hit.score,
+            hit.reasonSelected,
+            hit.authorityLevel.rawValue,
+            try encodeSourceCard(hit.sourceCard)
+        ]
     )
 }
 
@@ -412,15 +430,31 @@ private func mapAuthorityHit(_ row: Row) -> GraphAuthorityHit {
 }
 
 private func mapMemoryHit(_ row: Row) -> MemoryHit {
-    MemoryHit(
+    let sourceCardJSON: String? = row["sourceCardJSON"]
+    return MemoryHit(
         id: row["id"],
         runId: row["runId"],
         source: row["source"],
         excerpt: row["excerpt"],
         score: row["score"],
         reasonSelected: row["reasonSelected"],
-        authorityLevel: AuthorityLevel(rawValue: row["authorityLevel"]) ?? .supporting
+        authorityLevel: AuthorityLevel(rawValue: row["authorityLevel"]) ?? .supporting,
+        sourceCard: decodeSourceCard(sourceCardJSON)
     )
+}
+
+private func encodeSourceCard(_ sourceCard: SourceCard?) throws -> String? {
+    guard let sourceCard else { return nil }
+    let data = try JSONEncoder().encode(sourceCard)
+    return String(data: data, encoding: .utf8)
+}
+
+private func decodeSourceCard(_ json: String?) -> SourceCard? {
+    guard let json,
+          let data = json.data(using: .utf8) else {
+        return nil
+    }
+    return try? JSONDecoder().decode(SourceCard.self, from: data)
 }
 
 private func mapTraceEvent(_ row: Row) -> TraceEvent {

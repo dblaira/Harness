@@ -74,15 +74,26 @@ public struct DirectoryMemoryRetriever: SupportingMemoryRetrieving {
                 source: source,
                 preferredPathComponents: preferredPathComponents
             )
+            let sourceCard = Self.sourceCard(file: file, text: text, source: source)
             let score = Self.score(queryTokens, text: text, classification: classification)
             guard score > 0 else { continue }
+            var reasonParts = ["supporting-memory", classification.reason]
+            if let sourceCard {
+                reasonParts.append("frontmatter type \(sourceCard.type)")
+                if let declaredTrustLevel = sourceCard.declaredTrustLevel,
+                   sourceCard.trustNote != nil {
+                    reasonParts.append("self-declared trust_level \(declaredTrustLevel) ignored")
+                }
+            }
+            reasonParts.append("token overlap")
             hits.append((
                 MemoryHit(
                     source: file.path,
                     excerpt: Self.excerpt(from: text, matching: queryTokens),
                     score: score,
-                    reasonSelected: "supporting-memory \(classification.reason) token overlap",
-                    authorityLevel: .supporting
+                    reasonSelected: reasonParts.joined(separator: " "),
+                    authorityLevel: .supporting,
+                    sourceCard: sourceCard
                 ),
                 score
             ))
@@ -231,6 +242,101 @@ public struct DirectoryMemoryRetriever: SupportingMemoryRetrieving {
             "notebooklm-source-class: \(value)"
         ]
         return labels.contains { text.contains($0) }
+    }
+
+    private static func sourceCard(file: URL, text: String, source: LocalMemorySource) -> SourceCard? {
+        let frontmatter = parseFrontmatter(text)
+        guard let type = frontmatter["type"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !type.isEmpty else {
+            return nil
+        }
+
+        let declaredTrustLevel = firstValue(
+            in: frontmatter,
+            keys: ["trust_level", "trust-level", "trustLevel"]
+        )
+        let normalizedDeclaredTrust = declaredTrustLevel.map(normalizeTrustLevel)
+        let trustNote = normalizedDeclaredTrust == nil || normalizedDeclaredTrust == .supporting
+            ? nil
+            : "Self-declared trust_level \(declaredTrustLevel ?? "") ignored; connector ceiling is supporting."
+
+        return SourceCard(
+            source: file.path,
+            connectorTitle: source.title,
+            connectorKind: source.kind.rawValue,
+            type: type,
+            title: firstValue(in: frontmatter, keys: ["title", "name"]),
+            description: firstValue(in: frontmatter, keys: ["description", "summary"]),
+            tags: parseTags(firstValue(in: frontmatter, keys: ["tags", "tag"])),
+            resource: firstValue(in: frontmatter, keys: ["resource", "source", "url"]),
+            timestamp: firstValue(in: frontmatter, keys: ["timestamp", "created", "created_at", "date"]),
+            declaredTrustLevel: declaredTrustLevel,
+            authorityLevel: .supporting,
+            trustNote: trustNote
+        )
+    }
+
+    private static func parseFrontmatter(_ text: String) -> [String: String] {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard lines.first?.trimmingCharacters(in: .whitespacesAndNewlines) == "---" else {
+            return [:]
+        }
+
+        var result: [String: String] = [:]
+        for line in lines.dropFirst() {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed == "---" { break }
+            guard !trimmed.isEmpty, !trimmed.hasPrefix("#") else { continue }
+            guard let separator = trimmed.firstIndex(of: ":") else { continue }
+            let key = String(trimmed[..<separator])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let value = String(trimmed[trimmed.index(after: separator)...])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            guard !key.isEmpty, !value.isEmpty else { continue }
+            result[key] = value
+        }
+        return result
+    }
+
+    private static func firstValue(in frontmatter: [String: String], keys: [String]) -> String? {
+        keys.compactMap { frontmatter[$0] }.first
+    }
+
+    private static func parseTags(_ raw: String?) -> [String] {
+        guard let raw, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return []
+        }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let listText = trimmed.hasPrefix("[") && trimmed.hasSuffix("]")
+            ? String(trimmed.dropFirst().dropLast())
+            : trimmed
+        return listText
+            .split(separator: ",")
+            .map {
+                String($0)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            }
+            .filter { !$0.isEmpty }
+    }
+
+    private static func normalizeTrustLevel(_ raw: String) -> AuthorityLevel? {
+        let normalized = raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "-", with: "_")
+            .replacingOccurrences(of: " ", with: "_")
+        switch normalized {
+        case "accepted", "authority", "accepted_authority", "graph_authority":
+            return .accepted
+        case "candidate", "candidate_memory":
+            return .candidate
+        case "supporting", "supporting_memory", "supporting_only":
+            return .supporting
+        default:
+            return nil
+        }
     }
 
     private static func excerpt(from text: String, matching tokens: Set<String>) -> String {

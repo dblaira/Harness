@@ -861,10 +861,10 @@ struct MacChatView: View {
 
                 ForEach(result.memoryHits.prefix(5)) { hit in
                     inspectorBlock(
-                        title: hit.source,
-                        subtitle: "supporting memory - score \(hit.score.formatted(.number.precision(.fractionLength(2))))",
-                        body: "\(hit.reasonSelected)\n\n\(hit.excerpt)",
-                        status: "evidence"
+                        title: memoryHitTitle(hit),
+                        subtitle: memoryHitSubtitle(hit),
+                        body: memoryHitBody(hit),
+                        status: hit.sourceCard == nil ? "evidence" : "source card"
                     )
                 }
             }
@@ -929,6 +929,52 @@ struct MacChatView: View {
         return parts.joined(separator: "\n\n")
     }
 
+    private func memoryHitTitle(_ hit: MemoryHit) -> String {
+        guard let card = hit.sourceCard else { return hit.source }
+        if let title = card.title, !title.isEmpty {
+            return title
+        }
+        return card.type
+    }
+
+    private func memoryHitSubtitle(_ hit: MemoryHit) -> String {
+        let score = hit.score.formatted(.number.precision(.fractionLength(2)))
+        guard let card = hit.sourceCard else {
+            return "\(hit.authorityLevel.rawValue), not graph authority - score \(score)"
+        }
+        return "\(card.authorityLevel.rawValue), \(card.connectorTitle) - \(card.type) - score \(score)"
+    }
+
+    private func memoryHitBody(_ hit: MemoryHit) -> String {
+        guard let card = hit.sourceCard else {
+            return "\(hit.reasonSelected)\n\n\(hit.excerpt)"
+        }
+
+        var parts: [String] = []
+        if let description = card.description {
+            parts.append(description)
+        }
+        if let resource = card.resource {
+            parts.append("Resource: \(resource)")
+        }
+        if let timestamp = card.timestamp {
+            parts.append("Timestamp: \(timestamp)")
+        }
+        if !card.tags.isEmpty {
+            parts.append("Tags: \(card.tags.joined(separator: ", "))")
+        }
+        if let declaredTrustLevel = card.declaredTrustLevel {
+            parts.append("Self-declared trust: \(declaredTrustLevel)")
+        }
+        if let trustNote = card.trustNote {
+            parts.append(trustNote)
+        }
+        parts.append("Source: \(card.source)")
+        parts.append("Reason: \(hit.reasonSelected)")
+        parts.append("Excerpt: \(hit.excerpt)")
+        return parts.joined(separator: "\n\n")
+    }
+
     private var memoryPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
             memorySourcesPanel
@@ -936,10 +982,10 @@ struct MacChatView: View {
             if let detail = model.selectedDetail, !detail.memoryHits.isEmpty {
                 ForEach(detail.memoryHits) { hit in
                     inspectorBlock(
-                        title: hit.source,
-                        subtitle: "\(hit.authorityLevel.rawValue), not graph authority - score \(hit.score.formatted(.number.precision(.fractionLength(2))))",
-                        body: "\(hit.reasonSelected)\n\n\(hit.excerpt)",
-                        status: "supporting"
+                        title: memoryHitTitle(hit),
+                        subtitle: memoryHitSubtitle(hit),
+                        body: memoryHitBody(hit),
+                        status: hit.sourceCard == nil ? "supporting" : "source card"
                     )
                 }
             } else {

@@ -150,6 +150,7 @@ public struct MemoryHit: Identifiable, Codable, Sendable, Equatable {
     public let score: Double
     public let reasonSelected: String
     public let authorityLevel: AuthorityLevel
+    public let sourceCard: SourceCard?
 
     public init(
         id: String = UUID().uuidString,
@@ -158,7 +159,8 @@ public struct MemoryHit: Identifiable, Codable, Sendable, Equatable {
         excerpt: String,
         score: Double,
         reasonSelected: String,
-        authorityLevel: AuthorityLevel
+        authorityLevel: AuthorityLevel,
+        sourceCard: SourceCard? = nil
     ) {
         self.id = id
         self.runId = runId
@@ -167,6 +169,7 @@ public struct MemoryHit: Identifiable, Codable, Sendable, Equatable {
         self.score = score
         self.reasonSelected = reasonSelected
         self.authorityLevel = authorityLevel
+        self.sourceCard = sourceCard
     }
 
     public func attached(to runId: String) -> MemoryHit {
@@ -177,8 +180,55 @@ public struct MemoryHit: Identifiable, Codable, Sendable, Equatable {
             excerpt: excerpt,
             score: score,
             reasonSelected: reasonSelected,
-            authorityLevel: authorityLevel
+            authorityLevel: authorityLevel,
+            sourceCard: sourceCard
         )
+    }
+}
+
+public struct SourceCard: Identifiable, Codable, Sendable, Equatable {
+    public let id: String
+    public let source: String
+    public let connectorTitle: String
+    public let connectorKind: String
+    public let type: String
+    public let title: String?
+    public let description: String?
+    public let tags: [String]
+    public let resource: String?
+    public let timestamp: String?
+    public let declaredTrustLevel: String?
+    public let authorityLevel: AuthorityLevel
+    public let trustNote: String?
+
+    public init(
+        id: String? = nil,
+        source: String,
+        connectorTitle: String,
+        connectorKind: String,
+        type: String,
+        title: String? = nil,
+        description: String? = nil,
+        tags: [String] = [],
+        resource: String? = nil,
+        timestamp: String? = nil,
+        declaredTrustLevel: String? = nil,
+        authorityLevel: AuthorityLevel,
+        trustNote: String? = nil
+    ) {
+        self.id = id ?? source
+        self.source = source
+        self.connectorTitle = connectorTitle
+        self.connectorKind = connectorKind
+        self.type = type
+        self.title = title
+        self.description = description
+        self.tags = tags
+        self.resource = resource
+        self.timestamp = timestamp
+        self.declaredTrustLevel = declaredTrustLevel
+        self.authorityLevel = authorityLevel
+        self.trustNote = trustNote
     }
 }
 

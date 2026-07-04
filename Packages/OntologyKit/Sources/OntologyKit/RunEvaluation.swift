@@ -80,6 +80,7 @@ public struct DeterministicAnswerEvaluator: AnswerEvaluating {
             )
         ]
         results.append(Self.pyramidFormatResult(answer: trimmed, prompt: prompt, runId: runId))
+        results.append(Self.frontmatterSelfPromotionResult(memoryHits: memoryHits, runId: runId))
         results.append(contentsOf: Self.policyResults(answer: trimmed, directives: policyDirectives, runId: runId))
         if let patternStep, patternStep >= 5 {
             let observationalEvidence = Self.hasObservationalEvidence(answer: trimmed, authorityHits: authorityHits, memoryHits: memoryHits)
@@ -95,6 +96,25 @@ public struct DeterministicAnswerEvaluator: AnswerEvaluating {
             )
         }
         return results
+    }
+
+    private static func frontmatterSelfPromotionResult(memoryHits: [MemoryHit], runId: String) -> EvalResult {
+        let frontmatterClaims = memoryHits.compactMap { hit -> (MemoryHit, SourceCard)? in
+            guard let card = hit.sourceCard, card.declaredTrustLevel != nil else { return nil }
+            return (hit, card)
+        }
+        let ignoredCount = frontmatterClaims.filter { $0.1.trustNote != nil }.count
+        let unsafe = frontmatterClaims.filter { hit, card in
+            card.trustNote != nil && (hit.authorityLevel != .supporting || card.authorityLevel != .supporting)
+        }
+        return EvalResult(
+            runId: runId,
+            checkName: "frontmatter-no-self-promotion",
+            passed: unsafe.isEmpty,
+            detail: unsafe.isEmpty
+                ? "\(ignoredCount) self-declared trust label\(ignoredCount == 1 ? "" : "s") ignored; connector ceilings enforced."
+                : "\(unsafe.count) frontmatter trust label\(unsafe.count == 1 ? "" : "s") escaped the supporting-memory ceiling."
+        )
     }
 
     private static func policyResults(answer: String, directives: [AgentPolicyDirective], runId: String) -> [EvalResult] {

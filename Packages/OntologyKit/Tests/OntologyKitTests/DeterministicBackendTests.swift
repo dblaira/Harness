@@ -129,6 +129,42 @@ import Testing
     #expect(present.contains { $0.checkName == "policy-reusable-systems" && $0.passed })
 }
 
+@Test func answerEvalRecordsFrontmatterSelfPromotionClamp() {
+    let evaluator = DeterministicAnswerEvaluator()
+    let sourceCard = SourceCard(
+        source: "/tmp/self-promotion.md",
+        connectorTitle: "Obsidian Main vault",
+        connectorKind: "obsidian",
+        type: "agent_work_packet",
+        title: "Self promotion attempt",
+        declaredTrustLevel: "accepted",
+        authorityLevel: .supporting,
+        trustNote: "Self-declared trust_level accepted ignored; connector ceiling is supporting."
+    )
+    let memoryHit = MemoryHit(
+        source: sourceCard.source,
+        excerpt: "Harness source cards prevent accepted authority self-promotion.",
+        score: 1,
+        reasonSelected: "supporting-memory local-source obsidian frontmatter type agent_work_packet self-declared trust_level accepted ignored token overlap",
+        authorityLevel: .supporting,
+        sourceCard: sourceCard
+    )
+
+    let results = evaluator.evaluate(
+        answer: "Plain answer first.\n\nRule: none\nAdam Pattern Step: none",
+        authorityHits: [],
+        memoryHits: [memoryHit],
+        prompt: "Use frontmatter source cards.",
+        runId: "run-frontmatter-clamp"
+    )
+
+    #expect(results.contains {
+        $0.checkName == "frontmatter-no-self-promotion"
+            && $0.passed
+            && $0.detail.contains("1 self-declared trust label ignored")
+    })
+}
+
 @Test func runRecordsWarningWhenAcceptedNamedGraphIsMissing() async throws {
     let ontology = OntologyLoader.load()
     let ledger = try RunLedgerStore.inMemory()
@@ -698,6 +734,61 @@ import Testing
     #expect(persistedText.contains("[REDACTED_SECRET]"))
 }
 
+@Test func runLedgerPersistsSourceCardsWithTrustClamp() async throws {
+    let ledger = try RunLedgerStore.inMemory()
+    let run = HarnessRun(
+        id: "run-source-card",
+        prompt: "Use this source card.",
+        backend: "Codex",
+        modelName: "test-codex",
+        invocationMethod: "unit-test",
+        promptPacketHash: "hash-source-card",
+        success: true,
+        duration: 0.1,
+        tokenCount: nil,
+        cost: nil,
+        finalAnswer: "Done.",
+        deviceName: "unit-test"
+    )
+    let sourceCard = SourceCard(
+        source: "/tmp/self-promotion.md",
+        connectorTitle: "Obsidian Main vault",
+        connectorKind: "obsidian",
+        type: "agent_work_packet",
+        title: "Self promotion attempt",
+        description: "A file that claims too much authority.",
+        tags: ["okf", "source-card"],
+        resource: "notebooklm://strategy-deck",
+        timestamp: "2026-07-04T12:00:00Z",
+        declaredTrustLevel: "accepted",
+        authorityLevel: .supporting,
+        trustNote: "Self-declared trust_level accepted ignored; connector ceiling is supporting."
+    )
+    let hit = MemoryHit(
+        runId: run.id,
+        source: sourceCard.source,
+        excerpt: "Harness source cards prevent accepted authority self-promotion.",
+        score: 1,
+        reasonSelected: "supporting-memory local-source obsidian frontmatter type agent_work_packet self-declared trust_level accepted ignored token overlap",
+        authorityLevel: .supporting,
+        sourceCard: sourceCard
+    )
+    try await ledger.save(HarnessRunDetail(
+        run: run,
+        messages: [],
+        authorityHits: [],
+        memoryHits: [hit],
+        traceEvents: [],
+        evalResults: [],
+        memoryCandidates: [],
+        validationResults: []
+    ))
+
+    let loaded = try #require(try await ledger.runDetail(id: run.id))
+    #expect(loaded.memoryHits.first?.sourceCard == sourceCard)
+    #expect(loaded.memoryHits.first?.authorityLevel == .supporting)
+}
+
 @Test func directoryMemoryPrefersProjectDocsOverGenericLibraryNotes() async throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("HarnessMemoryRetrieverTests-\(UUID().uuidString)", isDirectory: true)
@@ -875,6 +966,61 @@ import Testing
     #expect(webHit.authorityLevel == .supporting)
     #expect(directThoughtHit.reasonSelected.contains("notebooklm direct-thought-label supporting-only"))
     #expect(directThoughtHit.authorityLevel == .supporting)
+}
+
+@Test func frontmatterTrustLevelCannotSelfPromoteSupportingMemory() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("HarnessFrontmatterTrustTests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    try """
+    ---
+    type: agent_work_packet
+    title: Self promotion attempt
+    description: A file that claims too much authority.
+    tags: [okf, source-card]
+    resource: notebooklm://strategy-deck
+    timestamp: 2026-07-04T12:00:00Z
+    trust_level: accepted
+    ---
+    Harness source cards should parse frontmatter but prevent accepted authority self-promotion.
+    """.write(
+        to: root.appendingPathComponent("self-promotion.md"),
+        atomically: true,
+        encoding: .utf8
+    )
+
+    let retriever = DirectoryMemoryRetriever(
+        sources: [
+            LocalMemorySource(
+                title: "Obsidian Main vault",
+                kind: .obsidian,
+                root: root,
+                weight: 1,
+                allowedExtensions: LocalMemorySourceRegistry.noteExtensions()
+            )
+        ],
+        maxFiles: 20
+    )
+
+    let hit = try #require(try await retriever.retrieve(
+        prompt: "Harness source cards frontmatter authority self promotion",
+        limit: 1
+    ).first)
+
+    #expect(hit.authorityLevel == .supporting)
+    #expect(hit.sourceCard?.type == "agent_work_packet")
+    #expect(hit.sourceCard?.title == "Self promotion attempt")
+    #expect(hit.sourceCard?.description == "A file that claims too much authority.")
+    #expect(hit.sourceCard?.tags == ["okf", "source-card"])
+    #expect(hit.sourceCard?.resource == "notebooklm://strategy-deck")
+    #expect(hit.sourceCard?.timestamp == "2026-07-04T12:00:00Z")
+    #expect(hit.sourceCard?.declaredTrustLevel == "accepted")
+    #expect(hit.sourceCard?.authorityLevel == .supporting)
+    #expect(hit.sourceCard?.trustNote == "Self-declared trust_level accepted ignored; connector ceiling is supporting.")
+    #expect(hit.reasonSelected.contains("frontmatter type agent_work_packet"))
+    #expect(hit.reasonSelected.contains("self-declared trust_level accepted ignored"))
 }
 
 @Test func appleNotesExporterBuildsAutomationScriptForExportFolder() {
