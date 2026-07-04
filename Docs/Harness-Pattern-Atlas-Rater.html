@@ -1,0 +1,913 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Harness Pattern Atlas Rater</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #071521;
+      --panel: #101e2b;
+      --panel-2: #162536;
+      --line: #2a3d51;
+      --ink: #f1e7d1;
+      --muted: #a99f8e;
+      --faint: #756f64;
+      --sand: #d2bd95;
+      --green: #8ed49b;
+      --yellow: #e2c66c;
+      --red: #e28282;
+      --blue: #77b7ff;
+      --shadow: rgba(0, 0, 0, 0.35);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: radial-gradient(circle at 50% 0%, rgba(210, 189, 149, 0.08), transparent 32rem), var(--bg);
+      color: var(--ink);
+      font: 15px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+    }
+
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      background: rgba(7, 21, 33, 0.92);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(18px);
+    }
+
+    .bar {
+      display: grid;
+      grid-template-columns: minmax(22rem, 1fr) auto;
+      gap: 1rem;
+      align-items: center;
+      padding: 1rem 1.25rem;
+    }
+
+    h1 {
+      margin: 0;
+      color: var(--sand);
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(1.4rem, 2.2vw, 2.1rem);
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    .sub {
+      margin-top: 0.2rem;
+      color: var(--muted);
+      max-width: 72rem;
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 0.55rem;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: flex-end;
+    }
+
+    input, select, button, textarea {
+      color: var(--ink);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      font: inherit;
+    }
+
+    input, select {
+      height: 2.25rem;
+      padding: 0 0.7rem;
+    }
+
+    input[type="search"] { width: min(28rem, 38vw); }
+
+    button {
+      min-height: 2.25rem;
+      padding: 0 0.8rem;
+      cursor: pointer;
+    }
+
+    button:hover, select:hover, input:hover { border-color: var(--sand); }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(10rem, 1fr));
+      gap: 0.75rem;
+      padding: 0 1.25rem 1rem;
+    }
+
+    .metric {
+      background: rgba(16, 30, 43, 0.72);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0.75rem 0.85rem;
+      box-shadow: 0 12px 30px var(--shadow);
+    }
+
+    .metric strong {
+      display: block;
+      font-size: 1.5rem;
+      line-height: 1.1;
+      color: var(--sand);
+    }
+
+    .metric span {
+      color: var(--muted);
+      font-size: 0.82rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    main { padding: 1rem 1.25rem 3rem; }
+
+    .notice {
+      margin: 0 0 1rem;
+      padding: 0.85rem 1rem;
+      border: 1px solid rgba(226, 198, 108, 0.45);
+      background: rgba(226, 198, 108, 0.09);
+      border-radius: 8px;
+      color: #ead8a7;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      table-layout: fixed;
+      background: rgba(16, 30, 43, 0.74);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: 0 18px 44px var(--shadow);
+    }
+
+    th, td {
+      border-bottom: 1px solid var(--line);
+      border-right: 1px solid rgba(42, 61, 81, 0.6);
+      padding: 0.72rem;
+      vertical-align: top;
+    }
+
+    th {
+      position: sticky;
+      top: 8.65rem;
+      z-index: 3;
+      background: #0d1b28;
+      color: var(--sand);
+      text-align: left;
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+    th:last-child, td:last-child { border-right: 0; }
+
+    .col-example { width: 17rem; }
+    .col-step { width: 12rem; }
+    .col-rating { width: 12rem; }
+    .col-status { width: 10rem; }
+    .col-full { width: 24rem; }
+    .col-summary { width: 20rem; }
+    .col-notes { width: 18rem; }
+
+    .example {
+      color: var(--ink);
+      font-weight: 700;
+      margin-bottom: 0.4rem;
+    }
+
+    .step {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      color: var(--sand);
+      font-weight: 700;
+    }
+
+    .step::before {
+      content: "";
+      width: 0.5rem;
+      height: 0.5rem;
+      border-radius: 50%;
+      background: var(--sand);
+      opacity: 0.8;
+    }
+
+    .output-type {
+      margin-top: 0.45rem;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .empty {
+      min-height: 5.5rem;
+      color: var(--faint);
+      border: 1px dashed rgba(210, 189, 149, 0.25);
+      background: rgba(7, 21, 33, 0.38);
+      border-radius: 8px;
+      padding: 0.7rem;
+    }
+
+    .summary-text {
+      color: var(--muted);
+    }
+
+    .authored {
+      color: var(--ink);
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 1.8rem;
+      padding: 0 0.55rem;
+      border-radius: 999px;
+      border: 1px solid rgba(226, 198, 108, 0.38);
+      background: rgba(226, 198, 108, 0.1);
+      color: var(--yellow);
+      font-size: 0.82rem;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .status-pill.generated {
+      border-color: rgba(142, 212, 155, 0.45);
+      background: rgba(142, 212, 155, 0.1);
+      color: var(--green);
+    }
+
+    .rating-control {
+      display: grid;
+      gap: 0.4rem;
+    }
+
+    .rating-control label {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      color: var(--muted);
+      cursor: pointer;
+    }
+
+    .rating-control input { width: auto; height: auto; }
+
+    textarea {
+      display: block;
+      width: 100%;
+      min-height: 6rem;
+      resize: vertical;
+      padding: 0.65rem;
+    }
+
+    .reviewed {
+      margin-top: 0.55rem;
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      color: var(--muted);
+    }
+
+    .reviewed input { width: auto; height: auto; }
+
+    .cards {
+      display: none;
+      grid-template-columns: repeat(auto-fit, minmax(28rem, 1fr));
+      gap: 1rem;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(16, 30, 43, 0.78);
+      padding: 1rem;
+      box-shadow: 0 16px 38px var(--shadow);
+    }
+
+    .card-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.8rem;
+      margin: 0.8rem 0;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0.75rem;
+      background: rgba(7, 21, 33, 0.36);
+    }
+
+    .panel h3 {
+      margin: 0 0 0.45rem;
+      color: var(--sand);
+      font-size: 0.83rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    body.card-mode table { display: none; }
+    body.card-mode .cards { display: grid; }
+
+    .muted { color: var(--muted); }
+    .right { text-align: right; }
+    .hidden { display: none !important; }
+
+    @media (max-width: 900px) {
+      .bar { grid-template-columns: 1fr; }
+      .toolbar { justify-content: flex-start; }
+      input[type="search"] { width: 100%; }
+      .summary { grid-template-columns: 1fr 1fr; }
+      th { top: 13rem; }
+      .card-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="bar">
+      <div>
+        <h1>Harness Pattern Atlas Rater</h1>
+        <div class="sub">Read each Atlas example as a contrast test. Rate whether the Harness-shaped response is less meaningful, no different, or more meaningful than the raw model baseline.</div>
+      </div>
+      <div class="toolbar" aria-label="Filters">
+        <input id="search" type="search" placeholder="Search examples, feedback, summaries...">
+        <select id="stepFilter" aria-label="Step filter"></select>
+        <select id="ratingFilter" aria-label="Rating filter">
+          <option value="all">All ratings</option>
+          <option value="unrated">Unrated</option>
+          <option value="less">Less meaningful</option>
+          <option value="same">No difference</option>
+          <option value="more">More meaningful</option>
+        </select>
+        <button id="modeButton" type="button">Cards</button>
+        <button id="exportButton" type="button">Export ratings</button>
+      </div>
+    </div>
+    <div class="summary">
+      <div class="metric"><strong id="visibleCount">0</strong><span>Visible</span></div>
+      <div class="metric"><strong id="ratedCount">0</strong><span>Rated</span></div>
+      <div class="metric"><strong id="moreCount">0</strong><span>More meaningful</span></div>
+      <div class="metric"><strong id="missingCount">80</strong><span>Exact outputs missing</span></div>
+    </div>
+  </header>
+
+  <main>
+    <p class="notice">
+      This is now a filled test deck: every row has a generated Harness-style response and a generated raw-baseline response so you can rate the difference without inventing prompts. These are test pairs for judgment, not live Harness app logs.
+    </p>
+
+    <table aria-label="Harness Pattern Atlas rating table">
+      <thead>
+        <tr>
+          <th class="col-example">Example</th>
+          <th class="col-step">Adam Pattern Step</th>
+          <th class="col-rating">Your Rating</th>
+          <th class="col-status">Exact Output</th>
+          <th class="col-full">Harness Full Response</th>
+          <th class="col-full">Raw LLM Full Response</th>
+          <th class="col-summary">Harness Exemplar</th>
+          <th class="col-summary">Raw Summary</th>
+          <th class="col-notes">Notes</th>
+        </tr>
+      </thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+
+    <section id="cards" class="cards" aria-label="Harness Pattern Atlas rating cards"></section>
+  </main>
+
+  <script id="atlas-source" type="text/plain">
+# Harness Pattern Atlas
+
+Purpose: make Harness visible in recognition order, not engineering order.
+
+Harness should behave like a contrast machine:
+
+- **Harness answer:** grounded in accepted ontology, Adam Pattern step, evidence, and known preferences.
+- **Raw LLM answer:** what a general model would likely say without Adam's graph, rules, or pattern.
+
+The value is the difference. The user should be able to feel, "That answer is more me," or, "That answer is generic."
+
+Core rule: **If I can't say, I can't play.** If the current step and evidence cannot be named, Harness should slow execution and locate the pattern.
+
+## 1. Context: Accept Reality
+
+Output type: a true description of what is happening, not a decision.
+
+| Example | Harness feedback | Raw LLM failure mode |
+| --- | --- | --- |
+| "Should I keep building Harness?" | "Step 1. Name the felt mismatch first: you are funding engineering work without seeing the pattern surface yet." | Gives pros/cons about continuing. |
+| "Why am I not excited to use this?" | "The product is being shown in engineering order, but your strength is pattern recognition. The surface is wrong." | Suggests motivation tactics. |
+| "Am I stuck or just tired?" | "Separate fatigue from pattern blindness. The evidence is: jargon, abstract features, no contrast outputs." | Recommends rest and prioritization. |
+| "Is this feature useful?" | "Do not decide yet. Describe what it changes in your lived workflow." | Scores the feature by generic impact. |
+| "Why does this feel vague?" | "Because the output is architectural, not experiential. You need examples and contrasts." | Explains ambiguity broadly. |
+| "Should I trust the AI answer?" | "Step 1 asks what authority exists. Accepted graph, supporting memory, or model guess?" | Says to verify sources. |
+| "Why did I kill this idea so fast?" | "Your kill switch can fire in minutes when mismatch is obvious. Capture the mismatch sentence." | Talks about impatience. |
+| "What is the real problem?" | "The problem is not speed. It is lack of visible pattern connection." | Lists possible blockers. |
+| "Is this a product or a research loop?" | "Name the current output. If it is only declarations, you are still in Step 1." | Suggests market research. |
+| "What should I tell Codex?" | "Tell Codex the reality: no more faith-based building; show contrast and examples." | Drafts a task list. |
+
+## 2. Circle: Watch Before Moving
+
+Output type: evidence, repeated signals, and observed behavior.
+
+| Example | Harness feedback | Raw LLM failure mode |
+| --- | --- | --- |
+| "What should I observe before the next build?" | "Watch which answer feels more useful: Harness vs Raw LLM. Do not infer value before seeing contrast." | Suggests user interviews. |
+| "Is memory retrieval good enough?" | "Observe noise patterns: which supporting memories feel random, repeated, or genuinely helpful?" | Recommends improving ranking. |
+| "Should we add more skills?" | "Watch which skills you actually try to inspect. Inventory before execution." | Suggests a plugin roadmap. |
+| "How do I test the phone app?" | "Ask five normal questions and note when keyboard, space, or contrast blocks reading." | Gives QA steps. |
+| "What should I do with the MacBook Pro trial?" | "Capture unlocks 3-4 times/day for four days. Verdict later. Capture clock and verdict clock are different." | Suggests reviewing in a week. |
+| "Is the gym apprenticeship idea real?" | "Watch behavior for 2-3 weeks. Consistency and curiosity matter more than interest." | Suggests recruiting people. |
+| "Am I circling too much?" | "Your circling is a screening function. Measure commit time, not shame the loop." | Encourages decisive action. |
+| "Should I share AI insights with friends?" | "Observe who benefits from your synthesis and what topic lands with them." | Suggests posting online. |
+| "Is this prompt good?" | "Collect three responses and compare which one sees the pattern fastest." | Rewrites the prompt. |
+| "Is this a real preference?" | "Look for repeated dismissal or attraction across contexts before calling it a rule." | Treats the statement as fact. |
+
+## 3. Close the Gap: Get Expertise for the Specific Gap
+
+Output type: vocabulary, standards, outside expertise, and domain translation.
+
+| Example | Harness feedback | Raw LLM failure mode |
+| --- | --- | --- |
+| "I know the UI is wrong but not why." | "This is a vocabulary gap. Ask for the design terms: information density, hierarchy, affordance, scan path." | Redesigns the UI immediately. |
+| "What font size works in a gym?" | "You need a specification: readable at arm's length, sweat, motion, glare. Ask for numeric conventions." | Says use large readable fonts. |
+| "Should I buy this tool?" | "Get domain expertise on the gap the tool claims to close before buying." | Compares feature lists. |
+| "Can Codex build this?" | "First ask Codex to teach the implementation surface until sentence #2 of delegation is precise." | Starts coding. |
+| "I need better memory search." | "Name the retrieval gap: source filtering, ranking, authority separation, or recency." | Suggests vector search. |
+| "Should I use MCP?" | "Define what permission and execution gap MCP closes. Inventory before integration." | Explains MCP benefits. |
+| "Why does delegation fail?" | "You skipped Phase 1. The first delegation is: teach me enough to specify." | Gives delegation tips. |
+| "What model should answer?" | "Separate commodity model call from built personal graph. Borrow compute, build judgment." | Recommends a model. |
+| "How should I validate a candidate?" | "Expertise gap is formalization: Turtle shape, validation result, graph review status." | Says review it manually. |
+| "What is the right technical word?" | "Harness should supply vocabulary immediately when your judgment is ahead of terms." | Asks clarifying questions. |
+
+## 4. Choose Success: Set Precise Measurable Targets
+
+Output type: a target that can be observed, counted, or killed.
+
+| Example | Harness feedback | Raw LLM failure mode |
+| --- | --- | --- |
+| "What would make Harness valuable?" | "Target: every prompt shows a visible contrast between Harness and Raw LLM, and you can name which one is more useful." | Lists product benefits. |
+| "How do we know memory search improved?" | "Target: fewer random book notes; each memory hit must explain why it belongs." | Says improve relevance. |
+| "How do I judge the MacBook Pro?" | "Target: by day 14, name two unlocks, two frustrations, and whether the third machine changes throughput." | Suggests benchmarking. |
+| "How do I judge a supplement trial?" | "Target: commit or kill at 14 days, max three active trials, evidence sentence captured during use." | Suggests tracking health metrics. |
+| "How do I know an apprentice works?" | "By week 8, one shipped artifact. By week 12, one worthwhile new introduction." | Says measure engagement. |
+| "How do I know a candidate memory is ready?" | "Target: proposed claim, proposed graph, validation pass, still not accepted authority." | Says confidence is high. |
+| "What is success for the Atlas?" | "You can skim a step and immediately recognize situations where Harness should help." | Says the doc is comprehensive. |
+| "What is success for Skills & Tools?" | "Each tool row answers: what it does, status, permissions, and where it appeared in runs." | Says tools are listed. |
+| "When is iOS good enough?" | "You can ask, read, hide keyboard, and compare two outputs without friction." | Says the app builds. |
+| "When should I stop this branch?" | "When contrast mode produces one real 'oh, that is different' moment." | Says when tasks are complete. |
+
+## 5. Code the Pattern: Build a Simple Repeatable System
+
+Output type: the smallest mechanism that repeats the target behavior.
+
+| Example | Harness feedback | Raw LLM failure mode |
+| --- | --- | --- |
+| "What should we build next?" | "Build the repeatable contrast unit: prompt -> Harness answer -> Raw LLM answer -> visible difference." | Suggests a roadmap. |
+| "How should memory review work?" | "Make candidate statuses repeatable: suggested, candidate, validated, rejected. No silent accepted." | Suggests an approval workflow. |
+| "How should trial tracking work?" | "Trial Clock: 14-day timer, max 3 active trials, one evidence sentence." | Suggests a spreadsheet. |
+| "How should AI sharing work?" | "Create a recurring 'Translate the week in AI for one person' gesture." | Suggests writing posts. |
+| "How should I capture MacBook unlocks?" | "3-4 prompts/day for four days with voice memo slot. Verdict later." | Suggests a reminder. |
+| "How should the Atlas work?" | "A fixed card per step: situation, Harness feedback, raw failure mode, why it matters." | Suggests documentation. |
+| "How should skills work?" | "Rows open detail. Detail says permission, status, last runs, next action." | Suggests enabling plugins. |
+| "How should graph review work?" | "Candidate -> Turtle draft -> validation -> ready for graph review. Stop there." | Suggests saving to memory. |
+| "How should delegation work?" | "Three sentences: what I want, how I'd think about it, what done looks like." | Suggests assigning tasks. |
+| "How should the UI prove value?" | "Default to comparison, not settings. The proof is on the first answer." | Suggests onboarding. |
+
+## 6. Create Kill Switch: Define the Kill Switch
+
+Output type: the condition that stops, redesigns, or rejects the system.
+
+| Example | Harness feedback | Raw LLM failure mode |
+| --- | --- | --- |
+| "When do we stop contrast mode?" | "If after 20 real prompts the contrast rarely changes your judgment, redesign or remove it." | Says gather feedback. |
+| "When do we stop memory cleanup?" | "If source filtering still pulls irrelevant notes after ten tests, ranking is the wrong layer." | Says iterate. |
+| "When do I kill a supplement trial?" | "At day 14 with no evidence, kill. No revisit later." | Suggests consulting a doctor. |
+| "When do I kill an apprentice slot?" | "If after four sessions they shipped nothing, offer the slot to someone else." | Suggests mentoring longer. |
+| "When do I stop a feature branch?" | "If it does not create a visible pattern-recognition moment, it is engineering fog." | Says if ROI is low. |
+| "When is a candidate rejected?" | "If evidence is weak, claim is vague, or graph cannot validate, reject or keep suggested." | Says if confidence is low. |
+| "When do I stop buying tools?" | "If the tool does not close a named gap, stop before purchase." | Compares alternatives. |
+| "When do I stop a research loop?" | "When it exceeds the active cap or cannot define the commit criterion." | Suggests more research. |
+| "When do I stop using a model?" | "If raw and grounded outputs are indistinguishable on your real prompts, model choice is not the bottleneck." | Suggests benchmarking. |
+| "When does Harness fail me?" | "When it cannot show why its answer differs from generic advice." | Says when answers are inaccurate. |
+
+## 7. Clear Sign of Success: Look for the Immediate Signal
+
+Output type: the first unmistakable signal that the pattern is working.
+
+| Example | Harness feedback | Raw LLM failure mode |
+| --- | --- | --- |
+| "What is the sign contrast mode works?" | "You prefer one answer instantly and can say why." | Says improved satisfaction. |
+| "What is the sign the Atlas works?" | "You skim examples and start generating your own." | Says it is complete. |
+| "What is the sign an apprentice works?" | "They text you a question between sessions." | Says they attend sessions. |
+| "What is the sign memory search works?" | "You recognize the source as relevant before reading the whole excerpt." | Says higher relevance score. |
+| "What is the sign a candidate is useful?" | "It captures a claim you would otherwise repeat manually." | Says it passes validation. |
+| "What is the sign the MacBook was worth it?" | "You can name a new class of work it made obvious or easy." | Says faster builds. |
+| "What is the sign a tool is right?" | "It closes a named gap without creating a correction loop." | Says it has useful features. |
+| "What is the sign a reminder is good?" | "It catches perishable data at the moment it would disappear." | Says you completed it. |
+| "What is the sign Harness is personal?" | "The answer names your actual pattern before giving advice." | Says it remembers facts. |
+| "What is the sign to keep building?" | "You ask another real question because the previous contrast clarified something." | Says there is user demand. |
+
+## 8. Compound: Let Results Compound
+
+Output type: the loop that keeps producing value without overworking it.
+
+| Example | Harness feedback | Raw LLM failure mode |
+| --- | --- | --- |
+| "How does Harness compound?" | "Each contrast teaches which ontology rules matter, which memories are noise, and which candidates deserve review." | Says more usage improves personalization. |
+| "How does the Atlas compound?" | "Examples become test prompts, test prompts become product behavior, behavior becomes graph candidates." | Says update it regularly. |
+| "How does an apprentice compound?" | "The first serious apprentice recruits the next one. You scale social proof, not yourself." | Says build a program. |
+| "How does AI synthesis compound?" | "A recurring named digest turns private consumption into public leverage." | Says create content. |
+| "How do trials compound?" | "Commit/kill data improves future purchase judgment and reduces dead air." | Says build habits. |
+| "How does candidate review compound?" | "Validated claims become future authority only after explicit graph review." | Says memory gets better. |
+| "How does skills inventory compound?" | "Run history shows which tools actually help, so the list becomes evidence-based." | Says add more integrations. |
+| "How does delegation compound?" | "Sentence #2 improves as vocabulary gaps close, so future handoffs get sharper." | Says delegate more. |
+| "How does visual polish compound?" | "The app becomes something you want to open, which creates more real prompts." | Says brand consistency. |
+| "How do we avoid overwork?" | "Stop when the loop works. Let repeated use produce the next evidence." | Says keep improving. |
+  </script>
+
+  <script>
+    const STORAGE_KEY = "harness-pattern-atlas-ratings-v1";
+    const RATINGS = [
+      ["unrated", "Unrated"],
+      ["less", "Less meaningful"],
+      ["same", "No difference"],
+      ["more", "More meaningful"]
+    ];
+
+    const state = {
+      search: "",
+      step: "all",
+      rating: "all",
+      rows: [],
+      saved: loadSaved()
+    };
+
+    function stripQuotes(value) {
+      return value.trim().replace(/^"|"$/g, "");
+    }
+
+    function parseAtlas(markdown) {
+      const rows = [];
+      let stepNo = 0;
+      let stepTitle = "";
+      let outputType = "";
+
+      for (const rawLine of markdown.split("\n")) {
+        const line = rawLine.trim();
+        const heading = line.match(/^##\s+(\d+)\.\s+(.+)$/);
+        if (heading) {
+          stepNo = Number(heading[1]);
+          stepTitle = heading[2];
+          outputType = "";
+          continue;
+        }
+
+        if (line.startsWith("Output type:")) {
+          outputType = line.replace("Output type:", "").trim();
+          continue;
+        }
+
+        if (!line.startsWith('| "') || line.includes('| ---')) continue;
+
+        const cells = line.slice(1, -1).split("|").map(cell => cell.trim());
+        if (cells.length !== 3) continue;
+
+        rows.push({
+          id: `${stepNo}-${rows.length + 1}`,
+          stepNo,
+          stepTitle,
+          outputType,
+          example: stripQuotes(cells[0]),
+          harnessExemplar: stripQuotes(cells[1]),
+          rawSummary: stripQuotes(cells[2]),
+          harnessFull: "",
+          rawFull: "",
+          exactStatus: "Generated test pair"
+        });
+      }
+
+      return rows.map(row => ({
+        ...row,
+        harnessFull: generateHarnessFull(row),
+        rawFull: generateRawFull(row)
+      }));
+    }
+
+    function stepFrame(row) {
+      const frames = {
+        1: {
+          move: "Do not decide yet. First name the reality in plain language.",
+          next: "Write one sentence that describes what is actually happening before choosing a fix.",
+          signal: "You feel less fog because the problem has a name."
+        },
+        2: {
+          move: "Do not move straight to a plan. Watch the repeated signal first.",
+          next: "Capture a few examples of what happens when this comes up in real use.",
+          signal: "The pattern repeats enough that it is not just a mood or one-off reaction."
+        },
+        3: {
+          move: "This is a gap-closing moment. Get the missing vocabulary or outside standard.",
+          next: "Ask for the terms, benchmarks, or domain rules that would make the decision precise.",
+          signal: "You can describe the gap well enough that someone else can act on it."
+        },
+        4: {
+          move: "Pick the target before building the mechanism.",
+          next: "Define what success would look like in behavior, count, date, or visible evidence.",
+          signal: "You know what would make the answer good enough and what would not."
+        },
+        5: {
+          move: "Turn the pattern into the smallest repeatable mechanism.",
+          next: "Build one loop that can run again without rethinking the whole system.",
+          signal: "The same move works on the next similar case."
+        },
+        6: {
+          move: "Protect the loop with a kill switch.",
+          next: "Name the condition that stops, rejects, or redesigns this before it consumes more attention.",
+          signal: "You can stop without needing a dramatic final verdict."
+        },
+        7: {
+          move: "Look for the first unmistakable sign, not a broad justification.",
+          next: "Name the moment where you would immediately recognize that the thing is working.",
+          signal: "The sign is concrete enough that you would notice it in the wild."
+        },
+        8: {
+          move: "Keep only the part that compounds.",
+          next: "Ask how this result makes the next similar decision easier, faster, or less dependent on you.",
+          signal: "The work leaves behind a reusable pattern instead of just a completed task."
+        }
+      };
+      return frames[row.stepNo];
+    }
+
+    function generateHarnessFull(row) {
+      const frame = stepFrame(row);
+      return [
+        `Short answer: ${row.harnessExemplar}`,
+        `Current Adam Pattern step: ${row.stepNo}. ${row.stepTitle}. The useful output here is ${row.outputType}`,
+        `Why this matters: this question should not be answered as generic advice. It should locate the pattern you are actually trying to see, then make the next move smaller and clearer.`,
+        `Harness move: ${frame.move}`,
+        `Next action: ${frame.next}`,
+        `Clear sign: ${frame.signal}`,
+        `My read: if this answer does not help you recognize the situation faster, it is not doing Harness work yet. The value is the visible difference between pattern-aware feedback and advice that could have been written for anyone.`
+      ].join("\n\n");
+    }
+
+    function rawAdviceFor(summary) {
+      const text = summary.toLowerCase();
+      if (text.includes("pros/cons")) return "make a pros-and-cons list, estimate the upside, and decide whether the benefits outweigh the costs";
+      if (text.includes("motivation")) return "revisit your motivation, reconnect with your goals, and try to make the work feel more rewarding";
+      if (text.includes("rest")) return "take a break, reduce pressure, and come back when you have more energy";
+      if (text.includes("feature")) return "evaluate the feature by impact, effort, user demand, and implementation complexity";
+      if (text.includes("verify")) return "verify the information, check reliable sources, and avoid relying on one answer";
+      if (text.includes("improving ranking") || text.includes("vector")) return "improve retrieval with better ranking, embeddings, metadata, and relevance scoring";
+      if (text.includes("roadmap")) return "make a prioritized roadmap with milestones, dependencies, and expected impact";
+      if (text.includes("spreadsheet")) return "track the data in a spreadsheet so you can compare results over time";
+      if (text.includes("benchmark")) return "run benchmarks and compare performance against your current setup";
+      if (text.includes("approval")) return "create an approval workflow with clear review stages and decision owners";
+      if (text.includes("iterate")) return "iterate based on feedback and keep improving the system over time";
+      if (text.includes("doctor")) return "be careful and consult a qualified professional before making changes";
+      if (text.includes("content") || text.includes("posting")) return "turn the idea into content and share it with a broader audience";
+      if (text.includes("confidence")) return "use confidence level and quality of evidence to decide whether to keep it";
+      if (text.includes("complete")) return "treat the work as complete once the checklist is finished";
+      if (text.includes("user demand")) return "look for user demand, engagement, and signs that people want the product";
+      return summary.charAt(0).toLowerCase() + summary.slice(1);
+    }
+
+    function generateRawFull(row) {
+      const genericMove = rawAdviceFor(row.rawSummary);
+      return [
+        `This is a thoughtful question, and there are a few ways to approach it.`,
+        `A practical first step would be to ${genericMove}. It may also help to clarify your goals, consider the tradeoffs, and decide what outcome would make the effort worthwhile.`,
+        `You could break the issue into smaller parts: what is working, what is not working, what options you have, and what the cost would be to continue versus stop. From there, pick a low-risk next step and reassess after you have more information.`,
+        `Overall, I would avoid making the decision too emotionally in the moment. Give yourself some structure, gather a bit more evidence, and choose the path that best aligns with your priorities.`
+      ].join("\n\n");
+    }
+
+    function loadSaved() {
+      try {
+        return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
+      } catch {
+        return {};
+      }
+    }
+
+    function persist() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state.saved));
+      render();
+    }
+
+    function savedFor(row) {
+      if (!state.saved[row.id]) {
+        state.saved[row.id] = { rating: "unrated", notes: "", reviewed: false };
+      }
+      return state.saved[row.id];
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    function ratingControl(row) {
+      const saved = savedFor(row);
+      return `<div class="rating-control">
+        ${RATINGS.map(([value, label]) => `
+          <label>
+            <input type="radio" name="rating-${row.id}" value="${value}" ${saved.rating === value ? "checked" : ""} data-action="rating" data-id="${row.id}">
+            <span>${label}</span>
+          </label>`).join("")}
+      </div>`;
+    }
+
+    function notesControl(row) {
+      const saved = savedFor(row);
+      return `<textarea data-action="notes" data-id="${row.id}" placeholder="What made this feel less, same, or more meaningful?">${escapeHtml(saved.notes)}</textarea>
+        <label class="reviewed">
+          <input type="checkbox" data-action="reviewed" data-id="${row.id}" ${saved.reviewed ? "checked" : ""}>
+          <span>Reviewed</span>
+        </label>`;
+    }
+
+    function fullOutput(value) {
+      if (value) return `<div>${escapeHtml(value)}</div>`;
+      return `<div class="empty">No response captured.</div>`;
+    }
+
+    function rowMatches(row) {
+      const saved = savedFor(row);
+      const haystack = [
+        row.example,
+        row.stepTitle,
+        row.outputType,
+        row.harnessExemplar,
+        row.rawSummary,
+        saved.notes
+      ].join(" ").toLowerCase();
+
+      const matchesSearch = !state.search || haystack.includes(state.search);
+      const matchesStep = state.step === "all" || String(row.stepNo) === state.step;
+      const matchesRating = state.rating === "all" || saved.rating === state.rating;
+      return matchesSearch && matchesStep && matchesRating;
+    }
+
+    function renderTable(rows) {
+      document.getElementById("tableBody").innerHTML = rows.map(row => `
+        <tr>
+          <td>
+            <div class="example">${escapeHtml(row.example)}</div>
+          </td>
+          <td>
+            <div class="step">${row.stepNo}. ${escapeHtml(row.stepTitle)}</div>
+            <div class="output-type">${escapeHtml(row.outputType)}</div>
+          </td>
+          <td>${ratingControl(row)}</td>
+          <td><span class="status-pill generated">${row.exactStatus}</span></td>
+          <td>${fullOutput(row.harnessFull)}</td>
+          <td>${fullOutput(row.rawFull)}</td>
+          <td class="authored">${escapeHtml(row.harnessExemplar)}</td>
+          <td class="summary-text">${escapeHtml(row.rawSummary)}</td>
+          <td>${notesControl(row)}</td>
+        </tr>
+      `).join("");
+    }
+
+    function renderCards(rows) {
+      document.getElementById("cards").innerHTML = rows.map(row => `
+        <article class="card">
+          <div class="step">${row.stepNo}. ${escapeHtml(row.stepTitle)}</div>
+          <h2>${escapeHtml(row.example)}</h2>
+          <p class="muted">${escapeHtml(row.outputType)}</p>
+          <div class="card-grid">
+            <section class="panel">
+              <h3>Harness Full Response</h3>
+              ${fullOutput(row.harnessFull)}
+            </section>
+            <section class="panel">
+              <h3>Raw LLM Full Response</h3>
+              ${fullOutput(row.rawFull)}
+            </section>
+            <section class="panel">
+              <h3>Harness Exemplar</h3>
+              <div>${escapeHtml(row.harnessExemplar)}</div>
+            </section>
+            <section class="panel">
+              <h3>Raw Summary</h3>
+              <div class="summary-text">${escapeHtml(row.rawSummary)}</div>
+            </section>
+          </div>
+          <div class="card-grid">
+            <section class="panel">
+              <h3>Your Rating</h3>
+              ${ratingControl(row)}
+            </section>
+            <section class="panel">
+              <h3>Notes</h3>
+              ${notesControl(row)}
+            </section>
+          </div>
+        </article>
+      `).join("");
+    }
+
+    function renderMetrics(visibleRows) {
+      const allSaved = state.rows.map(savedFor);
+      const rated = allSaved.filter(item => item.rating !== "unrated").length;
+      const more = allSaved.filter(item => item.rating === "more").length;
+      const missing = state.rows.filter(row => !row.harnessFull || !row.rawFull).length;
+      document.getElementById("visibleCount").textContent = visibleRows.length;
+      document.getElementById("ratedCount").textContent = rated;
+      document.getElementById("moreCount").textContent = more;
+      document.getElementById("missingCount").textContent = missing;
+    }
+
+    function render() {
+      const visibleRows = state.rows.filter(rowMatches);
+      renderMetrics(visibleRows);
+      renderTable(visibleRows);
+      renderCards(visibleRows);
+    }
+
+    function updateStepFilter() {
+      const select = document.getElementById("stepFilter");
+      const steps = [...new Map(state.rows.map(row => [row.stepNo, row])).values()];
+      select.innerHTML = `<option value="all">All steps</option>` + steps.map(row =>
+        `<option value="${row.stepNo}">${row.stepNo}. ${escapeHtml(row.stepTitle)}</option>`
+      ).join("");
+    }
+
+    function exportRatings() {
+      const payload = state.rows.map(row => ({
+        example: row.example,
+        step: `${row.stepNo}. ${row.stepTitle}`,
+        exactOutputStatus: row.exactStatus,
+        harnessFullResponse: row.harnessFull,
+        rawLLMFullResponse: row.rawFull,
+        harnessExemplar: row.harnessExemplar,
+        rawSummary: row.rawSummary,
+        ...savedFor(row)
+      }));
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "harness-pattern-atlas-ratings.json";
+      link.click();
+      URL.revokeObjectURL(url);
+    }
+
+    document.addEventListener("input", event => {
+      const target = event.target;
+      if (target.id === "search") {
+        state.search = target.value.trim().toLowerCase();
+        render();
+        return;
+      }
+
+      if (target.id === "stepFilter") {
+        state.step = target.value;
+        render();
+        return;
+      }
+
+      if (target.id === "ratingFilter") {
+        state.rating = target.value;
+        render();
+        return;
+      }
+
+      const id = target.dataset.id;
+      if (!id) return;
+      const row = state.rows.find(item => item.id === id);
+      if (!row) return;
+      const saved = savedFor(row);
+
+      if (target.dataset.action === "rating") saved.rating = target.value;
+      if (target.dataset.action === "notes") saved.notes = target.value;
+      if (target.dataset.action === "reviewed") saved.reviewed = target.checked;
+      persist();
+    });
+
+    document.getElementById("modeButton").addEventListener("click", () => {
+      document.body.classList.toggle("card-mode");
+      document.getElementById("modeButton").textContent = document.body.classList.contains("card-mode") ? "Table" : "Cards";
+    });
+
+    document.getElementById("exportButton").addEventListener("click", exportRatings);
+
+    state.rows = parseAtlas(document.getElementById("atlas-source").textContent);
+    updateStepFilter();
+    render();
+  </script>
+</body>
+</html>
