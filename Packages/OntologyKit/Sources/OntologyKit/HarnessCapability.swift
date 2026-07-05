@@ -63,6 +63,7 @@ public enum HarnessCapabilityRegistry {
     private static func skillCapabilities(homeDirectory: URL) -> [HarnessCapability] {
         let roots: [(source: String, root: URL)] = [
             ("Hermes", homeDirectory.appendingPathComponent(".hermes/skills", isDirectory: true)),
+            ("Hermes Studio", homeDirectory.appendingPathComponent(".hermes/profiles/studio/skills", isDirectory: true)),
             ("Claude", homeDirectory.appendingPathComponent(".claude/skills", isDirectory: true)),
             ("Codex", homeDirectory.appendingPathComponent(".codex/skills", isDirectory: true)),
             ("Grok", homeDirectory.appendingPathComponent(".grok/skills", isDirectory: true)),
