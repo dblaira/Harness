@@ -11,3 +11,4 @@ If graphs disagree, `/accepted` wins.
 Use `Docs/skills/articulate-leadership-communication/SKILL.md` for substantive response shape.
 Response format for Adam: see `Docs/skills/articulate-leadership-communication/SKILL.md`.
 Forbidden language rule: see `Docs/skills/no-time-estimates/SKILL.md` — never estimate Adam's time or attach urgency framing.
+Format routing: see `Docs/skills/cognitive-fit/SKILL.md` — match layout to the cognitive task (table for lookup, matrix for cross-reference, tree for flow, prose for why).
