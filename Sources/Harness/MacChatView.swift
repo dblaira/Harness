@@ -397,6 +397,55 @@ struct MacChatView: View {
 
             Spacer()
 
+            Menu {
+                Toggle("Watchlist on", isOn: Binding(
+                    get: { model.delegationAgentWatchlistEnabled },
+                    set: { model.setDelegationAgentWatchlistEnabled($0) }
+                ))
+
+                Stepper(
+                    "Run credits: \(model.delegationAgentPerRunCreditLimit)",
+                    value: Binding(
+                        get: { model.delegationAgentPerRunCreditLimit },
+                        set: { model.setDelegationAgentPerRunCreditLimit($0) }
+                    ),
+                    in: 1...100
+                )
+
+                Stepper(
+                    "Day credits: \(model.delegationAgentDailyCreditLimit)",
+                    value: Binding(
+                        get: { model.delegationAgentDailyCreditLimit },
+                        set: { model.setDelegationAgentDailyCreditLimit($0) }
+                    ),
+                    in: 1...500
+                )
+            } label: {
+                Image(systemName: "xmark.octagon")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(model.delegationAgentWatchlistEnabled ? Theme.macInk.opacity(0.68) : Theme.macRed)
+                    .frame(width: 28, height: 24)
+                    .background(Theme.macEntry.opacity(0.28), in: RoundedRectangle(cornerRadius: 7))
+                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.macHair, lineWidth: 1))
+            }
+            .menuStyle(.borderlessButton)
+            .help("Kill Switch")
+
+            Button {
+                model.runDelegationAgent()
+            } label: {
+                Label("Run agent", systemImage: "play.circle")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.macInk.opacity(0.76))
+                    .padding(.horizontal, 10)
+                    .frame(height: 24)
+                    .background(Theme.macEntry.opacity(0.32), in: RoundedRectangle(cornerRadius: 7))
+                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.macHair, lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .disabled(model.isRunning)
+            .help("Run agent")
+
             Button {
                 model.refreshOpportunityBoard()
             } label: {

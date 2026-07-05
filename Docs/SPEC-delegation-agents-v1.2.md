@@ -26,7 +26,7 @@ the invented vocabulary. The app already speaks Understood Suite words
 | Opportunity Board | **Delegation Queue** |
 | Band (Now / Hold / Out) | **App** (News Calm / Notorious Recall / Understood / SAVY) |
 | Now-band push cards | **Nudge** — timing edges interrupt; everything else waits |
-| Scan / Now / By Band views | **By Priority / By Due / By App** views |
+| Scan / Now / By Band views | **All / By App** views |
 | Scout | **Agent** (the fleet; `scout_id: agent-…`) |
 | Card cap → spend cap | **Kill Switch** (Pattern step 6, named as such) |
 
@@ -127,7 +127,7 @@ OKF-conformant (only `type` required upstream; unknown keys tolerated).
 - Golden fixtures: `Tests/fixtures/OPP-0001.md` + `OPP-0001-source.md`
   (already in Suite language as of `dc9b893`).
 
-## The Delegation Queue (primary surface)
+## The Delegation Queue (primary view)
 
 One dense grid, one row per deduped delegation. Numbers first. Machine
 holds structure (persistent sorts, stable IDs, row history); Adam's eye
@@ -138,7 +138,7 @@ supplies recognition only.
   Sources · Agent · Priority.
 - **Priority (default sort):** `fit × 50` if no window, else
   `fit × 100 / (window_days + 1)`.
-- **Views:** By Priority · By Due (window ↑) · By App.
+- **Views:** All (default priority-sorted full queue) · By App.
 - **Bulk-scan yes, bulk-authority no:** Pass and dismiss sweep
   (multi-row). Pursue is itemized — one click, one row, one ledger
   entry. The graph never takes bulk writes.
@@ -156,21 +156,25 @@ Queue for his schedule. All Queue verbs also work on a Nudge.
 2. **Envelope + typed SHACL.** Parser, both shapes, trust clamp,
    dedup-by-resource. ✅ **Built** (`6f0a484`, renamed `dc9b893`);
    fixtures validate; clamp and dedup tested.
-3. **The Delegation Queue.** Columns, views, Priority formula,
+3. **The Delegation Queue.** Columns, All / By App views, Priority formula,
    persistent state, multi-row select. ✅ **Built** (`c45051f`, renamed
-   `dc9b893`). Open detail: Hold captures no resurface condition yet.
+   `dc9b893`). Open detail: Hold captures no return condition yet.
 4. **Agent run v1 (manual trigger).** "Run agent" → Firecrawl Search
    (+ Scrape shortlisted) → LLM triage citing accepted rules via live
    SPARQL → envelope files → Queue rows + Nudges → Trace saves queries,
-   spend, delegations emitted, rules cited. ⬜ **Next**
+   spend, delegations emitted, rules cited. ✅ **Built** — manual
+   Search + top-source Scrape + selected-backend triage → rule-cited
+   Delegation files → Queue refresh → Trace.
 5. **Verbs.** Pursue (itemized) / Pass (bulk-able) / Hold (requires
-   resurface condition) / Bookmark. All write ledger entries.
-   ✅ **Built** except Hold's resurface condition.
+   return condition) / Bookmark. All write ledger entries.
+   ✅ **Built** except Hold's return condition.
 6. **No-execution guarantee.** Negative test: every verb on every card
-   type → zero outbound calls except graph/ledger writes. ⬜ **Pending**
+   type → zero outbound calls except graph/ledger writes. ✅ **Built**
+   for manual agent run dependency path and Queue ledger verbs.
 7. **Kill Switch (spend caps).** Per-run + per-day Firecrawl budget;
    per-watchlist off switch. Breach mid-run → halt, label partials,
-   honest error to Trace. Caps never hide fetched rows. ⬜ **Pending**
+   honest error to Trace. Caps never hide fetched rows. ✅ **Built**
+   for manual agent run.
 
 ### P1 — Fast follows
 
@@ -178,7 +182,7 @@ Queue for his schedule. All Queue verbs also work on a Nudge.
 9. Deepen verb (scoped follow-up Scrape/Map; attaches to same row).
 10. Clarify verb (plain-English rule-fit reasoning; weak reasoning
     logged for precision stats).
-11. Hold resurfacing (date reached or keyword recurs → row returns).
+11. Hold return (date reached or keyword recurs → row returns).
 12. Source viewer (click Sources count → provenance panel).
 
 ### P2 — Design for, don't build
@@ -212,12 +216,13 @@ precision stats.
 ## Open Questions (non-blocking, builder's choice)
 
 - Triage LLM: Hermes local vs. Claude API (~50 docs/run).
-- Hold-resurface condition storage: frontmatter vs. ledger vs. graph.
+- Hold return condition storage: frontmatter vs. ledger vs. graph.
 
 ## Phasing
 
-- **Phase 1 (in progress).** P0 items 2–7. Items 2, 3, 5 built; next
-  slice is item 4 (agent run), then 6–7. Acceptance = the FOR ADAM test.
+- **Phase 1 (in progress).** P0 items 2–7 are built. Remaining open
+  details: Adam's 10 accepted rules and Hold return condition.
+  Acceptance = the FOR ADAM test.
 - **Phase 2.** P1 items 8–12.
 - **Phase 3 — after the Clear Sign of Success fires.** The fleet:
   conformance-gated entry, precision-pruned exit. If precision is bad,

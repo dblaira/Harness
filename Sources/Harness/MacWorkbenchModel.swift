@@ -27,6 +27,15 @@ final class MacWorkbenchModel: ObservableObject {
     @Published var capabilities: [HarnessCapability] = HarnessCapabilityRegistry.defaultCapabilities()
     @Published var routePlan = HarnessExecutionRoutePlan(prompt: "", steps: [])
     @Published var routeExecutionResult: HarnessRouteExecutionResult?
+    @Published var delegationAgentWatchlistEnabled = MacWorkbenchModel.loadDelegationAgentWatchlistEnabled() {
+        didSet { Self.saveDelegationAgentWatchlistEnabled(delegationAgentWatchlistEnabled) }
+    }
+    @Published var delegationAgentPerRunCreditLimit = MacWorkbenchModel.loadDelegationAgentPerRunCreditLimit() {
+        didSet { Self.saveDelegationAgentPerRunCreditLimit(delegationAgentPerRunCreditLimit) }
+    }
+    @Published var delegationAgentDailyCreditLimit = MacWorkbenchModel.loadDelegationAgentDailyCreditLimit() {
+        didSet { Self.saveDelegationAgentDailyCreditLimit(delegationAgentDailyCreditLimit) }
+    }
     let toolGroups = WorkbenchToolGroup.defaults
 
     private let ledger: RunLedgerStore
@@ -171,6 +180,91 @@ final class MacWorkbenchModel: ObservableObject {
                 }
             }
         }
+    }
+
+    func runDelegationAgent() {
+        guard !isRunning else { return }
+        guard let firecrawlKey = Self.loadFirecrawlAPIKey() else {
+            status = "Firecrawl key required before running an agent."
+            return
+        }
+
+        let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? DelegationAgentRunner.defaultPrompt
+            : draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let ontology = ontology
+        let ledger = ledger
+        let outputDirectory = Self.defaultOpportunityBoardDirectory()
+        let backend = backend
+        let apiKey = apiKey
+        let killSwitch = DelegationAgentKillSwitch(
+            watchlistEnabled: delegationAgentWatchlistEnabled,
+            perRunCreditLimit: delegationAgentPerRunCreditLimit,
+            perDayCreditLimit: delegationAgentDailyCreditLimit,
+            creditsUsedToday: Self.delegationAgentCreditsUsedToday()
+        )
+        isRunning = true
+        status = "Running agent"
+
+        Task { [weak self] in
+            do {
+                let authorityHits = try await OntologyAuthorityRetriever().retrieve(
+                    prompt: prompt,
+                    ontology: ontology,
+                    limit: 8
+                )
+                let client = FirecrawlClient(apiKey: firecrawlKey)
+                let result = try await DelegationAgentRunner(
+                    search: { query, limit in
+                        try await client.search(query: query, limit: limit)
+                    },
+                    scrape: { url in
+                        try await client.scrape(url: url)
+                    },
+                    triage: { request in
+                        let text = try await AgentRunner().run(
+                            backend: backend,
+                            system: DelegationAgentRunner.triageSystemPrompt(),
+                            user: DelegationAgentRunner.triageUserPrompt(request),
+                            apiKey: apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : apiKey
+                        )
+                        return DelegationAgentRunner.parseTriageJSON(text)
+                    }
+                ).run(
+                    prompt: prompt,
+                    authorityHits: authorityHits,
+                    outputDirectory: outputDirectory,
+                    killSwitch: killSwitch
+                )
+                try await ledger.save(result.detail)
+                await MainActor.run {
+                    Self.recordDelegationAgentCreditsUsed(result.creditsUsed)
+                    self?.isRunning = false
+                    self?.selectedDetail = result.detail
+                    self?.refreshOpportunityBoard()
+                    self?.refreshConnectors()
+                    self?.status = result.detail.run.finalAnswer
+                }
+                await self?.refreshRuns()
+            } catch {
+                await MainActor.run {
+                    self?.isRunning = false
+                    self?.status = "Agent run failed: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    func setDelegationAgentWatchlistEnabled(_ enabled: Bool) {
+        delegationAgentWatchlistEnabled = enabled
+    }
+
+    func setDelegationAgentPerRunCreditLimit(_ value: Int) {
+        delegationAgentPerRunCreditLimit = max(1, value)
+    }
+
+    func setDelegationAgentDailyCreditLimit(_ value: Int) {
+        delegationAgentDailyCreditLimit = max(1, value)
     }
 
     nonisolated static func opportunityBoardActionRecords(
@@ -825,6 +919,61 @@ final class MacWorkbenchModel: ObservableObject {
             return environmentKey
         }
         return APIKeyStore.loadFirecrawlKey()
+    }
+
+    private static let delegationAgentWatchlistEnabledKey = "Harness.DelegationAgent.watchlistEnabled"
+    private static let delegationAgentPerRunCreditLimitKey = "Harness.DelegationAgent.perRunCreditLimit"
+    private static let delegationAgentDailyCreditLimitKey = "Harness.DelegationAgent.dailyCreditLimit"
+    private static let delegationAgentDailyCreditDateKey = "Harness.DelegationAgent.dailyCreditDate"
+    private static let delegationAgentDailyCreditsUsedKey = "Harness.DelegationAgent.dailyCreditsUsed"
+
+    private static func loadDelegationAgentWatchlistEnabled() -> Bool {
+        guard UserDefaults.standard.object(forKey: delegationAgentWatchlistEnabledKey) != nil else {
+            return true
+        }
+        return UserDefaults.standard.bool(forKey: delegationAgentWatchlistEnabledKey)
+    }
+
+    private static func saveDelegationAgentWatchlistEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: delegationAgentWatchlistEnabledKey)
+    }
+
+    private static func loadDelegationAgentPerRunCreditLimit() -> Int {
+        let value = UserDefaults.standard.integer(forKey: delegationAgentPerRunCreditLimitKey)
+        return value > 0 ? value : 10
+    }
+
+    private static func saveDelegationAgentPerRunCreditLimit(_ value: Int) {
+        UserDefaults.standard.set(max(1, value), forKey: delegationAgentPerRunCreditLimitKey)
+    }
+
+    private static func loadDelegationAgentDailyCreditLimit() -> Int {
+        let value = UserDefaults.standard.integer(forKey: delegationAgentDailyCreditLimitKey)
+        return value > 0 ? value : 50
+    }
+
+    private static func saveDelegationAgentDailyCreditLimit(_ value: Int) {
+        UserDefaults.standard.set(max(1, value), forKey: delegationAgentDailyCreditLimitKey)
+    }
+
+    private static func delegationAgentCreditsUsedToday(now: Date = Date()) -> Int {
+        resetDelegationAgentDailyCreditsIfNeeded(now: now)
+        return UserDefaults.standard.integer(forKey: delegationAgentDailyCreditsUsedKey)
+    }
+
+    private static func recordDelegationAgentCreditsUsed(_ count: Int, now: Date = Date()) {
+        guard count > 0 else { return }
+        resetDelegationAgentDailyCreditsIfNeeded(now: now)
+        let current = UserDefaults.standard.integer(forKey: delegationAgentDailyCreditsUsedKey)
+        UserDefaults.standard.set(current + count, forKey: delegationAgentDailyCreditsUsedKey)
+    }
+
+    private static func resetDelegationAgentDailyCreditsIfNeeded(now: Date = Date()) {
+        let today = ISO8601DateFormatter().string(from: Calendar.current.startOfDay(for: now))
+        let saved = UserDefaults.standard.string(forKey: delegationAgentDailyCreditDateKey)
+        guard saved != today else { return }
+        UserDefaults.standard.set(today, forKey: delegationAgentDailyCreditDateKey)
+        UserDefaults.standard.set(0, forKey: delegationAgentDailyCreditsUsedKey)
     }
 }
 
