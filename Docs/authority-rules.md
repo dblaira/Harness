@@ -12,3 +12,4 @@ Use `Docs/skills/articulate-leadership-communication/SKILL.md` for substantive r
 Response format for Adam: see `Docs/skills/articulate-leadership-communication/SKILL.md`.
 Forbidden language rule: see `Docs/skills/no-time-estimates/SKILL.md` — never estimate Adam's time or attach urgency framing.
 Format routing: see `Docs/skills/cognitive-fit/SKILL.md` — match layout to the cognitive task (table for lookup, matrix for cross-reference, tree for flow, prose for why).
+Completion claims: see `Docs/skills/requirement-is-the-test/SKILL.md` — Adam's literal sentence is the acceptance test; no "done" without evidence he can see.
