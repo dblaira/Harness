@@ -117,4 +117,4 @@ swift test --package-path Packages/OntologyKit
 xcodebuild -scheme Harness -destination 'platform=macOS' build
 ```
 
-Commit and push each working slice to `main`. Do not commit `Harness.xcodeproj/`, `build/`, `DerivedData/`, `.build/`, `.local-artifacts/`. Never write to the vault or `/accepted`; never store credentials in the repo. When writing anything Adam will read, obey `Docs/skills/pyramid-stimulus-response/SKILL.md` and `Docs/skills/no-time-estimates/SKILL.md` (never estimate Adam's time or attach urgency framing).
+Commit and push each working slice to `main`. Do not commit `Harness.xcodeproj/`, `build/`, `DerivedData/`, `.build/`, `.local-artifacts/`. Never write to the vault or `/accepted`; never store credentials in the repo. When writing anything Adam will read, obey `Docs/skills/articulate-leadership-communication/SKILL.md` and `Docs/skills/no-time-estimates/SKILL.md` (never estimate Adam's time or attach urgency framing).

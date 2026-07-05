@@ -1,9 +1,9 @@
 ---
-name: pyramid-stimulus-response
+name: articulate-leadership-communication
 description: Required response layout for Adam Blair. Use for EVERY substantive answer to Adam — explanations, reports, reviews, decisions, task results. Structure responses as a pyramid whose visual form encodes meaning (Cezanne stimulus-matching). Not optional; this is how Adam processes information.
 ---
 
-# Pyramid Stimulus Response
+# Articulate Leadership Communication
 
 ## Why this exists
 

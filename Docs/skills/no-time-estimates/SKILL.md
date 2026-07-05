@@ -1,6 +1,6 @@
 ---
 name: no-time-estimates
-description: Forbidden language rule for all agents responding to Adam Blair. Never estimate how long anything will take Adam, and never attach speed or urgency framing to recommendations or descriptions of events. Applies to EVERY response. Pairs with pyramid-stimulus-response.
+description: Forbidden language rule for all agents responding to Adam Blair. Never estimate how long anything will take Adam, and never attach speed or urgency framing to recommendations or descriptions of events. Applies to EVERY response. Pairs with articulate-leadership-communication.
 ---
 
 # No Time Estimates
@@ -84,6 +84,6 @@ Deterministic check, same family as `pyramid-format`:
 
 ## Also patch on adoption
 
-The example inside pyramid-stimulus-response/SKILL.md contains
+The example inside articulate-leadership-communication/SKILL.md contains
 "five-minute job, no urgency" — update that example when this skill
 is committed, so the two skills never disagree in evals.
