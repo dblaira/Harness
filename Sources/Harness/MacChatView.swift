@@ -10,8 +10,8 @@ struct MacChatView: View {
     @SceneStorage("MacChatView.isInspectorVisible") private var isInspectorVisible = true
     @SceneStorage("MacChatView.sidebarRailWidth") private var sidebarWidth = HarnessWorkbenchLayoutState.defaultSidebarWidth
     @SceneStorage("MacChatView.inspectorRailWidth") private var inspectorWidth = HarnessWorkbenchLayoutState.defaultInspectorWidth
-    @SceneStorage("MacChatView.centerSurface") private var centerSurfaceRaw = WorkbenchCenterSurface.chat.rawValue
-    @AppStorage("MacChatView.opportunityBoardViewMode") private var opportunityBoardViewModeRaw = OpportunityBoardViewMode.scan.rawValue
+    @SceneStorage("MacChatView.centerView") private var centerViewRaw = WorkbenchCenterView.chat.rawValue
+    @AppStorage("MacChatView.opportunityBoardViewMode") private var opportunityBoardViewModeRaw = OpportunityBoardViewMode.all.rawValue
     @State private var sidebarDragStartWidth: Double?
     @State private var inspectorDragStartWidth: Double?
     @State private var isInspectorDetailPresented = false
@@ -61,19 +61,19 @@ struct MacChatView: View {
         inspectorWidth = HarnessWorkbenchLayoutState.clampedInspectorWidth(inspectorWidth)
     }
 
-    private var centerSurface: WorkbenchCenterSurface {
-        WorkbenchCenterSurface(rawValue: centerSurfaceRaw) ?? .chat
+    private var centerView: WorkbenchCenterView {
+        WorkbenchCenterView(rawValue: centerViewRaw) ?? .chat
     }
 
-    private var centerSurfaceBinding: Binding<WorkbenchCenterSurface> {
+    private var centerViewBinding: Binding<WorkbenchCenterView> {
         Binding(
-            get: { centerSurface },
-            set: { centerSurfaceRaw = $0.rawValue }
+            get: { centerView },
+            set: { centerViewRaw = $0.rawValue }
         )
     }
 
     private var opportunityBoardViewMode: OpportunityBoardViewMode {
-        OpportunityBoardViewMode(rawValue: opportunityBoardViewModeRaw) ?? .scan
+        OpportunityBoardViewMode(rawValue: opportunityBoardViewModeRaw) ?? .all
     }
 
     private var opportunityBoardViewModeBinding: Binding<OpportunityBoardViewMode> {
@@ -290,7 +290,7 @@ struct MacChatView: View {
     private var transcript: some View {
         VStack(spacing: 0) {
             topBar
-            centerSurfaceContent
+            centerViewContent
             delegateLabel
             composer
         }
@@ -299,16 +299,21 @@ struct MacChatView: View {
     }
 
     @ViewBuilder
-    private var centerSurfaceContent: some View {
-        switch centerSurface {
+    private var centerViewContent: some View {
+        switch centerView {
         case .chat:
-            chatTranscriptSurface
+            chatTranscriptView
+        case .cockpit:
+            MacCockpitView { prompt in
+                model.draft = prompt
+                centerViewRaw = WorkbenchCenterView.chat.rawValue
+            }
         case .board:
-            opportunityBoardSurface
+            delegationQueueView
         }
     }
 
-    private var chatTranscriptSurface: some View {
+    private var chatTranscriptView: some View {
         ZStack {
             MacHarnessWatermark()
                 .frame(width: 260, height: 300)
@@ -338,7 +343,7 @@ struct MacChatView: View {
         }
     }
 
-    private var opportunityBoardSurface: some View {
+    private var delegationQueueView: some View {
         VStack(spacing: 0) {
             opportunityBoardToolbar
 
@@ -348,9 +353,9 @@ struct MacChatView: View {
                 ScrollView([.vertical, .horizontal]) {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         opportunityBoardHeader
-                        if opportunityBoardViewMode == .byBand {
-                            ForEach(opportunityBoardProjection.groupsByBand()) { group in
-                                opportunityBandHeader(group.band, count: group.rows.count)
+                        if opportunityBoardViewMode == .byApp {
+                            ForEach(opportunityBoardProjection.groupsByApp()) { group in
+                                delegationAppHeader(group.app, count: group.rows.count)
                                 ForEach(group.rows) { row in
                                     opportunityBoardRow(row)
                                 }
@@ -372,7 +377,7 @@ struct MacChatView: View {
 
     private var opportunityBoardToolbar: some View {
         HStack(spacing: 10) {
-            Picker("Board View", selection: opportunityBoardViewModeBinding) {
+            Picker("Queue View", selection: opportunityBoardViewModeBinding) {
                 ForEach(OpportunityBoardViewMode.allCases) { mode in
                     Text(mode.label).tag(mode)
                 }
@@ -381,7 +386,7 @@ struct MacChatView: View {
             .pickerStyle(.segmented)
             .frame(width: 174)
 
-            statusBadge("\(model.opportunityBoardRows.count) rows")
+            statusBadge("\(model.opportunityBoardRows.count) item\(model.opportunityBoardRows.count == 1 ? "" : "s")")
 
             if let issue = model.opportunityBoardLoadIssue {
                 Text(issue)
@@ -403,7 +408,7 @@ struct MacChatView: View {
                     .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.macHair, lineWidth: 1))
             }
             .buttonStyle(.plain)
-            .help("Refresh Board")
+            .help("Refresh")
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 10)
@@ -417,7 +422,7 @@ struct MacChatView: View {
                 .opacity(0.12)
 
             VStack(spacing: 8) {
-                Text("No opportunity cards")
+                Text("No delegations queued")
                     .font(.system(.title3, design: .serif).weight(.semibold))
                     .foregroundStyle(Theme.macInk)
                 Text(MacWorkbenchModel.defaultOpportunityBoardDirectory().path)
@@ -434,16 +439,16 @@ struct MacChatView: View {
     private var opportunityBoardHeader: some View {
         HStack(spacing: 0) {
             opportunityHeaderCell("", width: 28)
-            opportunityHeaderCell("Opportunity", width: 280)
-            opportunityHeaderCell("Band", width: 70)
+            opportunityHeaderCell("Delegation", width: 280)
+            opportunityHeaderCell("App", width: 126)
             opportunityHeaderCell("Fit", width: 58, alignment: .trailing)
             opportunityHeaderCell("Priority", width: 76, alignment: .trailing)
-            opportunityHeaderCell("Window", width: 72, alignment: .trailing)
-            opportunityHeaderCell("Attention", width: 84, alignment: .trailing)
+            opportunityHeaderCell("Due", width: 72, alignment: .trailing)
+            opportunityHeaderCell("Energy", width: 84, alignment: .trailing)
             opportunityHeaderCell("Seen", width: 56, alignment: .trailing)
             opportunityHeaderCell("Sources", width: 66, alignment: .trailing)
             opportunityHeaderCell("Rules", width: 138)
-            opportunityHeaderCell("Scout", width: 118)
+            opportunityHeaderCell("Agent", width: 118)
             opportunityHeaderCell("$ Order", width: 78)
             opportunityHeaderCell("Effort", width: 68)
         }
@@ -465,7 +470,7 @@ struct MacChatView: View {
                     .frame(width: 28, alignment: .center)
 
                 opportunityCell(opportunityTitle(row), width: 280, weight: .semibold)
-                opportunityCell(card.band?.rawValue ?? card.rawBand ?? "-", width: 70)
+                opportunityCell(card.app?.rawValue ?? card.rawApp ?? "-", width: 126)
                 opportunityCell(formatFit(card.fit), width: 58, alignment: .trailing)
                 opportunityCell(formatPriority(card.priority), width: 76, alignment: .trailing)
                 opportunityCell(card.windowDays.map { "\($0)d" } ?? "-", width: 72, alignment: .trailing)
@@ -485,14 +490,14 @@ struct MacChatView: View {
         .help(row.canonicalResource)
     }
 
-    private func opportunityBandHeader(_ band: OpportunityBand, count: Int) -> some View {
+    private func delegationAppHeader(_ app: OpportunityApp, count: Int) -> some View {
         HStack(spacing: 8) {
-            Text(band.rawValue)
+            Text(app.rawValue)
                 .font(.caption.weight(.bold))
                 .foregroundStyle(Theme.macInk.opacity(0.7))
             statusBadge("\(count)")
         }
-        .frame(width: 1_192, alignment: .leading)
+        .frame(width: 1_222, alignment: .leading)
         .padding(.top, 12)
         .padding(.bottom, 6)
     }
@@ -607,12 +612,12 @@ struct MacChatView: View {
         let card = row.card
         model.recordOpportunityBoardAction(.pursue, rows: [row])
         model.draft = """
-        Pursue opportunity \(row.id): \(opportunityTitle(row))
+        Pursue delegation \(row.id): \(opportunityTitle(row))
         Resource: \(row.canonicalResource)
         Rules: \(card.rulesHit.joined(separator: ", "))
-        Scout: \(card.scoutID ?? "unknown")
+        Agent: \(card.scoutID ?? "unknown")
         """
-        centerSurfaceRaw = WorkbenchCenterSurface.chat.rawValue
+        centerViewRaw = WorkbenchCenterView.chat.rawValue
     }
 
     private func opportunityTitle(_ row: OpportunityBoardRow) -> String {
@@ -640,7 +645,7 @@ struct MacChatView: View {
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(centerSurface == .board ? "Opportunity Board" : model.selectedDetail?.run.prompt ?? "The Adam Pattern")
+                Text(centerViewTitle)
                     .font(.system(size: 14).weight(.semibold))
                     .foregroundStyle(Theme.macInk)
                     .lineLimit(1)
@@ -648,14 +653,14 @@ struct MacChatView: View {
 
             Spacer()
 
-            Picker("Surface", selection: centerSurfaceBinding) {
-                ForEach(WorkbenchCenterSurface.allCases) { surface in
-                    Text(surface.label).tag(surface)
+            Picker("View", selection: centerViewBinding) {
+                ForEach(WorkbenchCenterView.allCases) { view in
+                    Text(view.label).tag(view)
                 }
             }
             .labelsHidden()
             .pickerStyle(.segmented)
-            .frame(width: 132)
+            .frame(width: 214)
 
             Picker("Backend", selection: $model.backend) {
                 ForEach(Backend.allCases) { backend in
@@ -687,6 +692,17 @@ struct MacChatView: View {
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
         .overlay(Rectangle().fill(Theme.macHair).frame(height: 1), alignment: .bottom)
+    }
+
+    private var centerViewTitle: String {
+        switch centerView {
+        case .chat:
+            return model.selectedDetail?.run.prompt ?? "The Adam Pattern"
+        case .cockpit:
+            return "Harness Cockpit"
+        case .board:
+            return "Delegation Queue"
+        }
     }
 
     private func toolbarIconButton(_ systemImage: String, help: String, action: @escaping () -> Void) -> some View {
@@ -1626,9 +1642,9 @@ struct MacChatView: View {
                     .foregroundStyle(Theme.macInk.opacity(0.58))
                 Spacer()
                 Button {
-                    model.scanForNewPatterns()
+                    model.captureEvidence()
                 } label: {
-                    Label("Scan for new patterns", systemImage: "waveform.path.ecg")
+                    Label("Capture evidence", systemImage: "waveform.path.ecg")
                         .font(.caption.weight(.semibold))
                         .labelStyle(.titleAndIcon)
                         .padding(.horizontal, 8)
@@ -1813,8 +1829,9 @@ struct MacChatView: View {
     }
 }
 
-enum WorkbenchCenterSurface: String, CaseIterable, Identifiable, Hashable {
+enum WorkbenchCenterView: String, CaseIterable, Identifiable, Hashable {
     case chat
+    case cockpit
     case board
 
     var id: String { rawValue }
@@ -1823,8 +1840,10 @@ enum WorkbenchCenterSurface: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .chat:
             return "Chat"
+        case .cockpit:
+            return "Cockpit"
         case .board:
-            return "Board"
+            return "Delegation"
         }
     }
 }

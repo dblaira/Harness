@@ -37,14 +37,15 @@ public struct OpportunityCardEnvelope: Codable, Sendable, Equatable {
     }
 }
 
-public enum OpportunityBand: String, Codable, Sendable, Equatable, CaseIterable {
-    case now = "Now"
-    case hold = "Hold"
-    case out = "Out"
+public enum OpportunityApp: String, Codable, Sendable, Equatable, CaseIterable {
+    case newsCalm = "News Calm"
+    case notoriousRecall = "Notorious Recall"
+    case understood = "Understood"
+    case savy = "SAVY"
 }
 
 public enum OpportunityEffort: String, Codable, Sendable, Equatable, CaseIterable {
-    case inBand = "in"
+    case fits = "in"
     case above = "above"
     case below = "below"
 }
@@ -54,8 +55,8 @@ public struct OpportunityCard: Codable, Sendable, Equatable {
     public var oppID: String
     public var fit: Double?
     public var rulesHit: [String]
-    public var band: OpportunityBand?
-    public var rawBand: String?
+    public var app: OpportunityApp?
+    public var rawApp: String?
     public var windowDays: Int?
     public var effort: OpportunityEffort?
     public var rawEffort: String?
@@ -71,8 +72,8 @@ public struct OpportunityCard: Codable, Sendable, Equatable {
         oppID: String = "",
         fit: Double? = nil,
         rulesHit: [String] = [],
-        band: OpportunityBand? = nil,
-        rawBand: String? = nil,
+        app: OpportunityApp? = nil,
+        rawApp: String? = nil,
         windowDays: Int? = nil,
         effort: OpportunityEffort? = nil,
         rawEffort: String? = nil,
@@ -87,8 +88,8 @@ public struct OpportunityCard: Codable, Sendable, Equatable {
         self.oppID = oppID
         self.fit = fit
         self.rulesHit = rulesHit
-        self.band = band
-        self.rawBand = rawBand
+        self.app = app
+        self.rawApp = rawApp
         self.windowDays = windowDays
         self.effort = effort
         self.rawEffort = rawEffort
@@ -185,7 +186,7 @@ public struct OpportunityCardParser: Sendable {
         )
 
         switch type {
-        case "opportunity":
+        case "opportunity", "delegation":
             return .opportunity(Self.opportunity(envelope: envelope, frontmatter: parsed.frontmatter, body: parsed.body))
         case "source_card":
             return .sourceCard(Self.sourceCard(envelope: envelope, frontmatter: parsed.frontmatter, body: parsed.body))
@@ -227,15 +228,15 @@ public struct OpportunityCardParser: Sendable {
         frontmatter: [String: String],
         body: String
     ) -> OpportunityCard {
-        let rawBand = firstValue(in: frontmatter, keys: ["band"])
+        let rawApp = firstValue(in: frontmatter, keys: ["app"])
         let rawEffort = firstValue(in: frontmatter, keys: ["effort"])
         return OpportunityCard(
             envelope: envelope,
             oppID: firstValue(in: frontmatter, keys: ["opp_id", "opp-id", "oppID"]) ?? "",
             fit: parseDouble(firstValue(in: frontmatter, keys: ["fit"])),
             rulesHit: parseList(firstValue(in: frontmatter, keys: ["rules_hit", "rules-hit", "rulesHit"])),
-            band: rawBand.flatMap(parseBand),
-            rawBand: rawBand,
+            app: rawApp.flatMap(parseApp),
+            rawApp: rawApp,
             windowDays: parseInt(firstValue(in: frontmatter, keys: ["window_days", "window-days", "windowDays"])),
             effort: rawEffort.flatMap(parseEffort),
             rawEffort: rawEffort,
@@ -287,8 +288,24 @@ public struct OpportunityCardParser: Sendable {
             .filter { !$0.isEmpty }
     }
 
-    private static func parseBand(_ raw: String) -> OpportunityBand? {
-        OpportunityBand.allCases.first { $0.rawValue.lowercased() == raw.lowercased() }
+    private static func parseApp(_ raw: String) -> OpportunityApp? {
+        let normalized = raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: "_", with: " ")
+        switch normalized {
+        case "news calm", "boring news":
+            return .newsCalm
+        case "notorious recall":
+            return .notoriousRecall
+        case "understood":
+            return .understood
+        case "savy", "savvy":
+            return .savy
+        default:
+            return OpportunityApp.allCases.first { $0.rawValue.lowercased() == normalized }
+        }
     }
 
     private static func parseEffort(_ raw: String) -> OpportunityEffort? {
@@ -344,8 +361,8 @@ public struct OpportunityCardValidator: Sendable {
         if opportunity.fit == nil || opportunity.fit! < 0 || opportunity.fit! > 1 {
             reasons.append("fit must be between 0 and 1.")
         }
-        if opportunity.band == nil {
-            reasons.append("band must be Now, Hold, or Out.")
+        if opportunity.app == nil {
+            reasons.append("app must be News Calm, Notorious Recall, Understood, or SAVY.")
         }
         if opportunity.sources < 1 {
             reasons.append("sources must be at least 1.")
@@ -353,7 +370,7 @@ public struct OpportunityCardValidator: Sendable {
         guard reasons.isEmpty else {
             return OpportunityCardValidation(passed: false, reason: reasons.joined(separator: " "))
         }
-        return OpportunityCardValidation(passed: true, reason: "Opportunity envelope passed typed validation.")
+        return OpportunityCardValidation(passed: true, reason: "Delegation file passed typed validation.")
     }
 
     public func validate(_ sourceCard: OpportunitySourceCard) -> OpportunityCardValidation {
@@ -370,7 +387,7 @@ public struct OpportunityCardValidator: Sendable {
         guard reasons.isEmpty else {
             return OpportunityCardValidation(passed: false, reason: reasons.joined(separator: " "))
         }
-        return OpportunityCardValidation(passed: true, reason: "Source card envelope passed typed validation.")
+        return OpportunityCardValidation(passed: true, reason: "Source file passed typed validation.")
     }
 }
 
@@ -388,31 +405,28 @@ public struct OpportunityBoardRow: Identifiable, Codable, Sendable, Equatable {
 }
 
 public enum OpportunityBoardViewMode: String, Codable, Sendable, Equatable, Hashable, CaseIterable, Identifiable {
-    case scan = "scan"
-    case nowOnly = "now_only"
-    case byBand = "by_band"
+    case all = "all"
+    case byApp = "by_app"
 
     public var id: String { rawValue }
 
     public var label: String {
         switch self {
-        case .scan:
-            return "Scan"
-        case .nowOnly:
-            return "Now"
-        case .byBand:
-            return "Band"
+        case .all:
+            return "All"
+        case .byApp:
+            return "By App"
         }
     }
 }
 
-public struct OpportunityBoardBandGroup: Identifiable, Codable, Sendable, Equatable {
-    public var id: OpportunityBand { band }
-    public var band: OpportunityBand
+public struct OpportunityBoardAppGroup: Identifiable, Codable, Sendable, Equatable {
+    public var id: OpportunityApp { app }
+    public var app: OpportunityApp
     public var rows: [OpportunityBoardRow]
 
-    public init(band: OpportunityBand, rows: [OpportunityBoardRow]) {
-        self.band = band
+    public init(app: OpportunityApp, rows: [OpportunityBoardRow]) {
+        self.app = app
         self.rows = rows
     }
 }
@@ -426,20 +440,18 @@ public struct OpportunityBoardProjection: Codable, Sendable, Equatable {
 
     public func rows(for mode: OpportunityBoardViewMode) -> [OpportunityBoardRow] {
         switch mode {
-        case .scan:
+        case .all:
             return rows
-        case .nowOnly:
-            return Self.sortedByWindow(rows.filter { $0.card.band == .now })
-        case .byBand:
-            return groupsByBand().flatMap(\.rows)
+        case .byApp:
+            return groupsByApp().flatMap(\.rows)
         }
     }
 
-    public func groupsByBand() -> [OpportunityBoardBandGroup] {
-        OpportunityBand.allCases.compactMap { band in
-            let bandRows = Self.sortedByPriority(rows.filter { $0.card.band == band })
-            guard !bandRows.isEmpty else { return nil }
-            return OpportunityBoardBandGroup(band: band, rows: bandRows)
+    public func groupsByApp() -> [OpportunityBoardAppGroup] {
+        OpportunityApp.allCases.compactMap { app in
+            let appRows = Self.sortedByPriority(rows.filter { $0.card.app == app })
+            guard !appRows.isEmpty else { return nil }
+            return OpportunityBoardAppGroup(app: app, rows: appRows)
         }
     }
 

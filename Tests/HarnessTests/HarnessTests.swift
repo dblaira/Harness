@@ -73,32 +73,32 @@ import OntologyKit
     #expect(tools.contains { $0.title == "NotebookLM" })
 }
 
-@Test func opportunityBoardLoadsMarkdownCardsFromDirectory() throws {
+@Test func delegationQueueLoadsMarkdownFilesFromDirectory() throws {
     let root = FileManager.default.temporaryDirectory
-        .appendingPathComponent("HarnessOpportunityBoardTests-\(UUID().uuidString)", isDirectory: true)
+        .appendingPathComponent("HarnessDelegationQueueTests-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
 
     try """
     ---
-    type: opportunity
+    type: delegation
     title: NotebookLM handoff scouts
     resource: https://example.com/notebooklm
     timestamp: 2026-07-04T10:00:00Z
     trust_level: accepted
-    opp_id: OPP-NOTEBOOKLM
+    opp_id: DELEGATION-NOTEBOOKLM
     fit: 0.9
     rules_hit: [R-01, R-07]
-    band: Now
+    app: Understood
     window_days: 5
     effort: in
     attention: 40
     times_seen: 1
     sources: 2
-    scout_id: scout-context
+    scout_id: agent-context
     ---
-    Turn NotebookLM exports into reviewable source cards.
-    """.write(to: root.appendingPathComponent("OPP-NOTEBOOKLM.md"), atomically: true, encoding: .utf8)
+    Turn NotebookLM exports into reviewable sources.
+    """.write(to: root.appendingPathComponent("DELEGATION-NOTEBOOKLM.md"), atomically: true, encoding: .utf8)
 
     try """
     ---
@@ -107,27 +107,28 @@ import OntologyKit
     resource: https://example.com/source
     retrieved_by: firecrawl-scrape
     content_hash: sha256:test
-    linked_opportunities: [OPP-NOTEBOOKLM]
+    linked_opportunities: [DELEGATION-NOTEBOOKLM]
     ---
-    Source cards should not become board rows.
+    Source files should not become delegation items.
     """.write(to: root.appendingPathComponent("source.md"), atomically: true, encoding: .utf8)
 
     let rows = try MacWorkbenchModel.loadOpportunityBoardRows(from: root)
 
-    #expect(rows.map(\.id) == ["OPP-NOTEBOOKLM"])
+    #expect(rows.map(\.id) == ["DELEGATION-NOTEBOOKLM"])
     #expect(rows.first?.card.envelope.authorityLevel == .supporting)
     #expect(rows.first?.card.envelope.trustNote == "Self-declared trust_level accepted ignored; connector ceiling is supporting.")
 }
 
-@Test func workbenchCenterSurfacesIncludeOpportunityBoard() {
-    #expect(WorkbenchCenterSurface.allCases.map(\.rawValue) == ["chat", "board"])
-    #expect(WorkbenchCenterSurface.board.label == "Board")
+@Test func workbenchCenterViewsIncludeDelegationQueue() {
+    #expect(WorkbenchCenterView.allCases.map(\.rawValue) == ["chat", "cockpit", "board"])
+    #expect(WorkbenchCenterView.cockpit.label == "Cockpit")
+    #expect(WorkbenchCenterView.board.label == "Delegation")
 }
 
-@Test func opportunityBoardActionRecordsShareBatchForMultiSelect() {
+@Test func delegationQueueActionRecordsShareBatchForMultiSelect() {
     let rows = [
-        opportunityBoardRow(id: "OPP-ONE", resource: "https://example.com/one"),
-        opportunityBoardRow(id: "OPP-TWO", resource: "https://example.com/two")
+        opportunityBoardRow(id: "DELEGATION-ONE", resource: "https://example.com/one"),
+        opportunityBoardRow(id: "DELEGATION-TWO", resource: "https://example.com/two")
     ]
     let records = MacWorkbenchModel.opportunityBoardActionRecords(
         action: .pass,
@@ -136,7 +137,7 @@ import OntologyKit
         createdAt: Date(timeIntervalSince1970: 100)
     )
 
-    #expect(records.map(\.opportunityID) == ["OPP-ONE", "OPP-TWO"])
+    #expect(records.map(\.opportunityID) == ["DELEGATION-ONE", "DELEGATION-TWO"])
     #expect(Set(records.map(\.batchID)) == ["batch-one"])
     #expect(records.allSatisfy { $0.action == .pass })
 }
@@ -154,9 +155,9 @@ private func opportunityBoardRow(id: String, resource: String) -> OpportunityBoa
         oppID: id,
         fit: 0.8,
         rulesHit: ["R-01"],
-        band: .now,
+        app: .understood,
         windowDays: 5,
-        effort: .inBand,
+        effort: .fits,
         sources: 1
     )
     return OpportunityBoardRow(canonicalResource: resource, card: card, history: [card])

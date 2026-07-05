@@ -1033,7 +1033,7 @@ import Testing
     #expect(script.contains("exportedCount"))
 }
 
-@Test func connectorRegistrySurfacesSourcesSkillsPluginsAndAgentBridges() throws {
+@Test func connectorRegistryListsSourcesSkillsPluginsAndAgentBridges() throws {
     let home = FileManager.default.temporaryDirectory
         .appendingPathComponent("HarnessConnectorRegistryTests-\(UUID().uuidString)", isDirectory: true)
     defer { try? FileManager.default.removeItem(at: home) }
@@ -1072,7 +1072,7 @@ import Testing
     #expect(HarnessConnectorRegistry.memorySources(from: connectors).contains { $0.kind == .notebookLM })
 }
 
-@Test func connectorRegistrySurfacesFirecrawlMCPAsApprovalGatedToolBridge() throws {
+@Test func connectorRegistryListsFirecrawlMCPAsApprovalGatedToolBridge() throws {
     let home = FileManager.default.temporaryDirectory
         .appendingPathComponent("HarnessFirecrawlConnectorTests-\(UUID().uuidString)", isDirectory: true)
     defer { try? FileManager.default.removeItem(at: home) }

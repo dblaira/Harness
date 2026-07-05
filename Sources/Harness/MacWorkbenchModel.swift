@@ -119,7 +119,7 @@ final class MacWorkbenchModel: ObservableObject {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Documents", isDirectory: true)
             .appendingPathComponent("Harness", isDirectory: true)
-            .appendingPathComponent("Opportunities", isDirectory: true)
+            .appendingPathComponent("Delegations", isDirectory: true)
     }
 
     nonisolated static func loadOpportunityBoardRows(
@@ -163,7 +163,7 @@ final class MacWorkbenchModel: ObservableObject {
             do {
                 try await ledger.recordOpportunityBoardActions(records)
                 await MainActor.run {
-                    self?.status = "\(action.label) recorded for \(records.count) opportunity row\(records.count == 1 ? "" : "s")."
+                    self?.status = "\(action.label) recorded for \(records.count) delegation item\(records.count == 1 ? "" : "s")."
                 }
             } catch {
                 await MainActor.run {
@@ -573,8 +573,8 @@ final class MacWorkbenchModel: ObservableObject {
         }
     }
 
-    func scanForNewPatterns() {
-        status = "Scanning Supabase evidence"
+    func captureEvidence() {
+        status = "Capturing Supabase evidence"
         Task {
             do {
                 let output = try await Task.detached(priority: .userInitiated) {
@@ -583,7 +583,7 @@ final class MacWorkbenchModel: ObservableObject {
                 reviewQueueCandidates = try await reviewQueue.loadPendingClaims()
                 status = output
             } catch {
-                status = "Evidence scan failed: \(error.localizedDescription)"
+                status = "Evidence capture failed: \(error.localizedDescription)"
             }
         }
     }
@@ -796,9 +796,9 @@ final class MacWorkbenchModel: ObservableObject {
         if let data = output.data(using: .utf8),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let count = json["candidates_created"] as? Int {
-            return "Evidence scan complete: \(count) new candidate\(count == 1 ? "" : "s")."
+            return "Evidence capture complete: \(count) new candidate\(count == 1 ? "" : "s")."
         }
-        return "Evidence scan complete."
+        return "Evidence capture complete."
     }
 
     private static func connectorEnvironment() -> [String: String] {

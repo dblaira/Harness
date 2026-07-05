@@ -2,116 +2,116 @@ import Foundation
 import Testing
 @testable import OntologyKit
 
-@Test func opportunityFixtureParsesValidatesAndComputesPriority() throws {
+@Test func delegationFixtureParsesValidatesAndComputesPriority() throws {
     let markdown = try fixtureText("OPP-0001.md")
     let parsed = try OpportunityCardParser().parse(markdown: markdown, source: "Tests/fixtures/OPP-0001.md")
-    let opportunity = try #require(parsed.opportunity)
+    let delegation = try #require(parsed.opportunity)
 
-    #expect(opportunity.envelope.type == "opportunity")
-    #expect(opportunity.envelope.title == "Journaling app sunsets exports Aug 1 — migration vacuum")
-    #expect(opportunity.envelope.tags == ["platform-watch", "migration"])
-    #expect(opportunity.envelope.resource == "https://example-journal.app/blog/sunset-notice")
-    #expect(opportunity.envelope.declaredTrustLevel == "supporting_memory")
-    #expect(opportunity.envelope.authorityLevel == .supporting)
-    #expect(opportunity.envelope.trustNote == nil)
-    #expect(opportunity.oppID == "OPP-0001")
-    #expect(opportunity.fit == 0.91)
-    #expect(opportunity.rulesHit == ["R-01", "R-02", "R-07"])
-    #expect(opportunity.band == .now)
-    #expect(opportunity.windowDays == 27)
-    #expect(opportunity.effort == .inBand)
-    #expect(opportunity.dollarOrder == "100K")
-    #expect(opportunity.attention == 143)
-    #expect(opportunity.timesSeen == 5)
-    #expect(opportunity.sources == 9)
-    #expect(opportunity.scoutID == "scout-platform")
-    #expect(opportunity.body.contains("plain-English case"))
-    #expect(abs(opportunity.priority - 3.25) < 0.0001)
+    #expect(delegation.envelope.type == "delegation")
+    #expect(delegation.envelope.title == "Journaling app sunsets exports Aug 1 - migration vacuum")
+    #expect(delegation.envelope.tags == ["platform-watch", "migration"])
+    #expect(delegation.envelope.resource == "https://example-journal.app/blog/sunset-notice")
+    #expect(delegation.envelope.declaredTrustLevel == "supporting_memory")
+    #expect(delegation.envelope.authorityLevel == .supporting)
+    #expect(delegation.envelope.trustNote == nil)
+    #expect(delegation.oppID == "DELEGATION-0001")
+    #expect(delegation.fit == 0.91)
+    #expect(delegation.rulesHit == ["R-01", "R-02", "R-07"])
+    #expect(delegation.app == .understood)
+    #expect(delegation.windowDays == 27)
+    #expect(delegation.effort == .fits)
+    #expect(delegation.dollarOrder == "100K")
+    #expect(delegation.attention == 143)
+    #expect(delegation.timesSeen == 5)
+    #expect(delegation.sources == 9)
+    #expect(delegation.scoutID == "agent-platform")
+    #expect(delegation.body.contains("plain-English case"))
+    #expect(abs(delegation.priority - 3.25) < 0.0001)
 
-    let validation = OpportunityCardValidator().validate(opportunity)
+    let validation = OpportunityCardValidator().validate(delegation)
     #expect(validation.passed)
-    #expect(validation.reason == "Opportunity envelope passed typed validation.")
+    #expect(validation.reason == "Delegation file passed typed validation.")
 }
 
-@Test func sourceCardFixtureParsesAndRequiresRetrievalMetadata() throws {
+@Test func sourceFileFixtureParsesAndRequiresRetrievalMetadata() throws {
     let markdown = try fixtureText("OPP-0001-source.md")
     let parsed = try OpportunityCardParser().parse(markdown: markdown, source: "Tests/fixtures/OPP-0001-source.md")
     let sourceCard = try #require(parsed.sourceCard)
 
     #expect(sourceCard.envelope.type == "source_card")
-    #expect(sourceCard.envelope.title == "Sunset notice — Example Journal blog")
+    #expect(sourceCard.envelope.title == "Sunset notice - Example Journal blog")
     #expect(sourceCard.envelope.resource == "https://example-journal.app/blog/sunset-notice")
     #expect(sourceCard.retrievedBy == "firecrawl-scrape")
-    #expect(sourceCard.contentHash == "sha256:9f2c…")
-    #expect(sourceCard.linkedOpportunities == ["OPP-0001"])
+    #expect(sourceCard.contentHash == "sha256:9f2c...")
+    #expect(sourceCard.linkedOpportunities == ["DELEGATION-0001"])
     #expect(sourceCard.envelope.authorityLevel == .supporting)
 
     let validation = OpportunityCardValidator().validate(sourceCard)
     #expect(validation.passed)
-    #expect(validation.reason == "Source card envelope passed typed validation.")
+    #expect(validation.reason == "Source file passed typed validation.")
 }
 
-@Test func opportunityTrustLevelCannotSelfPromote() throws {
+@Test func delegationTrustLevelCannotSelfPromote() throws {
     let markdown = """
     ---
-    type: opportunity
-    title: Self promoting opportunity
+    type: delegation
+    title: Self promoting delegation
     resource: https://example.com/self-promote
     timestamp: 2026-07-04T10:00:00Z
     trust_level: accepted
-    opp_id: OPP-9999
+    opp_id: DELEGATION-9999
     fit: 0.7
     rules_hit: [R-01]
-    band: Now
+    app: Understood
     effort: in
     sources: 1
     ---
-    A scout claim that should stay supporting memory.
+    An agent claim that should stay supporting memory.
     """
 
     let parsed = try OpportunityCardParser().parse(markdown: markdown, source: "self-promote.md")
-    let opportunity = try #require(parsed.opportunity)
+    let delegation = try #require(parsed.opportunity)
 
-    #expect(opportunity.envelope.declaredTrustLevel == "accepted")
-    #expect(opportunity.envelope.authorityLevel == .supporting)
-    #expect(opportunity.envelope.trustNote == "Self-declared trust_level accepted ignored; connector ceiling is supporting.")
+    #expect(delegation.envelope.declaredTrustLevel == "accepted")
+    #expect(delegation.envelope.authorityLevel == .supporting)
+    #expect(delegation.envelope.trustNote == "Self-declared trust_level accepted ignored; connector ceiling is supporting.")
 }
 
-@Test func malformedOpportunityIsBlockedWithPlainEnglishReasons() throws {
+@Test func malformedDelegationIsBlockedWithPlainEnglishReasons() throws {
     let markdown = """
     ---
-    type: opportunity
+    type: delegation
     title: Missing rules and bad fit
     resource: https://example.com/bad
     fit: 1.4
-    band: Soon
+    app: Atlantis
     sources: 0
     ---
-    This should not reach the Board.
+    This should not reach the queue.
     """
 
     let parsed = try OpportunityCardParser().parse(markdown: markdown, source: "bad.md")
-    let opportunity = try #require(parsed.opportunity)
-    let validation = OpportunityCardValidator().validate(opportunity)
+    let delegation = try #require(parsed.opportunity)
+    let validation = OpportunityCardValidator().validate(delegation)
 
     #expect(!validation.passed)
     #expect(validation.reason.contains("rules_hit must include at least one accepted rule ID."))
     #expect(validation.reason.contains("fit must be between 0 and 1."))
-    #expect(validation.reason.contains("band must be Now, Hold, or Out."))
+    #expect(validation.reason.contains("app must be News Calm, Notorious Recall, Understood, or SAVY."))
     #expect(validation.reason.contains("sources must be at least 1."))
 }
 
-@Test func opportunityDedupMergesByCanonicalResourceAndPreservesHistory() throws {
+@Test func delegationDedupMergesByCanonicalResourceAndPreservesHistory() throws {
     let first = try #require(try OpportunityCardParser().parse(markdown: """
     ---
-    type: opportunity
+    type: delegation
     title: First title
     resource: https://Example-Journal.app/blog/sunset-notice?utm_source=newsletter
     timestamp: 2026-07-01T10:00:00Z
-    opp_id: OPP-0001
+    opp_id: DELEGATION-0001
     fit: 0.8
     rules_hit: [R-01]
-    band: Now
+    app: Understood
     window_days: 10
     effort: in
     attention: 12
@@ -122,14 +122,14 @@ import Testing
     """, source: "first.md").opportunity)
     let duplicate = try #require(try OpportunityCardParser().parse(markdown: """
     ---
-    type: opportunity
+    type: delegation
     title: Later title
     resource: https://example-journal.app/blog/sunset-notice
     timestamp: 2026-07-04T10:00:00Z
-    opp_id: OPP-0002
+    opp_id: DELEGATION-0002
     fit: 0.7
     rules_hit: [R-02]
-    band: Hold
+    app: Notorious Recall
     effort: in
     attention: 30
     times_seen: 1
@@ -142,67 +142,65 @@ import Testing
 
     let row = try #require(rows.first)
     #expect(rows.count == 1)
-    #expect(row.card.oppID == "OPP-0001")
+    #expect(row.card.oppID == "DELEGATION-0001")
     #expect(row.card.envelope.resource == "https://example-journal.app/blog/sunset-notice")
     #expect(row.card.envelope.timestamp == "2026-07-04T10:00:00Z")
     #expect(row.card.attention == 42)
     #expect(row.card.timesSeen == 2)
-    #expect(row.history.map(\.oppID) == ["OPP-0001", "OPP-0002"])
+    #expect(row.history.map(\.oppID) == ["DELEGATION-0001", "DELEGATION-0002"])
 }
 
-@Test func opportunityBoardProjectionSupportsScanNowAndBandViews() throws {
-    let now = try opportunityCard(
-        id: "OPP-NOW",
-        resource: "https://example.com/now",
+@Test func delegationQueueProjectionSupportsAllAndByAppViews() throws {
+    let understood = try delegationItem(
+        id: "DELEGATION-UNDERSTOOD",
+        resource: "https://example.com/understood",
         fit: 0.8,
-        band: "Now",
+        app: "Understood",
         windowDays: 3,
         rules: ["R-01"],
         attention: 20
     )
-    let hold = try opportunityCard(
-        id: "OPP-HOLD",
-        resource: "https://example.com/hold",
+    let notorious = try delegationItem(
+        id: "DELEGATION-NOTORIOUS",
+        resource: "https://example.com/notorious",
         fit: 0.65,
-        band: "Hold",
+        app: "Notorious Recall",
         windowDays: 20,
         rules: ["R-02"],
         attention: 10
     )
-    let out = try opportunityCard(
-        id: "OPP-OUT",
-        resource: "https://example.com/out",
+    let newsCalm = try delegationItem(
+        id: "DELEGATION-NEWS",
+        resource: "https://example.com/news",
         fit: 0.2,
-        band: "Out",
+        app: "News Calm",
         windowDays: 120,
         rules: ["R-03"],
         attention: 5
     )
 
-    let rows = OpportunityBoardDeduper().deduplicate([hold, out, now])
-    let board = OpportunityBoardProjection(rows: rows)
+    let rows = OpportunityBoardDeduper().deduplicate([notorious, newsCalm, understood])
+    let queue = OpportunityBoardProjection(rows: rows)
 
-    #expect(board.rows(for: .scan).map(\.id) == ["OPP-NOW", "OPP-HOLD", "OPP-OUT"])
-    #expect(board.rows(for: .nowOnly).map(\.id) == ["OPP-NOW"])
-    #expect(board.groupsByBand().map(\.band) == [.now, .hold, .out])
-    #expect(board.groupsByBand().flatMap(\.rows).map(\.id) == ["OPP-NOW", "OPP-HOLD", "OPP-OUT"])
+    #expect(queue.rows(for: .all).map(\.id) == ["DELEGATION-UNDERSTOOD", "DELEGATION-NOTORIOUS", "DELEGATION-NEWS"])
+    #expect(queue.groupsByApp().map(\.app) == [.newsCalm, .notoriousRecall, .understood])
+    #expect(queue.groupsByApp().flatMap(\.rows).map(\.id) == ["DELEGATION-NEWS", "DELEGATION-NOTORIOUS", "DELEGATION-UNDERSTOOD"])
 }
 
-@Test func opportunityBoardViewModeRawValuesAreStableForPersistence() {
-    #expect(OpportunityBoardViewMode.scan.rawValue == "scan")
-    #expect(OpportunityBoardViewMode.nowOnly.rawValue == "now_only")
-    #expect(OpportunityBoardViewMode.byBand.rawValue == "by_band")
+@Test func delegationQueueViewModeRawValuesAreStableForPersistence() {
+    #expect(OpportunityBoardViewMode.all.rawValue == "all")
+    #expect(OpportunityBoardViewMode.byApp.rawValue == "by_app")
     #expect(OpportunityBoardViewMode(rawValue: "missing") == nil)
 }
 
-@Test func opportunityBoardActionsPersistWithBatchTags() async throws {
+@Test func delegationQueueActionsPersistWithBatchTags() async throws {
     let ledger = try RunLedgerStore.inMemory()
     let batchID = "batch-test"
     let records = [
         OpportunityBoardActionRecord(
             id: "action-1",
             batchID: batchID,
-            opportunityID: "OPP-001",
+            opportunityID: "DELEGATION-001",
             canonicalResource: "https://example.com/one",
             action: .pass,
             createdAt: Date(timeIntervalSince1970: 10)
@@ -210,7 +208,7 @@ import Testing
         OpportunityBoardActionRecord(
             id: "action-2",
             batchID: batchID,
-            opportunityID: "OPP-002",
+            opportunityID: "DELEGATION-002",
             canonicalResource: "https://example.com/two",
             action: .pass,
             createdAt: Date(timeIntervalSince1970: 11)
@@ -237,11 +235,11 @@ private func fixtureText(_ name: String) throws -> String {
     return try String(contentsOf: fixture, encoding: .utf8)
 }
 
-private func opportunityCard(
+private func delegationItem(
     id: String,
     resource: String,
     fit: Double,
-    band: String,
+    app: String,
     windowDays: Int,
     rules: [String],
     attention: Int
@@ -249,22 +247,20 @@ private func opportunityCard(
     let rulesText = rules.joined(separator: ", ")
     let parsed = try OpportunityCardParser().parse(markdown: """
     ---
-    type: opportunity
+    type: delegation
     title: \(id)
     resource: \(resource)
     timestamp: 2026-07-04T10:00:00Z
     opp_id: \(id)
     fit: \(fit)
     rules_hit: [\(rulesText)]
-    band: \(band)
+    app: \(app)
     window_days: \(windowDays)
     effort: in
     attention: \(attention)
-    times_seen: 1
     sources: 1
-    scout_id: scout-test
     ---
-    \(id) body.
+    Queue item.
     """, source: "\(id).md")
     return try #require(parsed.opportunity)
 }
