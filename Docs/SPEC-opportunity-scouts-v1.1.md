@@ -1,3 +1,5 @@
+> ⚠️ SUPERSEDED by `SPEC-delegation-agents-v1.2.md` (2026-07-05, Suite-language revision — laws unchanged). Kept for history.
+
 ---
 type: feature_spec
 title: Opportunity Scouts v1.1 — The Board, the Envelope, the Fleet Contract

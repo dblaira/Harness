@@ -1,3 +1,5 @@
+> ⚠️ SUPERSEDED: vocabulary in this handoff is outdated as of `dc9b893`. Current contract: `Docs/SPEC-delegation-agents-v1.2.md`. Kept for history.
+
 # Codex Handoff — Opportunity Scouts v1.1, Phase 1
 
 Date: 2026-07-04
