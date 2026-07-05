@@ -1,6 +1,6 @@
 ---
 name: market-inefficiency
-description: Run Adam's market-inefficiency pattern as a 7-gate procedure — inefficiency noticed, solution search, inadequate incumbents, capability match, efficient-solution hypothesis, build threshold, emit delegation. Use when Adam says "market inefficiency", "nobody is doing X", "why is this still so hard/expensive", "this just became a market", or when a scout run scores external signals. Never bet, spend, or build — emit and stop.
+description: Run Adam's market-inefficiency pattern as a 7-gate procedure — inefficiency noticed, solution search, inadequate incumbents, capability match, efficient-solution hypothesis, build threshold, emit delegation. Look first in larger-client shadows, lavishness-leeway zones, and potential-premium markets. Use when Adam says "market inefficiency", "nobody is doing X", "why is this still so hard/expensive", "this just became a market", or when a scout run scores external signals. Never bet, spend, or build — emit and stop.
 ---
 
 # Market Inefficiency
@@ -20,6 +20,33 @@ Reverse-engineered from two Adam sources:
 
 The pattern is not generic "market recognition." It is a specific
 causal chain, and this skill runs that chain as a procedure.
+
+## Where to look BEFORE the chain (Adam's refinement, 2026-07-05 voice memo)
+
+Three hunting grounds where inefficiency exists by construction, plus
+the thesis that justifies the fleet:
+
+- **The larger-client shadow.** When a market serves a more important
+  client than the price-payer — sport promotion (Australian Open
+  wildcards admitted to serve the home country), entertainment,
+  regulation, national interest — mispricings pool beneath that
+  priority as a subsidy shadow. The bettor adding a home-country
+  wildcard to a parlay "adds to the anxiety of it all" and pays a bad
+  price on purpose. Ask first: *who is the larger client here, and
+  what does their priority distort below it?*
+- **Lavishness leeway.** Zones where buyers deliberately suspend
+  cost-consciousness (experiences, feeling wild while staying safe).
+  Price discipline is intentionally relaxed, so inefficiency is
+  tolerated — even purchased as a feeling.
+- **The potential premium.** Markets where buyers pay for potential
+  and exploration rather than present utility (Adam's own AI-token
+  spend). Inefficiency zones by construction.
+- **Attention seats (the fleet thesis).** The edge is attention
+  asymmetry: agents pay closer attention and notice faster; Adam acts
+  faster and more informed. "There could be thousands of seats… I'm
+  just in one of them." The pattern does not require beating everyone
+  — only occupying one seat well. This is why finding one is enough
+  and why honest empty catches cost nothing.
 
 ## The chain (run every step; each is a gate)
 
