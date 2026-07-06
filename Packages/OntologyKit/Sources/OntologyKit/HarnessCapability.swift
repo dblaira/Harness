@@ -72,7 +72,9 @@ public enum HarnessCapabilityRegistry {
     private static func skillCapabilities(homeDirectory: URL) -> [HarnessCapability] {
         let roots: [(source: String, root: URL)] = [
             ("Vault", homeDirectory.appendingPathComponent("Documents/Main/Skills", isDirectory: true)),
+            ("Vault", homeDirectory.appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs/Documents/Main/Skills", isDirectory: true)),
             ("Harness", homeDirectory.appendingPathComponent("Developer/GitHub/Harness/Docs/skills", isDirectory: true)),
+            ("Harness", homeDirectory.appendingPathComponent("GitHub/Harness/Docs/skills", isDirectory: true)),
             ("Hermes", homeDirectory.appendingPathComponent(".hermes/skills", isDirectory: true)),
             ("Hermes Studio", homeDirectory.appendingPathComponent(".hermes/profiles/studio/skills", isDirectory: true)),
             ("Claude", homeDirectory.appendingPathComponent(".claude/skills", isDirectory: true)),
@@ -91,12 +93,17 @@ public enum HarnessCapabilityRegistry {
     }
 
     private static func vaultSkillCapabilities(homeDirectory: URL) -> [HarnessCapability] {
-        let root = homeDirectory.appendingPathComponent("Documents/Main/Skills", isDirectory: true)
-        guard let files = try? FileManager.default.contentsOfDirectory(
-            at: root,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) else { return [] }
+        let candidates = [
+            homeDirectory.appendingPathComponent("Documents/Main/Skills", isDirectory: true),
+            homeDirectory.appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs/Documents/Main/Skills", isDirectory: true)
+        ]
+        guard let root = candidates.first(where: { FileManager.default.fileExists(atPath: $0.path) }),
+              let files = try? FileManager.default.contentsOfDirectory(
+                  at: root,
+                  includingPropertiesForKeys: [.isRegularFileKey],
+                  options: [.skipsHiddenFiles]
+              )
+        else { return [] }
 
         return files
             .filter { $0.pathExtension.lowercased() == "md" && $0.lastPathComponent != "Skills Hub.md" }
