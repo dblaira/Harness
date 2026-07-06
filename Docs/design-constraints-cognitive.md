@@ -46,6 +46,19 @@ The system removes the friction Adam named; Adam supplies the judgment.
    only for interpretation. Response layout per
    `articulate-leadership-communication`.
 
+## This governs agent responses too
+
+The constraint applies to every word an agent sends Adam, not just app
+screens. Reference codes (work-order numbers, file paths, ticket IDs,
+acronyms) are detailed parameters; making Adam decode or remember them
+is the exact friction he named.
+
+- Say what a thing DOES, in place, every time. A code may follow in
+  parentheses for the record — never the reverse.
+- Never require recalling an earlier message to understand this one.
+  Re-state the value where it's used.
+- One decision per ask. Pre-sequenced steps, not open structures.
+
 ## The acceptance question
 
 Per `requirement-is-the-test`, for every screen, error message, and doc:
