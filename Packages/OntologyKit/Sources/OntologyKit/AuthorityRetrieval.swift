@@ -211,7 +211,8 @@ public enum PromptPacketBuilder {
         prompt: String,
         ontology: Ontology,
         authorityHits: [GraphAuthorityHit],
-        memoryHits: [MemoryHit]
+        memoryHits: [MemoryHit],
+        images: [ModelImageAttachment] = []
     ) -> ModelPacket {
         var system = ClaudeClient.systemPrompt(from: ontology)
         let policyDirectives = AgentPolicyCompiler.compile(
@@ -263,13 +264,17 @@ public enum PromptPacketBuilder {
         Existing rules still apply: cite the accepted rule if one shaped the answer; include `Rule: <id>` or `Rule: none`; include `Adam Pattern Step: 1-8` or `Adam Pattern Step: none`; never present candidate or supporting memory as accepted graph authority.
         """
 
-        let hashInput = prompt + "\n" + system
+        var hashInput = prompt + "\n" + system
+        for image in images {
+            hashInput += "\n\(image.title):\(image.mimeType):\(image.base64Data.count)"
+        }
         return ModelPacket(
             userPrompt: prompt,
             system: system,
             authorityHits: authorityHits,
             memoryHits: memoryHits,
             policyDirectives: policyDirectives,
+            images: images,
             promptPacketHash: StableHash.hex(hashInput)
         )
     }

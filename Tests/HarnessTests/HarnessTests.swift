@@ -73,6 +73,16 @@ import OntologyKit
     #expect(tools.contains { $0.title == "NotebookLM" })
 }
 
+@Test func communicationWorkbenchToolsSurfaceAdamSkills() {
+    let capabilities = HarnessCapabilityRegistry.defaultCapabilities()
+    let group = WorkbenchToolGroup.communicationSkills(from: capabilities)
+
+    #expect(group.title == "Communication")
+    #expect(group.tools.count == HarnessCapabilityRegistry.adamCommunicationSkillNames.count)
+    #expect(group.tools.contains { $0.title == "Pyramid chapters" && $0.skillName == "articulate-leadership-communication" })
+    #expect(group.tools.contains { $0.title == "Adam's words" && $0.skillName == "adams-words" })
+}
+
 @Test func delegationQueueLoadsMarkdownFilesFromDirectory() throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("HarnessDelegationQueueTests-\(UUID().uuidString)", isDirectory: true)

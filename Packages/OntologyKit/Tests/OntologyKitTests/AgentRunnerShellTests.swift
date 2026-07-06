@@ -52,4 +52,14 @@ import Testing
         #expect(message.contains("boom-detail"), "Error should carry stderr text: \(message)")
     }
 }
+
+@Test func shellCanReturnStderrForSuccessfulStatusCommands() throws {
+    let output = try AgentRunner().shell(
+        "/bin/sh",
+        ["-c", "echo status-detail 1>&2"],
+        timeout: 5,
+        includeStderrOnSuccess: true
+    )
+    #expect(output.contains("status-detail"))
+}
 #endif

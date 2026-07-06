@@ -12,10 +12,10 @@ backend dropdown (reads "Codex"), Adam must see:
 
 1. A small colored dot + a status word: green dot **LIVE**, or orange dot
    **PENDING**, or **FAILED (reason)** in red
-2. An API-key field (secure text field) — visible for Codex, Grok, and
-   Claude backends, not just Claude
+2. A ChatGPT account control for Codex; API-key fields remain visible for
+   Grok and Claude backends
 3. When a backend needs something, the status line names the one action,
-   e.g. "Codex: install codex CLI or paste OpenAI API key"
+   e.g. "Codex: install codex CLI and run codex login --device-auth"
 4. While a query runs: a red **Cancel** button next to the progress spinner
 
 If Adam sees those, done. If not, not done — regardless of what any

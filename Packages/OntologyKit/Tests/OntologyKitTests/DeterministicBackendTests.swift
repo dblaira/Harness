@@ -20,20 +20,12 @@ import Testing
     #expect(ClaudeClient(apiKey: "test-key").model == "claude-sonnet-4-6")
 }
 
-@Test func openAIClientRequiresAPIKeyBeforeNetwork() async {
-    do {
-        _ = try await OpenAIClient(apiKey: "").send(messages: [(role: "user", text: "Hi")], system: "Reply briefly.")
-        #expect(Bool(false), "OpenAIClient should require an API key.")
-    } catch OpenAIClient.OpenAIError.noKey {
-        #expect(Bool(true))
-    } catch {
-        #expect(Bool(false), "Unexpected error: \(error.localizedDescription)")
-    }
-}
-
 @Test func xAIClientRequiresAPIKeyBeforeNetwork() async {
     do {
-        _ = try await XAIClient(apiKey: "").send(messages: [(role: "user", text: "Hi")], system: "Reply briefly.")
+        _ = try await XAIClient(apiKey: "").send(
+            messages: [XAIClient.Message(role: "user", text: "Hi")],
+            system: "Reply briefly."
+        )
         #expect(Bool(false), "XAIClient should require an API key.")
     } catch XAIClient.XAIError.noKey {
         #expect(Bool(true))

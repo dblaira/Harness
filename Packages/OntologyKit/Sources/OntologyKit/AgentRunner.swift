@@ -4,7 +4,7 @@ import Darwin
 #endif
 
 public enum Backend: String, CaseIterable, Identifiable, Sendable, Codable {
-    case codex   = "Codex"      // macOS CLI or OpenAI API
+    case codex   = "Codex"      // ChatGPT-authorized Codex CLI
     case grok    = "Grok"       // macOS CLI or xAI API
     case claude  = "Claude API" // direct API key (optional)
     case hermes  = "Hermes local" // local Ollama model, no subscription or key
@@ -19,6 +19,8 @@ public enum BackendReadiness: Equatable, Sendable {
     case live
     case pending(action: String)
     case failed(message: String)
+
+    public static let codexAuthorizationAction = "install codex CLI and run codex login --device-auth"
 
     /// The status word, verbatim from SAVY's content status band.
     public var statusWord: String {
@@ -53,12 +55,20 @@ public enum BackendReadiness: Equatable, Sendable {
             return keyPresent ? .live : .pending(action: "paste Claude API key")
         case .hermes:
             return localServerReachable ? .live : .pending(action: "run ollama serve")
-        case .codex, .grok:
-            if keyPresent { return .live }
-            let cliName = backend == .codex ? "codex" : "grok"
-            let keyName = backend == .codex ? "OpenAI API key" : "xAI API key"
+        case .codex:
             guard cliFound else {
-                return .pending(action: "install \(cliName) CLI or paste \(keyName)")
+                return .pending(action: Self.codexAuthorizationAction)
+            }
+            switch cliProbe {
+            case .success, nil:
+                return .live
+            case .failure(let error):
+                return .failed(message: error.localizedDescription)
+            }
+        case .grok:
+            if keyPresent { return .live }
+            guard cliFound else {
+                return .pending(action: "install grok CLI or paste xAI API key")
             }
             switch cliProbe {
             case .success, nil:
@@ -84,7 +94,8 @@ public struct AgentRunner: Sendable {
                  "\(NSHomeDirectory())/.local/bin/codex", "/opt/homebrew/bin/codex", "/usr/local/bin/codex"])
     }
     private var grokPath: String? {
-        resolve(["\(NSHomeDirectory())/.local/bin/grok", "/opt/homebrew/bin/grok", "/usr/local/bin/grok"])
+        resolve(["\(NSHomeDirectory())/.grok/bin/grok",
+                 "\(NSHomeDirectory())/.local/bin/grok", "/opt/homebrew/bin/grok", "/usr/local/bin/grok"])
     }
 
     /// Probe whether a backend can answer right now, without sending a real
@@ -111,9 +122,33 @@ public struct AgentRunner: Sendable {
                 cliProbe: nil,
                 localServerReachable: await hermesReachable()
             )
-        case .codex, .grok:
+        case .codex:
             #if os(macOS)
-            let binary = backend == .codex ? codexPath : grokPath
+            guard let binary = codexPath else {
+                return BackendReadiness.evaluate(
+                    backend: backend,
+                    keyPresent: false,
+                    cliFound: false,
+                    cliProbe: nil,
+                    localServerReachable: false
+                )
+            }
+            let runner = self
+            return await Task.detached(priority: .userInitiated) {
+                runner.codexAccountReadiness(binary: binary)
+            }.value
+            #else
+            return BackendReadiness.evaluate(
+                backend: backend,
+                keyPresent: false,
+                cliFound: false,
+                cliProbe: nil,
+                localServerReachable: false
+            )
+            #endif
+        case .grok:
+            #if os(macOS)
+            let binary = grokPath
             var probe: Result<Void, Error>?
             if !keyPresent, let binary {
                 let runner = self
@@ -145,6 +180,25 @@ public struct AgentRunner: Sendable {
         }
     }
 
+    #if os(macOS)
+    private func codexAccountReadiness(binary: String) -> BackendReadiness {
+        do {
+            let output = try shell(binary, ["login", "status"], timeout: 5, includeStderrOnSuccess: true)
+            if output.localizedCaseInsensitiveContains("chatgpt") {
+                return .live
+            }
+            return .pending(action: "run codex login --device-auth")
+        } catch {
+            let message = error.localizedDescription
+            if message.localizedCaseInsensitiveContains("not logged")
+                || message.localizedCaseInsensitiveContains("login") {
+                return .pending(action: "run codex login --device-auth")
+            }
+            return .failed(message: message)
+        }
+    }
+    #endif
+
     private func hermesReachable() async -> Bool {
         guard let url = URL(string: "http://127.0.0.1:11434/api/tags") else { return false }
         var request = URLRequest(url: url)
@@ -155,31 +209,66 @@ public struct AgentRunner: Sendable {
 
     /// Send a single-turn prompt (already prefixed with the ontology system prompt)
     /// to the chosen backend and return its text reply.
-    public func run(backend: Backend, system: String, user: String, apiKey: String? = nil) async throws -> String {
+    public func run(
+        backend: Backend,
+        system: String,
+        user: String,
+        images: [ModelImageAttachment] = [],
+        apiKey: String? = nil
+    ) async throws -> String {
         let fullPrompt = system + "\n\n---\nUser: " + user
         switch backend {
         case .codex:
-            let key = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if !key.isEmpty {
-                return try await OpenAIClient(apiKey: key).send(messages: [(role: "user", text: user)], system: system)
+            // Harness already embeds ontology in `system`. Use the ChatGPT
+            // subscriber responses API (same auth as `codex login`) instead of
+            // the coding-agent CLI, which loads plugins/MCP and exceeds 90s.
+            if CodexSessionClient.loadSessionToken() != nil {
+                return try await CodexSessionClient().send(
+                    messages: [CodexSessionClient.Message(role: "user", text: user, images: images)],
+                    system: system
+                )
             }
             #if os(macOS)
             guard let bin = codexPath else { throw RunError.notFound("codex CLI") }
-            return try shell(bin, ["exec", "--skip-git-repo-check", fullPrompt])
+            return try shell(
+                bin,
+                ["exec", "--skip-git-repo-check", "--ignore-user-config", "--ephemeral", fullPrompt],
+                timeout: 300
+            )
             #else
-            throw RunError.notFound("OpenAI API key")
+            throw RunError.notFound("codex CLI")
             #endif
         case .grok:
             let key = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if !key.isEmpty {
-                return try await XAIClient(apiKey: key).send(messages: [(role: "user", text: user)], system: system)
+                return try await XAIClient(apiKey: key).send(
+                    messages: [XAIClient.Message(role: "user", text: user, images: images)],
+                    system: system
+                )
+            }
+            // Harness already embeds ontology in `system`. Use the Grok session
+            // chat proxy (same auth as `grok login`) instead of the coding-agent
+            // CLI, which spawns grep/MCP tools and routinely exceeds 90s.
+            if GrokSessionClient.loadSessionToken() != nil {
+                return try await GrokSessionClient().send(
+                    messages: [GrokSessionClient.Message(role: "user", text: user, images: images)],
+                    system: system
+                )
             }
             #if os(macOS)
             guard let bin = grokPath else { throw RunError.notFound("grok CLI") }
-            // -p/--prompt forces single-shot, non-interactive mode; a bare
-            // positional argument can open an interactive session that never
-            // exits and always hits the timeout.
-            return try shell(bin, ["-p", fullPrompt, "--output-format", "json"])
+            return try shell(
+                bin,
+                [
+                    "-p", fullPrompt,
+                    "--output-format", "json",
+                    "--max-turns", "1",
+                    "--disable-web-search",
+                    "--no-subagents",
+                    "--disallowed-tools", "run_terminal_cmd,grep,web_search,web_fetch,Agent,list_dir,read_file,search_replace,write",
+                ],
+                timeout: 300
+            )
             #else
             throw RunError.notFound("xAI API key")
             #endif
@@ -267,7 +356,12 @@ public struct AgentRunner: Sendable {
     /// writes more than that — the child blocks on write, we block on wait,
     /// and the timeout fires every time.
     #if os(macOS)
-    func shell(_ launchPath: String, _ args: [String], timeout: TimeInterval = 90) throws -> String {
+    func shell(
+        _ launchPath: String,
+        _ args: [String],
+        timeout: TimeInterval = 90,
+        includeStderrOnSuccess: Bool = false
+    ) throws -> String {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: launchPath)
         proc.arguments = args
@@ -331,6 +425,9 @@ public struct AgentRunner: Sendable {
         if proc.terminationStatus != 0 && text.isEmpty {
             let e = output.stderrText.isEmpty ? "exit \(proc.terminationStatus)" : output.stderrText
             throw RunError.failed(e)
+        }
+        if includeStderrOnSuccess && text.isEmpty {
+            return cleanup(output.stderrText)
         }
         return cleanup(text)
     }

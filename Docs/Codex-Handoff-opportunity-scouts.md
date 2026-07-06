@@ -102,7 +102,7 @@ Scraped markdown body lives here, provenance-labeled, lowest trust tier.
 
 ## Decisions you own (non-blocking — pick, note in commit message)
 
-- Triage LLM: Hermes local vs. Claude API for the rule-matching pass (~50 docs/run). `ClaudeClient.swift`, `OpenAIClient.swift`, `XAIClient.swift` already exist as patterns.
+- Triage LLM: Hermes local vs. Claude API for the rule-matching pass (~50 docs/run). `ClaudeClient.swift` and `XAIClient.swift` already exist as API-client patterns; Codex uses ChatGPT-authorized local CLI routing instead.
 - Board home: Harness-native table is primary; optional Notion mirror is P1, skip for now.
 - Hold-resurface condition storage: frontmatter vs. ledger vs. graph.
 

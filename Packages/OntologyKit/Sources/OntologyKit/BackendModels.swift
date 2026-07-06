@@ -422,6 +422,7 @@ public struct ModelPacket: Codable, Sendable, Equatable {
     public let authorityHits: [GraphAuthorityHit]
     public let memoryHits: [MemoryHit]
     public let policyDirectives: [AgentPolicyDirective]
+    public let images: [ModelImageAttachment]
     public let promptPacketHash: String
 
     public init(
@@ -430,6 +431,7 @@ public struct ModelPacket: Codable, Sendable, Equatable {
         authorityHits: [GraphAuthorityHit],
         memoryHits: [MemoryHit],
         policyDirectives: [AgentPolicyDirective] = [],
+        images: [ModelImageAttachment] = [],
         promptPacketHash: String
     ) {
         self.userPrompt = userPrompt
@@ -437,6 +439,7 @@ public struct ModelPacket: Codable, Sendable, Equatable {
         self.authorityHits = authorityHits
         self.memoryHits = memoryHits
         self.policyDirectives = policyDirectives
+        self.images = images
         self.promptPacketHash = promptPacketHash
     }
 }

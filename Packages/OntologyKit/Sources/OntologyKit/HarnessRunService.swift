@@ -30,7 +30,12 @@ public struct HarnessRunService: Sendable {
         self.redactor = redactor
     }
 
-    public func createRun(prompt: String, ontology: Ontology, backend: any ModelBackendAdapter) async throws -> HarnessRunDetail {
+    public func createRun(
+        prompt: String,
+        ontology: Ontology,
+        backend: any ModelBackendAdapter,
+        images: [ModelImageAttachment] = []
+    ) async throws -> HarnessRunDetail {
         let runId = UUID().uuidString
         var trace: [TraceEvent] = [
             TraceEvent(runId: runId, stage: .createRun, message: "Created local Harness run.")
@@ -53,7 +58,8 @@ public struct HarnessRunService: Sendable {
             prompt: prompt,
             ontology: ontology,
             authorityHits: authorityHits,
-            memoryHits: memoryHits
+            memoryHits: memoryHits,
+            images: images
         )
 
         let start = Date()
@@ -162,6 +168,7 @@ public struct AgentRunnerBackendAdapter: ModelBackendAdapter {
             backend: backend,
             system: packet.system,
             user: packet.userPrompt,
+            images: packet.images,
             apiKey: apiKey
         )
         return BackendResponse(text: text, tokenCount: nil, cost: nil)
@@ -171,7 +178,7 @@ public struct AgentRunnerBackendAdapter: ModelBackendAdapter {
 public extension Backend {
     var defaultModelName: String {
         switch self {
-        case .codex: return "gpt-4.1"
+        case .codex: return "gpt-5.5"
         case .grok: return "grok-4.3"
         case .claude: return "claude-sonnet-4-20250514"
         case .hermes: return "hermes3:8b"
@@ -180,8 +187,8 @@ public extension Backend {
 
     var invocationMethod: String {
         switch self {
-        case .codex: return "openai-api-or-local-cli"
-        case .grok: return "xAI-api-or-local-cli"
+        case .codex: return "chatgpt-session-proxy"
+        case .grok: return "grok-session-proxy-or-api"
         case .claude: return "https-api"
         case .hermes: return "local-http"
         }

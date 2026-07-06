@@ -60,21 +60,64 @@ public enum HarnessCapabilityRegistry {
             }
     }
 
+    public static let adamCommunicationSkillNames: Set<String> = [
+        "articulate-leadership-communication",
+        "cognitive-fit",
+        "no-time-estimates",
+        "requirement-is-the-test",
+        "market-inefficiency",
+        "adams-words",
+    ]
+
     private static func skillCapabilities(homeDirectory: URL) -> [HarnessCapability] {
         let roots: [(source: String, root: URL)] = [
+            ("Vault", homeDirectory.appendingPathComponent("Documents/Main/Skills", isDirectory: true)),
+            ("Harness", homeDirectory.appendingPathComponent("Developer/GitHub/Harness/Docs/skills", isDirectory: true)),
             ("Hermes", homeDirectory.appendingPathComponent(".hermes/skills", isDirectory: true)),
             ("Hermes Studio", homeDirectory.appendingPathComponent(".hermes/profiles/studio/skills", isDirectory: true)),
             ("Claude", homeDirectory.appendingPathComponent(".claude/skills", isDirectory: true)),
             ("Codex", homeDirectory.appendingPathComponent(".codex/skills", isDirectory: true)),
             ("Grok", homeDirectory.appendingPathComponent(".grok/skills", isDirectory: true)),
-            ("Agents", homeDirectory.appendingPathComponent(".agents/skills", isDirectory: true))
+            ("Agents", homeDirectory.appendingPathComponent(".agents/skills", isDirectory: true)),
         ]
 
-        return roots.flatMap { source, root in
+        let packaged = roots.flatMap { source, root in
             skillFiles(in: root).compactMap { skillFile in
                 skillCapability(sourceSystem: source, root: root, skillFile: skillFile)
             }
         }
+        let vaultNotes = vaultSkillCapabilities(homeDirectory: homeDirectory)
+        return packaged + vaultNotes
+    }
+
+    private static func vaultSkillCapabilities(homeDirectory: URL) -> [HarnessCapability] {
+        let root = homeDirectory.appendingPathComponent("Documents/Main/Skills", isDirectory: true)
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+
+        return files
+            .filter { $0.pathExtension.lowercased() == "md" && $0.lastPathComponent != "Skills Hub.md" }
+            .compactMap { vaultSkillCapability(root: root, file: $0) }
+    }
+
+    private static func vaultSkillCapability(root: URL, file: URL) -> HarnessCapability? {
+        guard let text = try? String(contentsOf: file, encoding: .utf8) else { return nil }
+        let frontmatter = parseFrontmatter(text)
+        if let type = frontmatter["type"], type != "skill" { return nil }
+        let name = frontmatter["title"] ?? file.deletingPathExtension().lastPathComponent
+        let description = frontmatter["summary"] ?? firstMarkdownText(text) ?? "Vault skill note."
+        return HarnessCapability(
+            name: name,
+            kind: .skill,
+            sourceSystem: "Vault",
+            category: "communication",
+            description: description,
+            path: file,
+            provenance: "Vault note: \(relativePath(root: root, file: file))"
+        )
     }
 
     private static func pluginCapabilities(homeDirectory: URL) -> [HarnessCapability] {

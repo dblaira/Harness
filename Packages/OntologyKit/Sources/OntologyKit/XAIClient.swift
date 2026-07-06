@@ -22,7 +22,19 @@ public struct XAIClient: Sendable {
         self.model = model
     }
 
-    public func send(messages: [(role: String, text: String)], system: String) async throws -> String {
+    public struct Message: Sendable {
+        public let role: String
+        public let text: String
+        public let images: [ModelImageAttachment]
+
+        public init(role: String, text: String, images: [ModelImageAttachment] = []) {
+            self.role = role
+            self.text = text
+            self.images = images
+        }
+    }
+
+    public func send(messages: [Message], system: String) async throws -> String {
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw XAIError.noKey
         }
@@ -34,9 +46,7 @@ public struct XAIClient: Sendable {
         request.httpBody = try JSONSerialization.data(withJSONObject: [
             "model": model,
             "max_tokens": 1024,
-            "messages": [["role": "system", "content": system]] + messages.map {
-                ["role": $0.role, "content": $0.text]
-            }
+            "messages": [["role": "system", "content": system]] + messages.map(Self.payloadMessage)
         ])
 
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -58,5 +68,19 @@ public struct XAIClient: Sendable {
             throw XAIError.badResponse(message)
         }
         return String(data: data, encoding: .utf8) ?? "(empty)"
+    }
+
+    private static func payloadMessage(for message: Message) -> [String: Any] {
+        guard !message.images.isEmpty else {
+            return ["role": message.role, "content": message.text]
+        }
+        var content: [[String: Any]] = [["type": "text", "text": message.text]]
+        for image in message.images {
+            content.append([
+                "type": "image_url",
+                "image_url": ["url": image.dataURI, "detail": "high"],
+            ])
+        }
+        return ["role": message.role, "content": content]
     }
 }

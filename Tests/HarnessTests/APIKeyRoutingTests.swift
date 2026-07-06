@@ -19,18 +19,21 @@ import Testing
             environment: [:],
             keychainKey: { keychain[$0] }
         )
-        #expect(key == (keychain[backend] ?? ""), "\(backend.rawValue) must load exactly its own key.")
+        let expected = backend == .codex ? "" : (keychain[backend] ?? "")
+        #expect(key == expected, "\(backend.rawValue) must load only the credential path it actually uses.")
     }
 }
 
-@Test func environmentVariableOverridesKeychainPerBackend() {
+@Test func codexNeverLoadsOpenAIAPIKey() {
     let key = MacWorkbenchModel.initialAPIKey(
         for: .codex,
         environment: ["OPENAI_API_KEY": "sk-openai-env"],
         keychainKey: { _ in "sk-openai-keychain" }
     )
-    #expect(key == "sk-openai-env")
+    #expect(key.isEmpty)
+}
 
+@Test func environmentVariableOverridesKeychainPerBackend() {
     let claudeKey = MacWorkbenchModel.initialAPIKey(
         for: .claude,
         environment: ["OPENAI_API_KEY": "sk-openai-env"],

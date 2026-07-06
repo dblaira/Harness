@@ -18,6 +18,10 @@ struct MacChatView: View {
     @State private var selectedOpportunityIDs = Set<String>()
     @State private var delegationEntryKind: MacSuiteEntryKind = .action
     @State private var isDelegationEntryFormPresented = false
+    @State private var showingLinkSheet = false
+    @State private var showingGitHubSheet = false
+    @State private var linkInput = ""
+    @State private var githubRepoInput = ""
 
     var body: some View {
         HStack(spacing: 0) {
@@ -41,6 +45,28 @@ struct MacChatView: View {
         }
         .sheet(isPresented: $isInspectorDetailPresented) {
             expandedInspectorSheet
+        }
+        .sheet(isPresented: $showingLinkSheet) {
+            composerLinkSheet(
+                title: "Add Link",
+                placeholder: "https://youtube.com/watch?v=… or any URL",
+                text: $linkInput
+            ) {
+                model.addComposerLink(linkInput)
+                linkInput = ""
+                showingLinkSheet = false
+            }
+        }
+        .sheet(isPresented: $showingGitHubSheet) {
+            composerLinkSheet(
+                title: "Add GitHub Repo",
+                placeholder: "owner/repo or https://github.com/owner/repo",
+                text: $githubRepoInput
+            ) {
+                model.addComposerLink(githubRepoInput)
+                githubRepoInput = ""
+                showingGitHubSheet = false
+            }
         }
         .onChange(of: ontology.connections.count) { _, _ in model.updateOntology(ontology) }
         .onChange(of: model.searchText) { _, _ in Task { await model.searchRuns() } }
@@ -344,6 +370,17 @@ struct MacChatView: View {
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(Theme.macRed)
                             .help("Cancel the running query")
+                        }
+                        .padding(.top, 4)
+                    } else if let statusText = HarnessTranscriptCopy.statusCopyText(status: model.status) {
+                        HStack(spacing: 10) {
+                            Text(model.status)
+                                .foregroundStyle(Theme.macInk.opacity(0.55))
+                            copyTranscriptButton(
+                                label: "Copy status",
+                                help: "Copy the status or error message",
+                                text: statusText
+                            )
                         }
                         .padding(.top, 4)
                     }
@@ -1350,7 +1387,7 @@ struct MacChatView: View {
     }
 
     private var topBar: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 8) {
             toolbarIconButton(
                 isSidebarVisible ? "rectangle.leftthird.inset.filled" : "rectangle",
                 help: isSidebarVisible ? "Hide left sidebar" : "Show left sidebar"
@@ -1374,7 +1411,7 @@ struct MacChatView: View {
             }
             .labelsHidden()
             .pickerStyle(.segmented)
-            .frame(width: 214)
+            .frame(width: 182)
 
             Picker("Backend", selection: $model.backend) {
                 ForEach(Backend.allCases) { backend in
@@ -1382,18 +1419,37 @@ struct MacChatView: View {
                 }
             }
             .labelsHidden()
-            .frame(width: 130)
+            .frame(width: 116)
             .tint(Theme.macRed)
 
             backendStatusBand
+                .frame(minWidth: 68, maxWidth: 180, alignment: .leading)
+                .layoutPriority(2)
 
-            if model.backend != .hermes {
+            if model.backend == .codex {
+                HStack(spacing: 6) {
+                    Image(systemName: "person.crop.circle.badge.checkmark")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text("ChatGPT account")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundStyle(Theme.macInk.opacity(0.72))
+                .padding(.horizontal, 10)
+                .frame(width: 150, height: 30)
+                .background(Theme.macEntry.opacity(0.28), in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
+                .help("Codex uses your ChatGPT authorization, not an OpenAI API key")
+
+                toolbarIconButton("key.viewfinder", help: "Authorize Codex with ChatGPT") {
+                    model.authorizeCodexAccount()
+                }
+            } else if model.backend != .hermes {
                 SecureField(macAPIKeyLabel(for: model.backend), text: $model.apiKey)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.macInk)
                     .padding(7)
-                    .frame(width: 190)
+                    .frame(width: 150)
                     .background(Theme.macEntry.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
                     .onSubmit { model.saveAPIKey() }
@@ -1456,6 +1512,7 @@ struct MacChatView: View {
                 .tracking(1.5)
                 .foregroundStyle(statusWordColor(for: readiness))
                 .lineLimit(1)
+                .minimumScaleFactor(0.82)
         }
         .help(readiness.actionNeeded ?? readiness.statusWord)
         .accessibilityLabel("\(model.backend.rawValue) status: \(readiness.statusWord)")
@@ -1476,7 +1533,7 @@ struct MacChatView: View {
 
     private func macAPIKeyLabel(for backend: Backend) -> String {
         switch backend {
-        case .codex: return "OpenAI API key"
+        case .codex: return "ChatGPT authorization"
         case .grok: return "xAI API key"
         case .claude: return "Claude API key"
         case .hermes: return ""
@@ -1512,6 +1569,20 @@ struct MacChatView: View {
             statusPill("\(detail.memoryHits.count) memory", "archivebox")
             statusPill(detail.run.success ? "trace saved" : "failed saved", detail.run.success ? "checkmark.seal" : "exclamationmark.triangle")
             Spacer()
+            if !HarnessTranscriptCopy.assistantAnswer(from: detail).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                copyTranscriptButton(
+                    label: "Copy answer",
+                    help: "Copy the entire Harness answer to the clipboard",
+                    text: HarnessTranscriptCopy.assistantAnswer(from: detail)
+                )
+            }
+            if detail.messages.count > 1 {
+                copyTranscriptButton(
+                    label: "Copy all",
+                    help: "Copy the full prompt and answer transcript",
+                    text: HarnessTranscriptCopy.fullTranscript(from: detail)
+                )
+            }
             Text(detail.run.promptPacketHash)
                 .font(.caption2.monospaced())
                 .foregroundStyle(Theme.macInk.opacity(0.42))
@@ -1531,12 +1602,41 @@ struct MacChatView: View {
         .overlay(Capsule().stroke(Theme.macHair, lineWidth: 1))
     }
 
+    private func copyTranscriptButton(label: String, help: String, text: String) -> some View {
+        Button {
+            HarnessClipboard.copy(text)
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "doc.on.doc")
+                Text(label)
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(Theme.macInk.opacity(0.72))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Theme.macEntry.opacity(0.35), in: Capsule())
+            .overlay(Capsule().stroke(Theme.macHair, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
     private func messageBubble(_ message: HarnessMessage) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(message.role == .user ? "YOU" : "ANSWER")
-                .font(.caption2.weight(.bold))
-                .tracking(1.2)
-                .foregroundStyle(Theme.macInk.opacity(0.48))
+            HStack(spacing: 8) {
+                Text(message.role == .user ? "YOU" : "ANSWER")
+                    .font(.caption2.weight(.bold))
+                    .tracking(1.2)
+                    .foregroundStyle(Theme.macInk.opacity(0.48))
+                Spacer()
+                copyTranscriptButton(
+                    label: "Copy",
+                    help: message.role == .assistant
+                        ? "Copy the entire answer, including all chapters"
+                        : "Copy the entire message",
+                    text: message.text
+                )
+            }
             if message.role == .assistant {
                 HarnessMarkdownText(
                     text: message.text,
@@ -1560,7 +1660,12 @@ struct MacChatView: View {
     }
 
     private var composer: some View {
-        HStack(alignment: .bottom, spacing: 10) {
+        VStack(alignment: .leading, spacing: 10) {
+            if !model.composerAttachments.isEmpty {
+                composerAttachmentChips
+            }
+
+            HStack(alignment: .bottom, spacing: 10) {
             capabilityInsertMenu
 
             TextField("", text: $model.draft, axis: .vertical)
@@ -1585,14 +1690,77 @@ struct MacChatView: View {
             Button(action: model.send) {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.title2)
-                    .foregroundStyle(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Theme.macInk.opacity(0.35) : Theme.macInk)
+                    .foregroundStyle(model.canSendComposer ? Theme.macInk : Theme.macInk.opacity(0.35))
             }
             .buttonStyle(.plain)
-            .disabled(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isRunning)
+            .disabled(!model.canSendComposer)
+            }
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 14)
         .overlay(Rectangle().fill(Theme.macHair).frame(height: 1), alignment: .top)
+    }
+
+    private var composerAttachmentChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(model.composerAttachments) { attachment in
+                    HStack(spacing: 6) {
+                        Image(systemName: attachment.chipIcon)
+                            .font(.system(size: 11, weight: .semibold))
+                        Text(attachment.chipLabel)
+                            .font(.caption)
+                            .lineLimit(1)
+                        Button {
+                            model.removeComposerAttachment(attachment)
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 9, weight: .bold))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .foregroundStyle(Theme.macInk.opacity(0.82))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Theme.macEntry.opacity(0.42), in: Capsule())
+                    .overlay(Capsule().stroke(Theme.macHair, lineWidth: 1))
+                }
+            }
+        }
+    }
+
+    private func composerLinkSheet(
+        title: String,
+        placeholder: String,
+        text: Binding<String>,
+        onAdd: @escaping () -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(title)
+                .font(.headline)
+                .foregroundStyle(Theme.macInk)
+            TextField(placeholder, text: text, axis: .vertical)
+                .textFieldStyle(.plain)
+                .lineLimit(1...3)
+                .padding(12)
+                .background(Theme.macEntry.opacity(0.42), in: RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.macHair, lineWidth: 1))
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    text.wrappedValue = ""
+                    if showingLinkSheet { showingLinkSheet = false }
+                    if showingGitHubSheet { showingGitHubSheet = false }
+                }
+                .keyboardShortcut(.cancelAction)
+                Button("Add") { onAdd() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(width: 460)
+        .background(Theme.macBg)
     }
 
     private var capabilityInsertMenu: some View {
@@ -1601,6 +1769,34 @@ struct MacChatView: View {
                 model.newSession()
             } label: {
                 Label("New Session", systemImage: "plus.bubble")
+            }
+
+            Divider()
+
+            Button {
+                model.chooseComposerPhotos()
+            } label: {
+                Label("Photo", systemImage: "photo")
+            }
+
+            Button {
+                model.chooseComposerFiles()
+            } label: {
+                Label("File", systemImage: "doc.badge.plus")
+            }
+
+            Button {
+                linkInput = ""
+                showingLinkSheet = true
+            } label: {
+                Label("Link", systemImage: "link")
+            }
+
+            Button {
+                githubRepoInput = ""
+                showingGitHubSheet = true
+            } label: {
+                Label("GitHub Repo", systemImage: "chevron.left.forwardslash.chevron.right")
             }
 
             Divider()
@@ -1689,7 +1885,7 @@ struct MacChatView: View {
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
-        .help("Add skill, plugin, or source")
+        .help("Attach photo, file, link, or skill")
     }
 
     private func menuCapabilities(kind: HarnessCapabilityKind) -> [HarnessCapability] {

@@ -12,6 +12,7 @@ final class MacWorkbenchModel: ObservableObject {
     @Published var draft = "" {
         didSet { refreshRoutePlan() }
     }
+    @Published var composerAttachments: [ComposerAttachment] = []
     @Published var backend: Backend = .codex {
         didSet {
             guard backend != oldValue else { return }
@@ -44,7 +45,9 @@ final class MacWorkbenchModel: ObservableObject {
     @Published var delegationAgentDailyCreditLimit = MacWorkbenchModel.loadDelegationAgentDailyCreditLimit() {
         didSet { Self.saveDelegationAgentDailyCreditLimit(delegationAgentDailyCreditLimit) }
     }
-    let toolGroups = WorkbenchToolGroup.defaults
+    var toolGroups: [WorkbenchToolGroup] {
+        WorkbenchToolGroup.defaults + [WorkbenchToolGroup.communicationSkills(from: capabilities)]
+    }
 
     private let ledger: RunLedgerStore
     private let service: HarnessRunService
@@ -106,12 +109,18 @@ final class MacWorkbenchModel: ObservableObject {
     func newSession() {
         selectedDetail = nil
         draft = ""
+        composerAttachments = []
         searchText = ""
         status = "New session"
     }
 
     func selectTool(_ tool: WorkbenchTool) {
         selectedTool = tool
+        if let skillName = tool.skillName,
+           let capability = capabilities.first(where: { $0.name == skillName && $0.kind == .skill }) {
+            insertCapabilityReference(capability)
+            return
+        }
         status = "\(tool.title): \(tool.state.rawValue)"
     }
 
@@ -302,7 +311,7 @@ final class MacWorkbenchModel: ObservableObject {
     }
 
     func refreshRoutePlan() {
-        let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prompt = composedDraftPrompt
         routePlan = HarnessExecutionRouter.plan(
             prompt: prompt,
             connectors: connectors,
@@ -371,6 +380,94 @@ final class MacWorkbenchModel: ObservableObject {
             draft += "\n\n\(insertion)"
         }
         status = "\(source.title) added from NotebookLM."
+    }
+
+    func removeComposerAttachment(_ attachment: ComposerAttachment) {
+        composerAttachments.removeAll { $0.id == attachment.id }
+        refreshRoutePlan()
+        status = "\(attachment.title) removed."
+    }
+
+    func addComposerLink(_ raw: String) {
+        guard let attachment = ComposerAttachment.parseLinkInput(raw) else {
+            status = "Paste a valid URL or owner/repo."
+            return
+        }
+        guard !composerAttachments.contains(where: { $0.remoteURL == attachment.remoteURL && $0.kind == .link }) else {
+            status = "\(attachment.title) is already attached."
+            return
+        }
+        composerAttachments.append(attachment)
+        refreshRoutePlan()
+        status = "\(attachment.title) attached."
+    }
+
+    func chooseComposerPhotos() {
+        presentComposerImportPanel(
+            title: "Add Photos",
+            prompt: "Attach",
+            allowedTypes: [.image, .jpeg, .png, .heic, .gif, .tiff] + [UTType(filenameExtension: "webp")].compactMap { $0 },
+            allowsMultipleSelection: true
+        ) { urls in
+            self.importComposerFiles(urls, kind: .photo)
+        }
+    }
+
+    func chooseComposerFiles() {
+        presentComposerImportPanel(
+            title: "Add Files",
+            prompt: "Attach",
+            allowedTypes: [.item, .pdf, .plainText, .json, .commaSeparatedText, .data],
+            allowsMultipleSelection: true
+        ) { urls in
+            self.importComposerFiles(urls, kind: .file)
+        }
+    }
+
+    private func importComposerFiles(_ urls: [URL], kind: ComposerAttachmentKind) {
+        var added = 0
+        for url in urls {
+            do {
+                let attachment = try ComposerAttachmentStore.importFile(from: url, kind: kind)
+                guard !composerAttachments.contains(where: { $0.localPath == attachment.localPath }) else { continue }
+                composerAttachments.append(attachment)
+                added += 1
+            } catch {
+                status = "Attach failed: \(error.localizedDescription)"
+                return
+            }
+        }
+        if added > 0 {
+            refreshRoutePlan()
+            let noun = kind == .photo ? "photo" : "file"
+            status = added == 1 ? "1 \(noun) attached." : "\(added) \(noun)s attached."
+        }
+    }
+
+    private func presentComposerImportPanel(
+        title: String,
+        prompt: String,
+        allowedTypes: [UTType],
+        allowsMultipleSelection: Bool,
+        onImport: @escaping ([URL]) -> Void
+    ) {
+        let panel = NSOpenPanel()
+        panel.title = title
+        panel.prompt = prompt
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = allowsMultipleSelection
+        panel.allowedContentTypes = allowedTypes
+        guard panel.runModal() == .OK else { return }
+        onImport(panel.urls)
+    }
+
+    private var composedDraftPrompt: String {
+        ComposerAttachment.composedPrompt(userText: draft, attachments: composerAttachments)
+    }
+
+    var canSendComposer: Bool {
+        ComposerAttachment.canSend(userText: draft, attachments: composerAttachments) && !isRunning
     }
 
     func importNotebookLMSourceFromDownloads() {
@@ -643,7 +740,7 @@ final class MacWorkbenchModel: ObservableObject {
     /// something is waiting on one action, the status line names it.
     func refreshReadiness(for backend: Backend) {
         backendReadiness[backend] = .checking
-        let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let key = Self.usesAPIKey(backend) ? apiKey.trimmingCharacters(in: .whitespacesAndNewlines) : ""
         Task { [weak self] in
             let readiness = await AgentRunner().preflight(
                 backend: backend,
@@ -672,6 +769,11 @@ final class MacWorkbenchModel: ObservableObject {
     }
 
     func saveAPIKey() {
+        guard Self.usesAPIKey(backend) else {
+            status = "\(backend.rawValue) uses ChatGPT authorization through Codex."
+            refreshReadiness(for: backend)
+            return
+        }
         let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             status = "Paste an API key first."
@@ -688,6 +790,13 @@ final class MacWorkbenchModel: ObservableObject {
     }
 
     func deleteAPIKey() {
+        guard Self.usesAPIKey(backend) else {
+            apiKey = ""
+            hasSavedAPIKey = false
+            status = "\(backend.rawValue) has no API key to remove."
+            refreshReadiness(for: backend)
+            return
+        }
         do {
             try APIKeyStore.deleteKey(for: backend)
             apiKey = ""
@@ -706,7 +815,7 @@ final class MacWorkbenchModel: ObservableObject {
     ) -> String {
         let environmentName: String?
         switch backend {
-        case .codex: environmentName = "OPENAI_API_KEY"
+        case .codex: environmentName = nil
         case .grok: environmentName = "XAI_API_KEY"
         case .claude: environmentName = "ANTHROPIC_API_KEY"
         case .hermes: environmentName = nil
@@ -716,8 +825,61 @@ final class MacWorkbenchModel: ObservableObject {
            !value.isEmpty {
             return value
         }
-        guard backend != .hermes else { return "" }
+        guard usesAPIKey(backend) else { return "" }
         return keychainKey(backend) ?? ""
+    }
+
+    nonisolated static func usesAPIKey(_ backend: Backend) -> Bool {
+        switch backend {
+        case .grok, .claude:
+            return true
+        case .codex, .hermes:
+            return false
+        }
+    }
+
+    func authorizeCodexAccount() {
+        guard backend == .codex else { return }
+        #if os(macOS)
+        guard let codex = Self.codexExecutablePath() else {
+            status = BackendReadiness.codexAuthorizationAction
+            refreshReadiness(for: .codex)
+            return
+        }
+        let command = "\(Self.shellQuote(codex)) login --device-auth"
+        let appleScript = """
+        tell application "Terminal"
+            activate
+            do script "\(command.replacingOccurrences(of: "\"", with: "\\\""))"
+        end tell
+        """
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", appleScript]
+        do {
+            try process.run()
+            status = "Codex authorization opened in Terminal."
+        } catch {
+            status = "Codex authorization failed: \(error.localizedDescription)"
+        }
+        refreshReadiness(for: .codex)
+        #else
+        status = "Codex authorization requires the Codex CLI on macOS."
+        #endif
+    }
+
+    nonisolated private static func codexExecutablePath() -> String? {
+        let candidates = [
+            "/Applications/Codex.app/Contents/Resources/codex",
+            "\(NSHomeDirectory())/.local/bin/codex",
+            "/opt/homebrew/bin/codex",
+            "/usr/local/bin/codex"
+        ]
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    nonisolated private static func shellQuote(_ value: String) -> String {
+        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 
     func saveFirecrawlAPIKey() {
@@ -890,19 +1052,21 @@ final class MacWorkbenchModel: ObservableObject {
     }
 
     func send() {
-        let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty, !isRunning else { return }
+        let prompt = composedDraftPrompt
+        let attachmentsSnapshot = composerAttachments
+        guard ComposerAttachment.canSend(userText: draft, attachments: attachmentsSnapshot), !isRunning else { return }
         refreshRoutePlan()
         let plannedRoute = routePlan
         draft = ""
+        composerAttachments = []
         routePlan = plannedRoute
         isRunning = true
         status = plannedRoute.requiresApproval ? "Route planned; approval-gated steps detected" : "Checking graph authority"
         let selectedBackend = backend
-        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedKey = Self.usesAPIKey(selectedBackend) ? apiKey.trimmingCharacters(in: .whitespacesAndNewlines) : ""
         let key = trimmedKey.isEmpty ? nil : trimmedKey
         // Persist a pasted key on first use so it survives relaunch.
-        if let key, !hasSavedAPIKey {
+        if let key, !hasSavedAPIKey, Self.usesAPIKey(selectedBackend) {
             try? APIKeyStore.saveKey(key, for: selectedBackend)
             hasSavedAPIKey = true
         }
@@ -914,10 +1078,12 @@ final class MacWorkbenchModel: ObservableObject {
         runTask = Task.detached(priority: .userInitiated) {
             let adapter = AgentRunnerBackendAdapter(backend: selectedBackend, apiKey: key)
             do {
+                let visionImages = try ComposerAttachmentStore.visionImages(from: attachmentsSnapshot)
                 let detail = try await service.createRun(
                     prompt: prompt,
                     ontology: ontology,
-                    backend: adapter
+                    backend: adapter,
+                    images: visionImages
                 )
                 let latestRuns = try await ledger.listRuns()
                 await MainActor.run {
@@ -1236,8 +1402,8 @@ struct WorkbenchToolGroup: Identifiable, Equatable {
                     state: .available,
                     detail: "local CLI",
                     summary: "Routes model packets to the local Codex CLI on macOS.",
-                    permission: "Uses existing CLI authentication.",
-                    provenance: "Backend metadata records local-cli invocation."
+                    permission: "Uses ChatGPT authorization from the Codex CLI.",
+                    provenance: "Backend metadata records chatgpt-auth-local-cli invocation."
                 ),
                 WorkbenchTool(
                     title: "Grok",
@@ -1269,6 +1435,60 @@ struct WorkbenchToolGroup: Identifiable, Equatable {
             ]
         )
     ]
+
+    static func communicationSkills(from capabilities: [HarnessCapability]) -> WorkbenchToolGroup {
+        let preferredOrder = Array(HarnessCapabilityRegistry.adamCommunicationSkillNames)
+        let communication = capabilities.filter {
+            $0.kind == .skill && HarnessCapabilityRegistry.adamCommunicationSkillNames.contains($0.name)
+        }
+        let sourcePriority = ["Agents", "Grok", "Harness", "Vault", "Claude", "Codex", "Hermes"]
+        let ordered = preferredOrder.compactMap { name in
+            for source in sourcePriority {
+                if let match = communication.first(where: { $0.name == name && $0.sourceSystem == source }) {
+                    return match
+                }
+            }
+            return communication.first { $0.name == name }
+        }
+        let tools = ordered.map { capability in
+            WorkbenchTool(
+                id: "communication-\(capability.name)",
+                title: communicationTitle(for: capability.name),
+                icon: communicationIcon(for: capability.name),
+                state: .available,
+                detail: capability.sourceSystem.lowercased(),
+                summary: capability.description,
+                permission: "Inserts a skill reference into the composer draft.",
+                provenance: capability.provenance,
+                skillName: capability.name
+            )
+        }
+        return WorkbenchToolGroup(id: "communication", title: "Communication", tools: tools)
+    }
+
+    private static func communicationTitle(for name: String) -> String {
+        switch name {
+        case "articulate-leadership-communication": return "Pyramid chapters"
+        case "cognitive-fit": return "Cognitive fit"
+        case "no-time-estimates": return "No time estimates"
+        case "requirement-is-the-test": return "Requirement is test"
+        case "market-inefficiency": return "Market inefficiency"
+        case "adams-words": return "Adam's words"
+        default: return name.replacingOccurrences(of: "-", with: " ")
+        }
+    }
+
+    private static func communicationIcon(for name: String) -> String {
+        switch name {
+        case "articulate-leadership-communication": return "text.alignleft"
+        case "cognitive-fit": return "square.grid.3x3"
+        case "no-time-estimates": return "clock.badge.xmark"
+        case "requirement-is-the-test": return "checkmark.seal"
+        case "market-inefficiency": return "chart.line.uptrend.xyaxis"
+        case "adams-words": return "quote.opening"
+        default: return "sparkles"
+        }
+    }
 }
 
 struct WorkbenchTool: Identifiable, Equatable {
@@ -1280,6 +1500,7 @@ struct WorkbenchTool: Identifiable, Equatable {
     let summary: String
     let permission: String
     let provenance: String
+    let skillName: String?
 
     init(
         id: String? = nil,
@@ -1289,7 +1510,8 @@ struct WorkbenchTool: Identifiable, Equatable {
         detail: String,
         summary: String,
         permission: String,
-        provenance: String
+        provenance: String,
+        skillName: String? = nil
     ) {
         self.id = id ?? title.lowercased().replacingOccurrences(of: " ", with: "-")
         self.title = title
@@ -1299,6 +1521,7 @@ struct WorkbenchTool: Identifiable, Equatable {
         self.summary = summary
         self.permission = permission
         self.provenance = provenance
+        self.skillName = skillName
     }
 }
 

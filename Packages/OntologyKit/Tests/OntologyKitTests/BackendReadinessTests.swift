@@ -24,17 +24,21 @@ import Testing
     ) == .pending(action: "run ollama serve"))
 }
 
-@Test func codexWithKeyIsLiveWithoutTouchingCLI() {
+@Test func codexIgnoresAPIKeyAndRequiresCLI() {
     #expect(BackendReadiness.evaluate(
         backend: .codex, keyPresent: true, cliFound: false, cliProbe: nil, localServerReachable: false
-    ) == .live)
+    ) == .pending(action: "install codex CLI and run codex login --device-auth"))
 }
 
-@Test func codexWithoutKeyOrCLINamesBothOptions() {
+@Test func codexWithoutCLINamesChatGPTAuthorization() {
     let readiness = BackendReadiness.evaluate(
         backend: .codex, keyPresent: false, cliFound: false, cliProbe: nil, localServerReachable: false
     )
-    #expect(readiness == .pending(action: "install codex CLI or paste OpenAI API key"))
+    #expect(readiness == .pending(action: "install codex CLI and run codex login --device-auth"))
+}
+
+@Test func codexUsesChatGPTAuthenticatedCLIInvocation() {
+    #expect(Backend.codex.invocationMethod == "chatgpt-auth-local-cli")
 }
 
 @Test func grokWithoutKeyOrCLINamesBothOptions() {

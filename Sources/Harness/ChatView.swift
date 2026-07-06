@@ -191,7 +191,6 @@ struct ChatView: View {
 
     private static var defaultBackend: Backend {
         #if os(iOS)
-        if APIKeyStore.loadKey(for: .codex) != nil { return .codex }
         if APIKeyStore.loadKey(for: .grok) != nil { return .grok }
         return .claude
         #else
@@ -201,11 +200,12 @@ struct ChatView: View {
 
     private static func initialAPIKey(for backend: Backend) -> String {
         #if os(iOS)
+        guard backend != .codex else { return "" }
         APIKeyStore.loadKey(for: backend) ?? ""
         #else
         switch backend {
         case .codex:
-            return ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? APIKeyStore.loadKey(for: backend) ?? ""
+            return ""
         case .grok:
             return ProcessInfo.processInfo.environment["XAI_API_KEY"] ?? APIKeyStore.loadKey(for: backend) ?? ""
         case .claude:
@@ -393,9 +393,20 @@ private struct HarnessMessageBubble: View {
         HStack {
             if message.fromMe { Spacer(minLength: 42) }
             VStack(alignment: .leading, spacing: 6) {
-                Text(message.fromMe ? "You" : backend.phoneDisplayName)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Theme.iosMuted)
+                HStack(spacing: 8) {
+                    Text(message.fromMe ? "You" : backend.phoneDisplayName)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.iosMuted)
+                    Spacer()
+                    Button {
+                        HarnessClipboard.copy(message.text)
+                    } label: {
+                        Label("Copy", systemImage: "doc.on.doc")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Theme.iosMuted)
+                    }
+                    .buttonStyle(.plain)
+                }
                 if message.fromMe {
                     Text(message.text)
                         .font(.system(size: 16, weight: .medium))
@@ -690,7 +701,7 @@ private extension Backend {
     var apiKeyLabel: String {
         switch self {
         case .codex:
-            return "OpenAI API key"
+            return "ChatGPT authorization"
         case .grok:
             return "xAI API key"
         case .claude:
@@ -702,9 +713,9 @@ private extension Backend {
 
     var requiresMobileAPIKey: Bool {
         switch self {
-        case .codex, .grok, .claude:
+        case .grok, .claude:
             return true
-        case .hermes:
+        case .codex, .hermes:
             return false
         }
     }
