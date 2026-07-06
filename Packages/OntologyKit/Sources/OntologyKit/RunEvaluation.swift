@@ -80,6 +80,7 @@ public struct DeterministicAnswerEvaluator: AnswerEvaluating {
             )
         ]
         results.append(Self.pyramidFormatResult(answer: trimmed, prompt: prompt, runId: runId))
+        results.append(contentsOf: Self.cognitiveFitResults(answer: trimmed, prompt: prompt, runId: runId))
         results.append(Self.frontmatterSelfPromotionResult(memoryHits: memoryHits, runId: runId))
         results.append(contentsOf: Self.policyResults(answer: trimmed, directives: policyDirectives, runId: runId))
         if let patternStep, patternStep >= 5 {
@@ -96,6 +97,26 @@ public struct DeterministicAnswerEvaluator: AnswerEvaluating {
             )
         }
         return results
+    }
+
+    private static func cognitiveFitResults(answer: String, prompt: String, runId: String) -> [EvalResult] {
+        let route = FormatRouter.route(query: prompt)
+        let fit = FormatRouter.formatFit(answer: answer, route: route)
+        let volume = FormatRouter.volumeDiscipline(answer: answer)
+        return [
+            EvalResult(
+                runId: runId,
+                checkName: "cognitive-fit-format",
+                passed: fit.passed,
+                detail: "\(route.researchNote) — \(fit.detail)"
+            ),
+            EvalResult(
+                runId: runId,
+                checkName: "volume-discipline",
+                passed: volume.passed,
+                detail: volume.detail
+            )
+        ]
     }
 
     private static func frontmatterSelfPromotionResult(memoryHits: [MemoryHit], runId: String) -> EvalResult {
