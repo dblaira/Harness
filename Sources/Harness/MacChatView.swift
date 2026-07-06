@@ -1378,8 +1378,8 @@ struct MacChatView: View {
             .frame(width: 130)
             .tint(Theme.macRed)
 
-            if model.backend == .claude {
-                SecureField("API key", text: $model.apiKey)
+            if model.backend != .hermes {
+                SecureField(macAPIKeyLabel(for: model.backend), text: $model.apiKey)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.macInk)
@@ -1387,6 +1387,21 @@ struct MacChatView: View {
                     .frame(width: 190)
                     .background(Theme.macEntry.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
+                    .onSubmit { model.saveAPIKey() }
+
+                if model.hasSavedAPIKey {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.green)
+                        .help("\(macAPIKeyLabel(for: model.backend)) saved in Keychain")
+                    toolbarIconButton("xmark.circle", help: "Remove saved \(macAPIKeyLabel(for: model.backend))") {
+                        model.deleteAPIKey()
+                    }
+                } else {
+                    toolbarIconButton("square.and.arrow.down", help: "Save \(macAPIKeyLabel(for: model.backend)) in Keychain") {
+                        model.saveAPIKey()
+                    }
+                }
             }
 
             toolbarIconButton(
@@ -1409,6 +1424,15 @@ struct MacChatView: View {
             return "Harness Cockpit"
         case .board:
             return "Delegation Queue"
+        }
+    }
+
+    private func macAPIKeyLabel(for backend: Backend) -> String {
+        switch backend {
+        case .codex: return "OpenAI API key"
+        case .grok: return "xAI API key"
+        case .claude: return "Claude API key"
+        case .hermes: return ""
         }
     }
 

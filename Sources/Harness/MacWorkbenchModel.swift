@@ -12,8 +12,14 @@ final class MacWorkbenchModel: ObservableObject {
     @Published var draft = "" {
         didSet { refreshRoutePlan() }
     }
-    @Published var backend: Backend = .codex
-    @Published var apiKey = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] ?? ""
+    @Published var backend: Backend = .codex {
+        didSet {
+            guard backend != oldValue else { return }
+            loadAPIKey(for: backend)
+        }
+    }
+    @Published var apiKey = ""
+    @Published var hasSavedAPIKey = false
     @Published var firecrawlAPIKey = ""
     @Published var hasFirecrawlAPIKey = false
     @Published var isRunning = false
@@ -53,6 +59,7 @@ final class MacWorkbenchModel: ObservableObject {
         self.service = HarnessRunService(ledger: store)
         self.reviewQueue = ReviewQueueStore(ledger: store)
         self.hasFirecrawlAPIKey = Self.loadFirecrawlAPIKey() != nil
+        loadAPIKey(for: backend)
         Task {
             await refreshRuns()
             await refreshReviewQueue()
@@ -619,6 +626,61 @@ final class MacWorkbenchModel: ObservableObject {
         }
     }
 
+    /// Environment variable wins for one-off overrides; the Keychain is the
+    /// durable store. Each backend has its own Keychain account so a key can
+    /// never be sent to the wrong vendor.
+    func loadAPIKey(for backend: Backend) {
+        apiKey = Self.initialAPIKey(for: backend)
+        hasSavedAPIKey = !apiKey.isEmpty
+    }
+
+    func saveAPIKey() {
+        let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            status = "Paste an API key first."
+            return
+        }
+        do {
+            try APIKeyStore.saveKey(trimmed, for: backend)
+            hasSavedAPIKey = true
+            status = "\(backend.rawValue) key saved in Keychain."
+        } catch {
+            status = "Key save failed: \(error.localizedDescription)"
+        }
+    }
+
+    func deleteAPIKey() {
+        do {
+            try APIKeyStore.deleteKey(for: backend)
+            apiKey = ""
+            hasSavedAPIKey = false
+            status = "\(backend.rawValue) key removed."
+        } catch {
+            status = "Key removal failed: \(error.localizedDescription)"
+        }
+    }
+
+    nonisolated static func initialAPIKey(
+        for backend: Backend,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        keychainKey: (Backend) -> String? = { APIKeyStore.loadKey(for: $0) }
+    ) -> String {
+        let environmentName: String?
+        switch backend {
+        case .codex: environmentName = "OPENAI_API_KEY"
+        case .grok: environmentName = "XAI_API_KEY"
+        case .claude: environmentName = "ANTHROPIC_API_KEY"
+        case .hermes: environmentName = nil
+        }
+        if let environmentName,
+           let value = environment[environmentName]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !value.isEmpty {
+            return value
+        }
+        guard backend != .hermes else { return "" }
+        return keychainKey(backend) ?? ""
+    }
+
     func saveFirecrawlAPIKey() {
         let trimmed = firecrawlAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -798,7 +860,13 @@ final class MacWorkbenchModel: ObservableObject {
         isRunning = true
         status = plannedRoute.requiresApproval ? "Route planned; approval-gated steps detected" : "Checking graph authority"
         let selectedBackend = backend
-        let key = apiKey.isEmpty ? nil : apiKey
+        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let key = trimmedKey.isEmpty ? nil : trimmedKey
+        // Persist a pasted key on first use so it survives relaunch.
+        if let key, !hasSavedAPIKey {
+            try? APIKeyStore.saveKey(key, for: selectedBackend)
+            hasSavedAPIKey = true
+        }
 
         let service = service
         let ledger = ledger
