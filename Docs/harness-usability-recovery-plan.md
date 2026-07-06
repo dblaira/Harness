@@ -129,7 +129,7 @@ logged in — run `codex login`," "Waiting for Claude (12 s elapsed)."
 **Changes:**
 - `AgentRunner.preflight(backend:)`: CLI backends → binary exists + a fast `--version` probe
   with a 5 s timeout; API backends → key present; Hermes → `127.0.0.1:11434` reachable.
-- Backend picker shows a per-backend readiness dot (green/amber/red).
+- How readiness is shown in the UI: **Adam decides** — not specified here.
 - Add a **Cancel** button while a run is in flight: cancels the Task and kills the child process,
   UI back to idle within 1 second.
 
