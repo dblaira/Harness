@@ -11,6 +11,65 @@ public enum Backend: String, CaseIterable, Identifiable, Sendable, Codable {
     public var id: String { rawValue }
 }
 
+/// Backend readiness, shown with the SAVY content-status vocabulary:
+/// "live", "pending", "failed (message)", "Checking gateway…".
+/// See Docs/design-vocabulary.md — no other status words are used.
+public enum BackendReadiness: Equatable, Sendable {
+    case checking
+    case live
+    case pending(action: String)
+    case failed(message: String)
+
+    /// The status word, verbatim from SAVY's content status band.
+    public var statusWord: String {
+        switch self {
+        case .checking: return "Checking gateway…"
+        case .live: return "live"
+        case .pending: return "pending"
+        case .failed(let message): return "failed (\(message))"
+        }
+    }
+
+    /// The one named action when something is waiting, else nil.
+    public var actionNeeded: String? {
+        if case .pending(let action) = self { return action }
+        return nil
+    }
+
+    /// Pure state mapping so readiness is unit-testable without probing.
+    /// `keyPresent` — an API key is available for this backend.
+    /// `cliFound` — the backend's CLI binary exists on disk (macOS only).
+    /// `cliProbe` — result of a fast version probe, nil if not attempted.
+    /// `localServerReachable` — Ollama answered (Hermes only).
+    public static func evaluate(
+        backend: Backend,
+        keyPresent: Bool,
+        cliFound: Bool,
+        cliProbe: Result<Void, Error>?,
+        localServerReachable: Bool
+    ) -> BackendReadiness {
+        switch backend {
+        case .claude:
+            return keyPresent ? .live : .pending(action: "paste Claude API key")
+        case .hermes:
+            return localServerReachable ? .live : .pending(action: "run ollama serve")
+        case .codex, .grok:
+            if keyPresent { return .live }
+            let cliName = backend == .codex ? "codex" : "grok"
+            let keyName = backend == .codex ? "OpenAI API key" : "xAI API key"
+            guard cliFound else {
+                return .pending(action: "install \(cliName) CLI or paste \(keyName)")
+            }
+            switch cliProbe {
+            case .success, nil:
+                return .live
+            case .failure(let error):
+                return .failed(message: error.localizedDescription)
+            }
+        }
+    }
+}
+
 public struct AgentRunner: Sendable {
     public init() {}
 
@@ -26,6 +85,72 @@ public struct AgentRunner: Sendable {
     }
     private var grokPath: String? {
         resolve(["\(NSHomeDirectory())/.local/bin/grok", "/opt/homebrew/bin/grok", "/usr/local/bin/grok"])
+    }
+
+    /// Probe whether a backend can answer right now, without sending a real
+    /// prompt. Fast: CLI backends get a 5-second version probe; Hermes gets
+    /// a local HTTP check; API backends only need a key.
+    public func preflight(backend: Backend, apiKey: String? = nil) async -> BackendReadiness {
+        let keyPresent = !(apiKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
+
+        switch backend {
+        case .claude:
+            let envKey = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] ?? ""
+            return BackendReadiness.evaluate(
+                backend: backend,
+                keyPresent: keyPresent || !envKey.isEmpty,
+                cliFound: false,
+                cliProbe: nil,
+                localServerReachable: false
+            )
+        case .hermes:
+            return BackendReadiness.evaluate(
+                backend: backend,
+                keyPresent: false,
+                cliFound: false,
+                cliProbe: nil,
+                localServerReachable: await hermesReachable()
+            )
+        case .codex, .grok:
+            #if os(macOS)
+            let binary = backend == .codex ? codexPath : grokPath
+            var probe: Result<Void, Error>?
+            if !keyPresent, let binary {
+                let runner = self
+                probe = await Task.detached(priority: .userInitiated) {
+                    do {
+                        _ = try runner.shell(binary, ["--version"], timeout: 5)
+                        return Result<Void, Error>.success(())
+                    } catch {
+                        return Result<Void, Error>.failure(error)
+                    }
+                }.value
+            }
+            return BackendReadiness.evaluate(
+                backend: backend,
+                keyPresent: keyPresent,
+                cliFound: binary != nil,
+                cliProbe: probe,
+                localServerReachable: false
+            )
+            #else
+            return BackendReadiness.evaluate(
+                backend: backend,
+                keyPresent: keyPresent,
+                cliFound: false,
+                cliProbe: nil,
+                localServerReachable: false
+            )
+            #endif
+        }
+    }
+
+    private func hermesReachable() async -> Bool {
+        guard let url = URL(string: "http://127.0.0.1:11434/api/tags") else { return false }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 2
+        guard let (_, response) = try? await URLSession.shared.data(for: request) else { return false }
+        return (response as? HTTPURLResponse)?.statusCode == 200
     }
 
     /// Send a single-turn prompt (already prefixed with the ontology system prompt)
@@ -51,7 +176,10 @@ public struct AgentRunner: Sendable {
             }
             #if os(macOS)
             guard let bin = grokPath else { throw RunError.notFound("grok CLI") }
-            return try shell(bin, [fullPrompt, "--output-format", "json"])
+            // -p/--prompt forces single-shot, non-interactive mode; a bare
+            // positional argument can open an interactive session that never
+            // exits and always hits the timeout.
+            return try shell(bin, ["-p", fullPrompt, "--output-format", "json"])
             #else
             throw RunError.notFound("xAI API key")
             #endif
@@ -97,9 +225,49 @@ public struct AgentRunner: Sendable {
         }
     }
 
-    /// Run a CLI to completion, capturing stdout. Uses a PTY-free pipe.
     #if os(macOS)
-    private func shell(_ launchPath: String, _ args: [String], timeout: TimeInterval = 90) throws -> String {
+    /// Live registry of child processes so a user Cancel can kill them.
+    private static let runningProcesses = RunningProcessRegistry()
+
+    /// Cancel: terminate every CLI child currently running. The in-flight
+    /// `shell` call then throws and the caller's error path restores the UI.
+    public static func terminateRunningProcesses() {
+        runningProcesses.terminateAll()
+    }
+
+    private final class RunningProcessRegistry: @unchecked Sendable {
+        private let lock = NSLock()
+        private var processes: [ObjectIdentifier: Process] = [:]
+
+        func register(_ process: Process) {
+            lock.lock(); defer { lock.unlock() }
+            processes[ObjectIdentifier(process)] = process
+        }
+
+        func unregister(_ process: Process) {
+            lock.lock(); defer { lock.unlock() }
+            processes.removeValue(forKey: ObjectIdentifier(process))
+        }
+
+        func terminateAll() {
+            lock.lock()
+            let current = Array(processes.values)
+            lock.unlock()
+            for process in current where process.isRunning {
+                process.terminate()
+            }
+        }
+    }
+    #endif
+
+    /// Run a CLI to completion, capturing stdout. Uses a PTY-free pipe.
+    ///
+    /// Output is drained WHILE the process runs. A macOS pipe buffer holds
+    /// 64 KB; waiting for exit before reading deadlocks any child that
+    /// writes more than that — the child blocks on write, we block on wait,
+    /// and the timeout fires every time.
+    #if os(macOS)
+    func shell(_ launchPath: String, _ args: [String], timeout: TimeInterval = 90) throws -> String {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: launchPath)
         proc.arguments = args
@@ -110,7 +278,36 @@ public struct AgentRunner: Sendable {
         let out = Pipe(); let err = Pipe()
         proc.standardOutput = out
         proc.standardError = err
+        // Close our copy of the child's stdin so CLIs that wait for input exit instead of hanging.
+        proc.standardInput = FileHandle.nullDevice
+
+        // Incremental blocking reads on background threads keep the pipes
+        // empty while the child runs AND preserve whatever already arrived
+        // if we have to kill it — a single read-to-EOF would surrender the
+        // partial output whenever a grandchild keeps the pipe open.
+        let collector = PipeCollector()
         try proc.run()
+        Self.runningProcesses.register(proc)
+        defer { Self.runningProcesses.unregister(proc) }
+
+        let drained = DispatchGroup()
+        drained.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let handle = out.fileHandleForReading
+            while let chunk = try? handle.read(upToCount: 65_536), !chunk.isEmpty {
+                collector.appendOut(chunk)
+            }
+            drained.leave()
+        }
+        drained.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let handle = err.fileHandleForReading
+            while let chunk = try? handle.read(upToCount: 65_536), !chunk.isEmpty {
+                collector.appendErr(chunk)
+            }
+            drained.leave()
+        }
+
         let completion = DispatchSemaphore(value: 0)
         proc.terminationHandler = { _ in completion.signal() }
         if completion.wait(timeout: .now() + timeout) == .timedOut {
@@ -118,15 +315,70 @@ public struct AgentRunner: Sendable {
             if completion.wait(timeout: .now() + 3) == .timedOut {
                 kill(proc.processIdentifier, SIGKILL)
             }
-            throw RunError.failed("\(URL(fileURLWithPath: launchPath).lastPathComponent) timed out after \(Int(timeout)) seconds.")
+            _ = drained.wait(timeout: .now() + 2)
+            let partial = collector.snapshot()
+            var message = "\(URL(fileURLWithPath: launchPath).lastPathComponent) timed out after \(Int(timeout)) seconds."
+            if !partial.combinedTail.isEmpty {
+                message += " Partial output: \(partial.combinedTail)"
+            }
+            throw RunError.failed(message)
         }
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        let text = String(data: data, encoding: .utf8) ?? ""
+        // Process exited; wait for the readers to hit EOF.
+        _ = drained.wait(timeout: .now() + 5)
+
+        let output = collector.snapshot()
+        let text = output.stdoutText
         if proc.terminationStatus != 0 && text.isEmpty {
-            let e = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "exit \(proc.terminationStatus)"
+            let e = output.stderrText.isEmpty ? "exit \(proc.terminationStatus)" : output.stderrText
             throw RunError.failed(e)
         }
         return cleanup(text)
+    }
+    #endif
+
+    /// Thread-safe accumulator for concurrent pipe drains.
+    #if os(macOS)
+    private final class PipeCollector: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stdoutData = Data()
+        private var stderrData = Data()
+
+        func appendOut(_ data: Data) {
+            guard !data.isEmpty else { return }
+            lock.lock(); defer { lock.unlock() }
+            stdoutData.append(data)
+        }
+
+        func appendErr(_ data: Data) {
+            guard !data.isEmpty else { return }
+            lock.lock(); defer { lock.unlock() }
+            stderrData.append(data)
+        }
+
+        struct Snapshot {
+            let stdoutText: String
+            let stderrText: String
+
+            /// Last ~500 characters of whatever the child said, for timeout errors.
+            var combinedTail: String {
+                let combined = [stdoutText, stderrText]
+                    .filter { !$0.isEmpty }
+                    .joined(separator: "\n")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                guard combined.count > 500 else { return combined }
+                return "..." + String(combined.suffix(500))
+            }
+        }
+
+        func snapshot() -> Snapshot {
+            lock.lock(); defer { lock.unlock() }
+            return Snapshot(
+                stdoutText: String(data: stdoutData, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+                stderrText: String(data: stderrData, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            )
+        }
     }
     #endif
 

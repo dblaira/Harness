@@ -32,6 +32,11 @@ enum Theme {
     static let savySecondaryText = Color.black.opacity(0.62)
     static let savyTertiaryText = Color.black.opacity(0.45)
 
+    // SAVY content-status colors (live/pending dots), copied from
+    // SavyShellComponents. See Docs/design-vocabulary.md.
+    static let statusLive = Color(red: 0.16, green: 0.72, blue: 0.35)    // #29B859
+    static let statusPending = Color(red: 0.86, green: 0.45, blue: 0.12) // #DB731F
+
     static func savyDisplaySerif(_ size: CGFloat, weight: Font.Weight = .bold) -> Font {
         .custom("BodoniModa-Regular", size: size).weight(weight)
     }

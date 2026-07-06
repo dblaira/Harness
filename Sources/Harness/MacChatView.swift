@@ -337,6 +337,13 @@ struct MacChatView: View {
                             ProgressView().controlSize(.small)
                             Text(model.status)
                                 .foregroundStyle(Theme.macInk.opacity(0.55))
+                            Button("Cancel") {
+                                model.cancelRun()
+                            }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Theme.macRed)
+                            .help("Cancel the running query")
                         }
                         .padding(.top, 4)
                     }
@@ -1378,8 +1385,10 @@ struct MacChatView: View {
             .frame(width: 130)
             .tint(Theme.macRed)
 
-            if model.backend == .claude {
-                SecureField("API key", text: $model.apiKey)
+            backendStatusBand
+
+            if model.backend != .hermes {
+                SecureField(macAPIKeyLabel(for: model.backend), text: $model.apiKey)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.macInk)
@@ -1387,6 +1396,21 @@ struct MacChatView: View {
                     .frame(width: 190)
                     .background(Theme.macEntry.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
+                    .onSubmit { model.saveAPIKey() }
+
+                if model.hasSavedAPIKey {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.green)
+                        .help("\(macAPIKeyLabel(for: model.backend)) saved in Keychain")
+                    toolbarIconButton("xmark.circle", help: "Remove saved \(macAPIKeyLabel(for: model.backend))") {
+                        model.deleteAPIKey()
+                    }
+                } else {
+                    toolbarIconButton("square.and.arrow.down", help: "Save \(macAPIKeyLabel(for: model.backend)) in Keychain") {
+                        model.saveAPIKey()
+                    }
+                }
             }
 
             toolbarIconButton(
@@ -1409,6 +1433,53 @@ struct MacChatView: View {
             return "Harness Cockpit"
         case .board:
             return "Delegation Queue"
+        }
+    }
+
+    /// SAVY content-status treatment: small dot + status word, heavy small
+    /// caps with tracking. Words come from Docs/design-vocabulary.md:
+    /// "live", "pending", "failed (message)", "Checking gateway…".
+    @ViewBuilder
+    private var backendStatusBand: some View {
+        let readiness = model.backendReadiness[model.backend] ?? .checking
+        HStack(spacing: 5) {
+            switch readiness {
+            case .live:
+                Circle().fill(Theme.statusLive).frame(width: 7, height: 7)
+            case .pending:
+                Circle().fill(Theme.statusPending).frame(width: 7, height: 7)
+            case .failed, .checking:
+                EmptyView()
+            }
+            Text(readiness.statusWord.uppercased())
+                .font(.system(size: 10, weight: .heavy))
+                .tracking(1.5)
+                .foregroundStyle(statusWordColor(for: readiness))
+                .lineLimit(1)
+        }
+        .help(readiness.actionNeeded ?? readiness.statusWord)
+        .accessibilityLabel("\(model.backend.rawValue) status: \(readiness.statusWord)")
+    }
+
+    private func statusWordColor(for readiness: BackendReadiness) -> Color {
+        switch readiness {
+        case .live:
+            return Theme.statusLive
+        case .pending:
+            return Theme.statusPending
+        case .failed:
+            return Theme.macRed
+        case .checking:
+            return Theme.macFaint
+        }
+    }
+
+    private func macAPIKeyLabel(for backend: Backend) -> String {
+        switch backend {
+        case .codex: return "OpenAI API key"
+        case .grok: return "xAI API key"
+        case .claude: return "Claude API key"
+        case .hermes: return ""
         }
     }
 
