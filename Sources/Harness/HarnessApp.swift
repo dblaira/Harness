@@ -41,9 +41,11 @@ struct HarnessApp: App {
         }
     }
 
-    /// Register bundled Playfair Display so Font.custom can find it.
+    /// Register bundled display fonts so Font.custom can find them.
     private static func registerFonts() {
-        guard let url = Bundle.main.url(forResource: "PlayfairDisplay", withExtension: "ttf") else { return }
-        CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+        for resource in ["PlayfairDisplay", "BodoniModa-Regular", "Roboto-Medium"] {
+            guard let url = Bundle.main.url(forResource: resource, withExtension: "ttf") else { continue }
+            CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+        }
     }
 }

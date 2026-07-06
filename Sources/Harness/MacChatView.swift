@@ -16,6 +16,8 @@ struct MacChatView: View {
     @State private var inspectorDragStartWidth: Double?
     @State private var isInspectorDetailPresented = false
     @State private var selectedOpportunityIDs = Set<String>()
+    @State private var delegationEntryKind: MacSuiteEntryKind = .action
+    @State private var isDelegationEntryFormPresented = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -291,8 +293,10 @@ struct MacChatView: View {
         VStack(spacing: 0) {
             topBar
             centerViewContent
-            delegateLabel
-            composer
+            if centerView != .board {
+                delegateLabel
+                composer
+            }
         }
         .frame(minWidth: CGFloat(HarnessWorkbenchLayoutState.transcriptMinimumWidth), maxWidth: .infinity)
         .background(Theme.macBg)
@@ -344,35 +348,619 @@ struct MacChatView: View {
     }
 
     private var delegationQueueView: some View {
-        VStack(spacing: 0) {
-            opportunityBoardToolbar
-
-            if visibleOpportunityRows.isEmpty {
-                opportunityBoardEmptyState
+        GeometryReader { proxy in
+            if proxy.size.width < 1_040 {
+                delegationQueueListSurface(showAgent: false)
+                    .padding(14)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollView([.vertical, .horizontal]) {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        opportunityBoardHeader
-                        if opportunityBoardViewMode == .byApp {
-                            ForEach(opportunityBoardProjection.groupsByApp()) { group in
-                                delegationAppHeader(group.app, count: group.rows.count)
-                                ForEach(group.rows) { row in
-                                    opportunityBoardRow(row)
-                                }
-                            }
-                        } else {
-                            ForEach(visibleOpportunityRows) { row in
-                                opportunityBoardRow(row)
-                            }
-                        }
+                HStack(alignment: .top, spacing: 14) {
+                    delegationQueueListSurface(showAgent: proxy.size.width >= 1_220)
+                        .frame(minWidth: 620, maxWidth: .infinity, maxHeight: .infinity)
+
+                    ScrollView {
+                        macSuiteActionForm(activeDelegationRow)
                     }
-                    .padding(18)
+                    .frame(width: min(max(proxy.size.width * 0.34, 430), 560))
+                    .frame(maxHeight: .infinity)
                 }
+                .padding(14)
+            }
+        }
+        .background(Theme.savyDeepNavy)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .sheet(isPresented: $isDelegationEntryFormPresented) {
+            delegationEntryFormSheet
+        }
+    }
+
+    private var delegationEntryFormSheet: some View {
+        macSuiteActionForm(activeDelegationRow)
+            .padding(10)
+        .background(Theme.savyDeepNavy)
+        .frame(minWidth: 660, idealWidth: 720, maxWidth: 780, minHeight: 520, idealHeight: 560, alignment: .top)
+    }
+
+    private func macSuiteActionForm(_ row: OpportunityBoardRow?) -> some View {
+        let detail = row.map(MacDelegationDetail.init) ?? .empty
+
+        return VStack(spacing: 0) {
+            HStack {
+                Button {
+                    isDelegationEntryFormPresented = false
+                } label: {
+                    suiteCircleIcon("xmark.circle")
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close")
+
+                Spacer()
+                Text("Action")
+                    .font(Theme.savyDisplaySerif(19, weight: .bold))
+                    .foregroundStyle(Color.black)
+                Spacer()
+                Button {
+                    isDelegationEntryFormPresented = false
+                } label: {
+                    MacFloppyDiskIcon(size: 13)
+                        .frame(width: 22, height: 22)
+                        .background(Color.white, in: Circle())
+                        .overlay(Circle().stroke(Color.black.opacity(0.08), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Save")
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 7)
+            .padding(.bottom, 5)
+
+            suiteKindPicker
+                .padding(.horizontal, 10)
+                .padding(.bottom, 5)
+
+            suiteFormSections(detail)
+            .padding(.horizontal, 10)
+            .padding(.bottom, 10)
+        }
+        .frame(maxWidth: .infinity)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 22))
+        .shadow(color: .black.opacity(0.18), radius: 12, y: 8)
+    }
+
+    @ViewBuilder
+    private func suiteFormSections(_ detail: MacDelegationDetail) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            suiteDelegateSection(detail)
+
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 3) {
+                    suitePatternSection(detail)
+                    suiteChooseSection(detail)
+                    suiteScheduleSection(detail)
+                }
+                .frame(maxWidth: .infinity, alignment: .top)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    suiteOrganizeSection(detail)
+                    suiteDetailsSection(detail)
+                    suitePlacePeopleSection(detail)
+                }
+                .frame(maxWidth: .infinity, alignment: .top)
+            }
+        }
+    }
+
+    private func suiteDelegateSection(_ detail: MacDelegationDetail) -> some View {
+        suiteSection("Delegate") {
+            suiteTextRow(detail.title, placeholder: "What do I want?")
+            suiteDivider
+            suiteTextRow(detail.description, placeholder: "When I am...I like to")
+            suiteDivider
+            suiteTextRow(detail.clearSignOfSuccess, placeholder: "Done looks like...")
+            suiteDivider
+            suiteStepsRow(detail.nextAgentQuestions)
+        }
+    }
+
+    private func suitePatternSection(_ detail: MacDelegationDetail) -> some View {
+        suiteSection("Pattern") {
+            suiteMenuRow(
+                "Pattern",
+                icon: "list.number",
+                value: detail.patternValue,
+                options: MacSuiteFormCopy.patternChoices
+            )
+        }
+    }
+
+    private func suiteChooseSection(_ detail: MacDelegationDetail) -> some View {
+        suiteSection("Choose") {
+            suiteMenuRow(
+                "Priority",
+                icon: "exclamationmark.3",
+                value: detail.priorityValue,
+                options: MacSuiteFormCopy.priorityChoices
+            )
+            suiteDivider
+            suiteMenuRow(
+                "Effort",
+                icon: "timer",
+                value: detail.effortValue,
+                options: MacSuiteFormCopy.effortChoices
+            )
+            suiteDivider
+            suiteMenuRow(
+                "Energy",
+                icon: "bolt",
+                value: detail.energyValue,
+                options: MacSuiteFormCopy.energyChoices
+            )
+        }
+    }
+
+    private func suiteScheduleSection(_ detail: MacDelegationDetail) -> some View {
+        suiteSection("Schedule") {
+            suiteToggleRow("Due", icon: "calendar", value: detail.dueValue)
+            suiteDivider
+            suiteToggleRow("Start / defer", icon: "calendar.badge.clock", value: detail.startDeferValue)
+            suiteDivider
+            suiteMenuRow("Repeat", icon: "repeat", value: "Never", options: MacSuiteFormCopy.repeatChoices)
+            suiteDivider
+            suiteToggleRow("Nudge", icon: "bell", value: detail.nudgeValue)
+            suiteDivider
+            suiteToggleRow("End", icon: "clock.badge.checkmark", value: detail.endValue)
+        }
+    }
+
+    private func suiteOrganizeSection(_ detail: MacDelegationDetail) -> some View {
+        suiteSection("Organize") {
+            suiteMenuRow("Lift", icon: "sparkles", value: detail.liftValue, options: MacSuiteFormCopy.liftChoices)
+            suiteDivider
+            suiteFlagRow
+            suiteDivider
+            suiteTagsRow(detail.tagsValue)
+            suiteDivider
+            suiteRecentTagRow
+        }
+    }
+
+    private func suiteDetailsSection(_ detail: MacDelegationDetail) -> some View {
+        suiteSection("Details") {
+            suiteTextRow(detail.notesValue, placeholder: "Notes")
+            suiteDivider
+            suiteTextRow(detail.resource, placeholder: "Link")
+            suiteDivider
+            suiteImageRow
+        }
+    }
+
+    private func suitePlacePeopleSection(_ detail: MacDelegationDetail) -> some View {
+        suiteSection("Place / People") {
+            suiteTextIconRow("Location", icon: "mappin.and.ellipse", value: detail.locationValue)
+            suiteDivider
+            suiteTextIconRow("Waiting on / delegate to", icon: "person", value: detail.agent)
+        }
+    }
+
+    private var suiteKindPicker: some View {
+        HStack(spacing: 0) {
+            ForEach(MacSuiteEntryKind.allCases) { kind in
+                Button {
+                    delegationEntryKind = kind
+                } label: {
+                    Text(kind.label)
+                        .font(Theme.savyRobotoMedium(9))
+                        .foregroundStyle(delegationEntryKind == kind ? Color.black : Color.black.opacity(0.82))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 16)
+                        .background(
+                            delegationEntryKind == kind ? Color.white : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 12)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(2)
+        .background(Theme.savyCard.opacity(0.96), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.black.opacity(0.04), lineWidth: 1))
+    }
+
+    private func suiteCircleIcon(_ systemImage: String) -> some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(Color.black)
+            .frame(width: 22, height: 22)
+            .background(Color.white, in: Circle())
+            .overlay(Circle().stroke(Color.black.opacity(0.08), lineWidth: 1))
+    }
+
+    private func suiteSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(Theme.savyRobotoMedium(8))
+                .foregroundStyle(Color.black.opacity(0.48))
+                .padding(.leading, 6)
+
+            VStack(alignment: .leading, spacing: 0) {
+                content()
+            }
+            .padding(.vertical, 1)
+            .padding(.horizontal, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.savyCard, in: RoundedRectangle(cornerRadius: 10))
+        }
+    }
+
+    private var suiteDivider: some View {
+        Rectangle()
+            .fill(Color.black.opacity(0.08))
+            .frame(height: 1)
+            .padding(.leading, 22)
+    }
+
+    private func suiteTextRow(_ value: String, placeholder: String) -> some View {
+        Text(value == "-" ? placeholder : value)
+            .font(Theme.savyRobotoMedium(9))
+            .foregroundStyle(value == "-" ? Theme.savyTertiaryText : Color.black)
+            .lineLimit(2)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, minHeight: 14, alignment: .leading)
+            .padding(.vertical, 0)
+    }
+
+    private func suiteTextIconRow(_ placeholder: String, icon: String, value: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(value == "-" ? Color.black.opacity(0.38) : Theme.savyCrimson)
+                .frame(width: 17)
+
+            Text(value == "-" ? placeholder : value)
+                .font(Theme.savyRobotoMedium(9))
+                .foregroundStyle(value == "-" ? Theme.savyTertiaryText : Color.black)
+                .lineLimit(2)
+
+            Spacer(minLength: 8)
+        }
+        .frame(minHeight: 18)
+        .padding(.vertical, 0)
+    }
+
+    private func suiteMenuRow(_ title: String, icon: String, value: String, options: [String]) -> some View {
+        Menu {
+            ForEach(options, id: \.self) { option in
+                Button(option) {}
+            }
+        } label: {
+            suiteMenuLabel(title, icon: icon, value: value)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func suiteMenuLabel(_ title: String, icon: String, value: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.savyCrimson)
+                .frame(width: 17)
+
+            Text(title)
+                .font(Theme.savyRobotoMedium(9))
+                .foregroundStyle(Color.black)
+
+            Spacer(minLength: 8)
+
+            Text(value)
+                .font(Theme.savyRobotoMedium(9))
+                .foregroundStyle(Theme.savyCrimson)
+                .lineLimit(1)
+
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.system(size: 7, weight: .semibold))
+                .foregroundStyle(Theme.savyCrimson)
+        }
+        .frame(minHeight: 18)
+        .padding(.vertical, 0)
+        .contentShape(Rectangle())
+    }
+
+    private func suiteToggleRow(_ title: String, icon: String, value: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.savyCrimson)
+                .frame(width: 17)
+
+            VStack(alignment: .leading, spacing: 0) {
+                Text(title)
+                    .font(Theme.savyRobotoMedium(9))
+                    .foregroundStyle(Color.black)
+                Text(value)
+                    .font(Theme.savyRobotoMedium(8))
+                    .foregroundStyle(Theme.savyTertiaryText)
             }
 
-            opportunityBoardActionBar
+            Spacer(minLength: 8)
+
+            Toggle("", isOn: .constant(false))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .tint(Theme.savyCrimson)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(minHeight: 19)
+        .padding(.vertical, 0)
+    }
+
+    private func suiteStepsRow(_ value: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "checklist")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.savyCrimson)
+                .frame(width: 17)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Steps")
+                    .font(Theme.savyRobotoMedium(9))
+                    .foregroundStyle(Color.black)
+
+                Text(value == "-" ? "Add Step" : value)
+                    .font(Theme.savyRobotoMedium(value == "-" ? 9 : 8))
+                    .foregroundStyle(value == "-" ? Theme.savyCrimson : Color.black.opacity(0.7))
+                    .lineLimit(4)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 8)
+        }
+        .padding(.vertical, 1)
+    }
+
+    private var suiteFlagRow: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "flag")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.savyCrimson)
+                .frame(width: 17)
+            Text("Flag")
+                .font(Theme.savyRobotoMedium(9))
+                .foregroundStyle(Color.black)
+            Spacer(minLength: 8)
+            Toggle("", isOn: .constant(false))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .tint(Theme.savyCrimson)
+        }
+        .frame(minHeight: 18)
+        .padding(.vertical, 0)
+    }
+
+    private func suiteTagsRow(_ value: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "tag")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.savyCrimson)
+                .frame(width: 17)
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Tags")
+                    .font(Theme.savyRobotoMedium(9))
+                    .foregroundStyle(Color.black)
+                Text(value == "-" ? "Add a tag" : value)
+                    .font(Theme.savyRobotoMedium(8))
+                    .foregroundStyle(value == "-" ? Theme.savyTertiaryText : Color.black.opacity(0.62))
+            }
+            Spacer(minLength: 8)
+            Text("Add")
+                .font(Theme.savyRobotoMedium(9))
+                .foregroundStyle(Theme.savyCrimson.opacity(value == "-" ? 0.55 : 1))
+        }
+        .frame(minHeight: 19)
+        .padding(.vertical, 0)
+    }
+
+    private var suiteRecentTagRow: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.savyCrimson)
+                .frame(width: 17)
+            Text("Add a recent tag")
+                .font(Theme.savyRobotoMedium(9))
+                .foregroundStyle(Theme.savyCrimson)
+            Spacer(minLength: 8)
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.system(size: 7, weight: .semibold))
+                .foregroundStyle(Theme.savyCrimson.opacity(0.45))
+        }
+        .frame(minHeight: 18)
+        .padding(.vertical, 0)
+    }
+
+    private var suiteImageRow: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "photo")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.savyCrimson)
+                .frame(width: 17)
+            Text("Image")
+                .font(Theme.savyRobotoMedium(9))
+                .foregroundStyle(Color.black)
+            Spacer(minLength: 8)
+            Text("Add")
+                .font(Theme.savyRobotoMedium(9))
+                .foregroundStyle(Theme.savyCrimson)
+        }
+        .frame(minHeight: 18)
+        .padding(.vertical, 0)
+    }
+
+    private func delegationQueueListSurface(showAgent: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 12) {
+                Picker("Queue View", selection: opportunityBoardViewModeBinding) {
+                    ForEach(OpportunityBoardViewMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .frame(width: 132)
+                .tint(Theme.savyCrimson)
+
+                Text("\(model.opportunityBoardRows.count) item\(model.opportunityBoardRows.count == 1 ? "" : "s")")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.savyTertiaryText)
+
+                if let issue = model.opportunityBoardLoadIssue {
+                    Text(issue)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Theme.savyCrimson)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+
+                Button {
+                    isDelegationEntryFormPresented = true
+                } label: {
+                    Text("Action")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .buttonStyle(.bordered)
+                .tint(Theme.savyCrimson)
+
+                Button {
+                    model.runDelegationAgent()
+                } label: {
+                    Label("Run agent", systemImage: "bolt")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.savyCrimson)
+                .disabled(model.isRunning)
+
+                Button {
+                    model.refreshOpportunityBoard()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .buttonStyle(.bordered)
+                .tint(Theme.savyCrimson)
+            }
+
+            if visibleOpportunityRows.isEmpty {
+                Text("No delegations queued")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Color.black)
+                .frame(maxWidth: .infinity, minHeight: 180)
+            } else {
+                VStack(spacing: 0) {
+                    delegationQueueCompactHeader(showAgent: showAgent)
+
+                    if opportunityBoardViewMode == .byApp {
+                        ForEach(opportunityBoardProjection.groupsByApp()) { group in
+                            Text(group.app.rawValue)
+                                .font(.system(size: 10, weight: .semibold))
+                                .tracking(1.2)
+                                .foregroundStyle(Theme.savyTertiaryText)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.top, 7)
+                                .padding(.bottom, 3)
+                            ForEach(group.rows) { row in
+                                delegationQueueCompactRow(row, showAgent: showAgent)
+                            }
+                        }
+                    } else {
+                        ForEach(visibleOpportunityRows) { row in
+                            delegationQueueCompactRow(row, showAgent: showAgent)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 16))
+        .shadow(color: .black.opacity(0.14), radius: 10, y: 6)
+    }
+
+    private func delegationQueueCompactHeader(showAgent: Bool) -> some View {
+        HStack(spacing: 8) {
+            Text("")
+                .frame(width: 18)
+            Text("Delegation")
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text("App")
+                .frame(width: 86, alignment: .leading)
+            Text("Pattern")
+                .frame(width: 92, alignment: .leading)
+            Text("Lift")
+                .frame(width: 66, alignment: .leading)
+            Text("Priority")
+                .frame(width: 46, alignment: .trailing)
+            Text("Due")
+                .frame(width: 36, alignment: .trailing)
+            if showAgent {
+                Text("Agent")
+                    .frame(width: 112, alignment: .leading)
+            }
+        }
+        .font(.system(size: 9, weight: .semibold))
+        .foregroundStyle(Theme.savyTertiaryText)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(Theme.savyCard.opacity(0.65), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func delegationQueueCompactRow(_ row: OpportunityBoardRow, showAgent: Bool) -> some View {
+        let selected = selectedOpportunityIDs.contains(row.id)
+        let detail = MacDelegationDetail(row: row)
+
+        return Button {
+            selectedOpportunityIDs = [row.id]
+            isDelegationEntryFormPresented = true
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(selected ? Theme.savyCrimson : Theme.savyTertiaryText)
+                    .frame(width: 18)
+
+                Text(detail.title)
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(Color.black)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                compactQueueCell(detail.app, width: 86, alignment: .leading)
+                compactQueueCell(detail.patternValue, width: 92, alignment: .leading)
+                compactQueueCell(detail.liftValue, width: 66, alignment: .leading)
+                compactQueueCell(formatPriority(row.card.priority), width: 46, alignment: .trailing)
+                compactQueueCell(row.card.windowDays.map { "\($0)d" } ?? "-", width: 36, alignment: .trailing)
+                if showAgent {
+                    compactQueueCell(detail.agent, width: 112, alignment: .leading)
+                }
+            }
+            .padding(.horizontal, 6)
+            .frame(height: 18)
+            .contentShape(Rectangle())
+            .background(selected ? Theme.savyCard.opacity(0.82) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .overlay(Rectangle().fill(Color.black.opacity(0.07)).frame(height: 1), alignment: .bottom)
+    }
+
+    private func compactQueueCell(_ text: String, width: CGFloat, alignment: Alignment) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(Theme.savySecondaryText)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(width: width, alignment: alignment)
     }
 
     private var opportunityBoardToolbar: some View {
@@ -615,6 +1203,67 @@ struct MacChatView: View {
         .disabled(disabled)
     }
 
+    private func opportunityBoardDetail(_ row: OpportunityBoardRow) -> some View {
+        let detail = MacDelegationDetail(row: row)
+        let columns = [
+            GridItem(.flexible(minimum: 210), spacing: 10, alignment: .topLeading),
+            GridItem(.flexible(minimum: 210), spacing: 10, alignment: .topLeading)
+        ]
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(detail.title)
+                        .font(.system(size: 15).weight(.semibold))
+                        .foregroundStyle(Theme.macInk)
+                        .lineLimit(1)
+                    Text(row.id)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(Theme.macInk.opacity(0.48))
+                        .lineLimit(1)
+                }
+
+                Spacer()
+
+                statusBadge(detail.app)
+            }
+
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
+                delegationDetailField("Description", detail.description, lineLimit: 3)
+                delegationDetailField("Pattern", detail.pattern)
+                delegationDetailField("Lift", detail.lift)
+                delegationDetailField("Next agent questions", detail.nextAgentQuestions, lineLimit: 5)
+                delegationDetailField("Kill Switch", detail.killSwitch, lineLimit: 3)
+                delegationDetailField("Clear Sign of Success", detail.clearSignOfSuccess, lineLimit: 3)
+                delegationDetailField("Resource", detail.resource, lineLimit: 2)
+                delegationDetailField("Rules", detail.rules)
+                delegationDetailField("Agent", detail.agent)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.macEntry.opacity(0.24))
+        .overlay(Rectangle().fill(Theme.macHair).frame(height: 1), alignment: .top)
+    }
+
+    private func delegationDetailField(_ label: String, _ value: String, lineLimit: Int = 2) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.caption2.weight(.bold))
+                .tracking(0.8)
+                .foregroundStyle(Theme.macInk.opacity(0.48))
+                .lineLimit(1)
+
+            Text(value)
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.macInk.opacity(value == "-" ? 0.38 : 0.78))
+                .textSelection(.enabled)
+                .lineLimit(lineLimit)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private func opportunityHeaderCell(_ text: String, width: CGFloat, alignment: Alignment = .leading) -> some View {
         Text(text)
             .font(.caption2.weight(.bold))
@@ -646,6 +1295,15 @@ struct MacChatView: View {
     private var selectedOpportunityRows: [OpportunityBoardRow] {
         let selected = selectedOpportunityIDs
         return model.opportunityBoardRows.filter { selected.contains($0.id) }
+    }
+
+    private var selectedDetailRow: OpportunityBoardRow? {
+        guard selectedOpportunityRows.count == 1 else { return nil }
+        return selectedOpportunityRows.first
+    }
+
+    private var activeDelegationRow: OpportunityBoardRow? {
+        selectedDetailRow ?? visibleOpportunityRows.first
     }
 
     private func toggleOpportunitySelection(_ row: OpportunityBoardRow) {
@@ -1876,6 +2534,246 @@ struct MacChatView: View {
             .background(Theme.macEntry.opacity(0.34), in: Capsule())
             .overlay(Capsule().stroke(Theme.macHair, lineWidth: 1))
     }
+}
+
+private struct MacFloppyDiskIcon: View {
+    let size: CGFloat
+
+    var body: some View {
+        MacFloppyDiskShape()
+            .stroke(Color.black, style: StrokeStyle(lineWidth: max(2, size * 0.1), lineCap: .round, lineJoin: .round))
+            .frame(width: size, height: size)
+    }
+}
+
+private struct MacFloppyDiskShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        let s = min(rect.width, rect.height)
+        let ox = rect.midX - s / 2
+        let oy = rect.midY - s / 2
+
+        func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(x: ox + x / 24 * s, y: oy + y / 24 * s)
+        }
+
+        var path = Path()
+        path.move(to: pt(3, 2))
+        path.addLine(to: pt(16, 2))
+        path.addLine(to: pt(22, 8))
+        path.addLine(to: pt(22, 21))
+        path.addQuadCurve(to: pt(21, 22), control: pt(22, 22))
+        path.addLine(to: pt(3, 22))
+        path.addQuadCurve(to: pt(2, 21), control: pt(2, 22))
+        path.addLine(to: pt(2, 3))
+        path.addQuadCurve(to: pt(3, 2), control: pt(2, 2))
+        path.closeSubpath()
+
+        path.move(to: pt(8, 2))
+        path.addLine(to: pt(8, 9))
+        path.addLine(to: pt(15, 9))
+        path.addLine(to: pt(15, 2))
+
+        path.move(to: pt(6, 22))
+        path.addLine(to: pt(6, 15))
+        path.addQuadCurve(to: pt(7, 14), control: pt(6, 14))
+        path.addLine(to: pt(17, 14))
+        path.addQuadCurve(to: pt(18, 15), control: pt(18, 14))
+        path.addLine(to: pt(18, 22))
+
+        return path
+    }
+}
+
+private struct MacDelegationDetail {
+    let title: String
+    let app: String
+    let description: String
+    let pattern: String
+    let patternValue: String
+    let lift: String
+    let liftValue: String
+    let nextAgentQuestions: String
+    let killSwitch: String
+    let clearSignOfSuccess: String
+    let resource: String
+    let rules: String
+    let agent: String
+    let priorityValue: String
+    let effortValue: String
+    let energyValue: String
+    let dueValue: String
+    let startDeferValue: String
+    let nudgeValue: String
+    let endValue: String
+    let tagsValue: String
+    let notesValue: String
+    let locationValue: String
+
+    static let empty = MacDelegationDetail()
+
+    private init() {
+        title = "-"
+        app = "-"
+        description = "-"
+        pattern = "-"
+        patternValue = "None"
+        lift = "-"
+        liftValue = "None"
+        nextAgentQuestions = "-"
+        killSwitch = "-"
+        clearSignOfSuccess = "-"
+        resource = "-"
+        rules = "-"
+        agent = "-"
+        priorityValue = "None"
+        effortValue = "-"
+        energyValue = "-"
+        dueValue = "-"
+        startDeferValue = "-"
+        nudgeValue = "-"
+        endValue = "-"
+        tagsValue = "-"
+        notesValue = "-"
+        locationValue = "-"
+    }
+
+    init(row: OpportunityBoardRow) {
+        let card = row.card
+        title = card.envelope.title?.nilIfBlank ?? row.id
+        app = card.app?.rawValue ?? card.rawApp?.nilIfBlank ?? "-"
+        description = card.envelope.description?.nilIfBlank ?? "-"
+        pattern = Self.section("Pattern", in: card.body)
+        patternValue = Self.choiceValue(pattern, choices: MacSuiteFormCopy.patternChoices, fallback: "None")
+        lift = Self.section("Lift", in: card.body)
+        liftValue = Self.choiceValue(lift, choices: MacSuiteFormCopy.liftChoices, fallback: "None")
+        nextAgentQuestions = Self.section("Next agent questions", in: card.body)
+        killSwitch = Self.section("Kill Switch", in: card.body)
+        clearSignOfSuccess = Self.section("Clear Sign of Success", in: card.body)
+        resource = row.canonicalResource.nilIfBlank ?? "-"
+        rules = card.rulesHit.isEmpty ? "-" : card.rulesHit.joined(separator: ", ")
+        agent = card.scoutID?.nilIfBlank ?? "-"
+        priorityValue = Self.choiceValue(Self.section("Priority", in: card.body), choices: MacSuiteFormCopy.priorityChoices, fallback: "None")
+        effortValue = card.rawEffort?.nilIfBlank ?? Self.section("Effort", in: card.body).nilIfDash ?? "-"
+        energyValue = Self.section("Energy", in: card.body).nilIfDash ?? "-"
+        dueValue = card.windowDays.map { "\($0)d" } ?? "-"
+        startDeferValue = Self.section("Start / defer", in: card.body).nilIfDash ?? "-"
+        nudgeValue = Self.section("Nudge", in: card.body).nilIfDash ?? "-"
+        endValue = Self.section("End", in: card.body).nilIfDash ?? "-"
+        tagsValue = card.envelope.tags.isEmpty ? "-" : card.envelope.tags.joined(separator: ", ")
+        notesValue = Self.section("Notes", in: card.body).nilIfDash ?? "-"
+        locationValue = Self.section("Location", in: card.body).nilIfDash ?? "-"
+    }
+
+    private static func section(_ name: String, in body: String) -> String {
+        let wanted = "\(name):".lowercased()
+        let lines = body.components(separatedBy: .newlines)
+        var capture = false
+        var captured: [String] = []
+
+        for rawLine in lines {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if capture {
+                if isSectionHeader(line) {
+                    break
+                }
+                if line.isEmpty {
+                    continue
+                }
+                captured.append(cleanSectionLine(line))
+            } else if line.lowercased() == wanted {
+                capture = true
+            }
+        }
+
+        let value = captured.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? "-" : value
+    }
+
+    private static func isSectionHeader(_ line: String) -> Bool {
+        guard line.hasSuffix(":") else { return false }
+        guard !line.hasPrefix("-") else { return false }
+        return line.count <= 64
+    }
+
+    private static func cleanSectionLine(_ line: String) -> String {
+        let bulletPrefixes = ["- ", "* "]
+        for prefix in bulletPrefixes where line.hasPrefix(prefix) {
+            return String(line.dropFirst(prefix.count))
+        }
+        return line
+    }
+
+    private static func choiceValue(_ raw: String, choices: [String], fallback: String) -> String {
+        guard raw != "-" else { return fallback }
+        let normalizedRaw = normalize(raw)
+        return choices.first { normalize($0) == normalizedRaw } ?? fallback
+    }
+
+    private static func normalize(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "  ", with: " ")
+    }
+}
+
+private extension String {
+    var nilIfBlank: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    var nilIfDash: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty || trimmed == "-" ? nil : trimmed
+    }
+}
+
+private enum MacSuiteEntryKind: String, CaseIterable, Identifiable {
+    case reminder
+    case action
+    case event
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .reminder: return "Reminder"
+        case .action: return "Action"
+        case .event: return "Event"
+        }
+    }
+}
+
+private enum MacSuiteFormCopy {
+    static let patternChoices = [
+        "None",
+        "Context",
+        "Circle",
+        "Close the Gap",
+        "Choose Success",
+        "Code the Pattern",
+        "Create Kill Switch",
+        "Clear Sign of Success",
+        "Compound"
+    ]
+
+    static let liftChoices = [
+        "None",
+        "Learning",
+        "Leverage",
+        "Delegation",
+        "Inspiration",
+        "Risk",
+        "Health"
+    ]
+
+    static let priorityChoices = ["None", "Low", "Medium", "High"]
+    static let effortChoices = ["-", "5m", "15m", "30m", "1h", "2h+"]
+    static let energyChoices = ["-", "Low", "Med", "High"]
+    static let repeatChoices = ["Never", "Daily", "Weekdays", "Weekly", "Monthly", "Yearly"]
 }
 
 enum WorkbenchCenterView: String, CaseIterable, Identifiable, Hashable {
