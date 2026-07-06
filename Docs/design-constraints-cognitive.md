@@ -1,45 +1,65 @@
 # Cognitive Design Constraints — Harness
 
 Source: Johnson O'Connor aptitude profile (Adam Blair, #327815-14).
+Canonical skills this defers to: `cognitive-fit`,
+`articulate-leadership-communication`, `no-time-estimates`,
+`requirement-is-the-test` (in `Docs/skills/`). Where wording overlaps,
+those skills win the phrasing. Adam's words are quoted verbatim, per
+`adams-words`: "When you use your own words or add words to it, it
+loses all its meaning."
 
-## The one rule
+## The constraint, in Adam's words
 
-**Adam is never the component that remembers state or sequences steps.
-The system carries the structure and every parameter; Adam carries the judgment.**
+> "my high numeric and clerical talents (Graphoria, Numerical
+> Reasoning) are currently bottlenecked by the cognitive friction of
+> organizing complex abstract structures (Structural Visualization,
+> Analytical Reasoning) and tracking detailed parameters (Number
+> Memory)."
+> — Adam, 2026-07-06
 
-## Why (the numbers)
+## The numbers (Johnson O'Connor percentiles)
 
-| Aptitude | %ile | Implication |
-|---|---|---|
-| Number Facility | 85 | Feed him numbers — he's fast |
-| Numerical Reasoning | 75 | He spots data patterns instantly |
-| Graphoria | 70 | Dense scannable grids beat prose |
-| Inductive Reasoning | 60 | Give facts; he connects them |
-| Analytical Reasoning | 13 | System does the sequencing, not Adam |
-| Structural Visualization | 5 | Never require holding architecture in his head |
-| Number Memory | 5 | Never require recalling a value — re-display it |
+| Aptitude | %ile |
+|---|---|
+| Number Facility | 85 |
+| Numerical Reasoning | 75 |
+| Graphoria | 70 |
+| Inductive Reasoning | 60 |
+| Analytical Reasoning | 13 |
+| Structural Visualization | 5 |
+| Number Memory | 5 |
 
-## Three translations
+## What Harness must do about it
 
-1. **Externalize structure** — every flow arrives pre-sequenced: numbered
-   steps, checklists, one decision per screen. Never "here's the system,
-   figure out the order."
-2. **Externalize parameters** — show every value at the moment of use
-   (keys, backends, limits, statuses). "As configured earlier" is a bug.
-3. **Dense, scannable output** — tables and status grids over paragraphs.
-   Short prose only for the "so what."
+The system removes the friction Adam named; Adam supplies the judgment.
+
+1. **Organizing complex abstract structures** is the system's job —
+   flows arrive pre-sequenced: numbered steps, checklists, one
+   decision per screen. Never require holding the architecture in
+   mind.
+2. **Tracking detailed parameters** is the system's job — every value
+   (keys, backends, limits, statuses) is shown at the moment of use.
+   Requiring recall of a value set earlier is a defect.
+3. **Output feeds the high aptitudes** — format routing per
+   `cognitive-fit`: Tables for exact value lookup, Matrices for
+   cross-referencing, Node Trees for hierarchy and flow, Pure Text
+   only for interpretation. Response layout per
+   `articulate-leadership-communication`.
 
 ## The acceptance question
 
-For every screen, error message, and doc:
+Per `requirement-is-the-test`, for every screen, error message, and doc:
 
-> Does this make Adam hold a structure in his head or remember a value?
+> Does this require organizing a complex abstract structure in mind,
+> or recalling a detailed parameter?
 
 If yes, it fails. Move that load into the UI.
 
-## Applied to the recovery plan
+## Applied to the recovery plan (`harness-usability-recovery-plan.md`)
 
-- WO-2 (per-backend Keychain): app remembers keys, not Adam.
-- WO-4 (readiness dots, honest status): app tracks backend state visibly.
-- WO-5 (auto-select working backend): app does the sequencing.
-- Error messages must name the fix ("run `codex login`"), never just the failure.
+- WO-2 (per-backend Keychain): the app tracks the keys, not Adam.
+- WO-4 (readiness indicators, honest status): the app shows backend
+  state at the moment of use.
+- WO-5 (auto-select working backend): the app does the sequencing.
+- Error messages name the fix ("run `codex login`"), never just the
+  failure.
