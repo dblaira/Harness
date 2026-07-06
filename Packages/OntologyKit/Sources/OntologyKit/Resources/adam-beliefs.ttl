@@ -122,3 +122,79 @@
   understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
   understood:inLifeDomain <https://understood.app/ontology/domain/work> ;
   .
+
+# conn-020 through conn-029: choice nuggets from a streamlined emmission statement.
+# Source (canonical, raw): Ontology/accepted/choice-nuggets.md — received 2026-07-06.
+# Labels are Adam's exact words. understood:rank preserves his hierarchy:
+# order is intentional, best first, then down from there.
+# Note: inner double quotes in conn-021 rendered as single quotes for the loader; raw text is in the canonical file.
+
+<https://understood.app/ontology/connection/conn-020> a understood:Connection ;
+  understood:label "Oceans of money are searching for a ship to navigate their waters." ;
+  understood:connectionType "connection" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  understood:rank 1 ;
+  .
+
+<https://understood.app/ontology/connection/conn-021> a understood:Connection ;
+  understood:label "Everything is backwards. 'Would a major tech company offer to buy this from me?' Everything flows from this." ;
+  understood:connectionType "connection" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  understood:rank 2 ;
+  .
+
+<https://understood.app/ontology/connection/conn-022> a understood:Connection ;
+  understood:label "We prepare today, and everyday to create with such usefulness that when the time comes we will name our price...and get it!" ;
+  understood:connectionType "connection" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  understood:rank 3 ;
+  .
+
+<https://understood.app/ontology/connection/conn-023> a understood:Connection ;
+  understood:label "What pulls instead of pushes." ;
+  understood:connectionType "connection" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  understood:rank 4 ;
+  .
+
+<https://understood.app/ontology/connection/conn-024> a understood:Connection ;
+  understood:label "more and more meaningful relationships." ;
+  understood:connectionType "connection" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  understood:rank 5 ;
+  .
+
+<https://understood.app/ontology/connection/conn-025> a understood:Connection ;
+  understood:label "Automation — delegate taste." ;
+  understood:connectionType "connection" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  understood:rank 6 ;
+  .
+
+<https://understood.app/ontology/connection/conn-026> a understood:Connection ;
+  understood:label "Context — Accept reality" ;
+  understood:connectionType "connection" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  understood:rank 7 ;
+  .
+
+<https://understood.app/ontology/connection/conn-027> a understood:Connection ;
+  understood:label "Choose Success — Set target" ;
+  understood:connectionType "connection" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  understood:rank 8 ;
+  .
+
+<https://understood.app/ontology/connection/conn-028> a understood:Connection ;
+  understood:label "Clear Sign of Success — signal." ;
+  understood:connectionType "connection" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  understood:rank 9 ;
+  .
+
+<https://understood.app/ontology/connection/conn-029> a understood:Connection ;
+  understood:label "The Through-Line: decide what matters, build the system, let it compound." ;
+  understood:connectionType "connection" ;
+  understood:inLifeDomain <https://understood.app/ontology/domain/belief> ;
+  understood:rank 10 ;
+  .
