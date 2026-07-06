@@ -16,10 +16,12 @@ final class MacWorkbenchModel: ObservableObject {
         didSet {
             guard backend != oldValue else { return }
             loadAPIKey(for: backend)
+            refreshReadiness(for: backend)
         }
     }
     @Published var apiKey = ""
     @Published var hasSavedAPIKey = false
+    @Published var backendReadiness: [Backend: BackendReadiness] = [:]
     @Published var firecrawlAPIKey = ""
     @Published var hasFirecrawlAPIKey = false
     @Published var isRunning = false
@@ -47,6 +49,7 @@ final class MacWorkbenchModel: ObservableObject {
     private let ledger: RunLedgerStore
     private let service: HarnessRunService
     private let reviewQueue: ReviewQueueStore
+    private var runTask: Task<Void, Never>?
 
     init() {
         let store: RunLedgerStore
@@ -60,6 +63,7 @@ final class MacWorkbenchModel: ObservableObject {
         self.reviewQueue = ReviewQueueStore(ledger: store)
         self.hasFirecrawlAPIKey = Self.loadFirecrawlAPIKey() != nil
         loadAPIKey(for: backend)
+        refreshReadiness(for: backend)
         Task {
             await refreshRuns()
             await refreshReviewQueue()
@@ -634,6 +638,39 @@ final class MacWorkbenchModel: ObservableObject {
         hasSavedAPIKey = !apiKey.isEmpty
     }
 
+    /// Probe the backend and publish its readiness — "live", "pending",
+    /// or "failed (message)" — using SAVY's status vocabulary. When
+    /// something is waiting on one action, the status line names it.
+    func refreshReadiness(for backend: Backend) {
+        backendReadiness[backend] = .checking
+        let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        Task { [weak self] in
+            let readiness = await AgentRunner().preflight(
+                backend: backend,
+                apiKey: key.isEmpty ? nil : key
+            )
+            await MainActor.run {
+                guard let self else { return }
+                self.backendReadiness[backend] = readiness
+                if let action = readiness.actionNeeded {
+                    self.status = "\(backend.rawValue): \(action)"
+                } else if case .failed(let message) = readiness {
+                    self.status = "\(backend.rawValue) failed: \(message)"
+                }
+            }
+        }
+    }
+
+    /// Cancel the in-flight run: kill any CLI child and restore the UI.
+    func cancelRun() {
+        guard isRunning else { return }
+        AgentRunner.terminateRunningProcesses()
+        runTask?.cancel()
+        runTask = nil
+        isRunning = false
+        status = "Cancelled"
+    }
+
     func saveAPIKey() {
         let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -644,6 +681,7 @@ final class MacWorkbenchModel: ObservableObject {
             try APIKeyStore.saveKey(trimmed, for: backend)
             hasSavedAPIKey = true
             status = "\(backend.rawValue) key saved in Keychain."
+            refreshReadiness(for: backend)
         } catch {
             status = "Key save failed: \(error.localizedDescription)"
         }
@@ -655,6 +693,7 @@ final class MacWorkbenchModel: ObservableObject {
             apiKey = ""
             hasSavedAPIKey = false
             status = "\(backend.rawValue) key removed."
+            refreshReadiness(for: backend)
         } catch {
             status = "Key removal failed: \(error.localizedDescription)"
         }
@@ -872,7 +911,7 @@ final class MacWorkbenchModel: ObservableObject {
         let ledger = ledger
         let ontology = ontology
 
-        Task.detached(priority: .userInitiated) {
+        runTask = Task.detached(priority: .userInitiated) {
             let adapter = AgentRunnerBackendAdapter(backend: selectedBackend, apiKey: key)
             do {
                 let detail = try await service.createRun(
@@ -882,6 +921,7 @@ final class MacWorkbenchModel: ObservableObject {
                 )
                 let latestRuns = try await ledger.listRuns()
                 await MainActor.run {
+                    self.runTask = nil
                     self.selectedDetail = detail
                     self.runs = latestRuns
                     self.status = detail.run.success ? "Trace saved" : "Backend failed; trace saved"
@@ -889,6 +929,8 @@ final class MacWorkbenchModel: ObservableObject {
                 }
             } catch {
                 await MainActor.run {
+                    self.runTask = nil
+                    guard self.isRunning else { return } // cancelled; status already says so
                     self.status = error.localizedDescription
                     self.isRunning = false
                 }
