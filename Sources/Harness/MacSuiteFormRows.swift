@@ -1,18 +1,23 @@
 #if os(macOS)
 import SwiftUI
 
-/// Shared SAVY entry-form row styling — icons crimson, labels black, values crimson.
+/// Shared SAVY entry-form row styling — mirrors SAVY-iOS `ReminderFormView`:
+/// cream card rows, Roboto labels, crimson values, compact switches, working menu pickers.
 enum MacSuiteFormRows {
-    static var switchToggleStyle: SwitchToggleStyle {
-        SwitchToggleStyle(tint: Theme.savyCrimson)
-    }
+    /// iOS Form switches sit ~16pt tall inside ~44pt rows; scale macOS switches to match 9pt rows.
+    private static let toggleScale: CGFloat = 0.52
+    private static let toggleSlotWidth: CGFloat = 28
+    private static let toggleSlotHeight: CGFloat = 14
 
     static func switchToggle(isOn: Binding<Bool>) -> some View {
         Toggle("", isOn: isOn)
             .labelsHidden()
-            .toggleStyle(switchToggleStyle)
+            .toggleStyle(SwitchToggleStyle(tint: Theme.savyCrimson))
             .controlSize(.mini)
+            .scaleEffect(toggleScale)
+            .frame(width: toggleSlotWidth, height: toggleSlotHeight)
     }
+
     static func sectionLabel(_ title: String) -> some View {
         Text(title)
             .font(Theme.savyRobotoMedium(8))
@@ -37,34 +42,52 @@ enum MacSuiteFormRows {
     static func menuRow(
         title: String,
         icon: String,
-        value: String,
-        options: [String],
-        onSelect: @escaping (String) -> Void
+        selection: Binding<String>,
+        options: [String]
     ) -> some View {
-        Menu {
-            ForEach(options, id: \.self) { option in
-                Button(option) { onSelect(option) }
-            }
-        } label: {
+        SavyMenuRow(title: title, icon: icon, selection: selection, options: options)
+    }
+
+    /// Schedule rows follow SAVY: label + compact toggle on one line, date/time field below when on.
+    static func scheduleRow(
+        title: String,
+        icon: String,
+        detail: String,
+        isOn: Binding<Bool>,
+        date: Binding<Date>,
+        components: DatePickerComponents
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
                 intentIcon(icon)
                 Text(title)
                     .font(Theme.savyRobotoMedium(9))
                     .foregroundStyle(Color.black)
-                Spacer(minLength: 4)
-                Text(value)
-                    .font(Theme.savyRobotoMedium(9))
-                    .foregroundStyle(Theme.savyCrimson)
-                    .lineLimit(1)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 7, weight: .semibold))
-                    .foregroundStyle(Theme.savyCrimson)
+                Spacer(minLength: 0)
+                switchToggle(isOn: isOn)
             }
-            .frame(minHeight: 18)
-            .contentShape(Rectangle())
+            .frame(minHeight: 16)
+
+            if isOn.wrappedValue {
+                HStack(spacing: 0) {
+                    Spacer().frame(width: 23)
+                    DatePicker("", selection: date, displayedComponents: components)
+                        .labelsHidden()
+                        .datePickerStyle(.field)
+                        .font(Theme.savyRobotoMedium(8))
+                        .tint(Theme.savyCrimson)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else {
+                HStack(spacing: 0) {
+                    Spacer().frame(width: 23)
+                    Text(detail)
+                        .font(Theme.savyRobotoMedium(8))
+                        .foregroundStyle(Theme.savyTertiaryText)
+                }
+            }
         }
-        .buttonStyle(.plain)
-        .tint(Theme.savyCrimson)
+        .padding(.vertical, 1)
     }
 
     static func toggleRow(
@@ -83,10 +106,11 @@ enum MacSuiteFormRows {
                     .font(Theme.savyRobotoMedium(8))
                     .foregroundStyle(Theme.savyTertiaryText)
             }
-            Spacer(minLength: 4)
+            Spacer(minLength: 0)
             switchToggle(isOn: isOn)
         }
-        .frame(minHeight: 19)
+        .frame(minHeight: 16)
+        .padding(.vertical, 1)
     }
 
     static func intentCard<Content: View>(
@@ -119,6 +143,55 @@ enum MacSuiteFormRows {
         @ViewBuilder content: () -> Content
     ) -> some View {
         intentCard(title, width: composerIntentCardWidth, content: content)
+    }
+}
+
+/// Menu-backed picker — reliable on macOS (SwiftUI `Picker(.menu)` ignores custom row labels).
+private struct SavyMenuRow: View {
+    let title: String
+    let icon: String
+    @Binding var selection: String
+    let options: [String]
+
+    var body: some View {
+        Menu {
+            ForEach(options, id: \.self) { option in
+                Button {
+                    selection = option
+                } label: {
+                    HStack {
+                        Text(option)
+                            .font(Theme.savyRobotoMedium(9))
+                        Spacer()
+                        if option == selection {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 9, weight: .bold))
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                MacSuiteFormRows.intentIcon(icon)
+                Text(title)
+                    .font(Theme.savyRobotoMedium(9))
+                    .foregroundStyle(Color.black)
+                Spacer(minLength: 0)
+                Text(selection)
+                    .font(Theme.savyRobotoMedium(9))
+                    .foregroundStyle(Theme.savyCrimson)
+                    .lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 7, weight: .semibold))
+                    .foregroundStyle(Theme.savyCrimson)
+            }
+            .frame(minHeight: 16)
+            .padding(.vertical, 1)
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 #endif

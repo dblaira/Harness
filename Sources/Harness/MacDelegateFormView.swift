@@ -151,72 +151,52 @@ struct MacDelegateFormView: View {
                     MacSuiteFormRows.menuRow(
                         title: "Pattern",
                         icon: "list.number",
-                        value: model.composerIntent.pattern,
+                        selection: composerBinding(\.pattern),
                         options: MacSuiteFormCopy.patternChoices
-                    ) { option in
-                        model.mutateComposerIntent { $0.pattern = option }
-                    }
+                    )
                 }
 
                 MacSuiteFormRows.composerIntentCard("Choose") {
                     MacSuiteFormRows.menuRow(
                         title: "Priority",
                         icon: "exclamationmark.3",
-                        value: model.composerIntent.priority,
+                        selection: composerBinding(\.priority),
                         options: MacSuiteFormCopy.priorityChoices
-                    ) { option in
-                        model.mutateComposerIntent { $0.priority = option }
-                    }
+                    )
                     MacSuiteFormRows.divider()
                     MacSuiteFormRows.menuRow(
                         title: "Effort",
                         icon: "timer",
-                        value: model.composerIntent.effort,
+                        selection: composerBinding(\.effort),
                         options: MacSuiteFormCopy.effortChoices
-                    ) { option in
-                        model.mutateComposerIntent { $0.effort = option }
-                    }
+                    )
                     MacSuiteFormRows.divider()
                     MacSuiteFormRows.menuRow(
                         title: "Energy",
                         icon: "bolt",
-                        value: model.composerIntent.energy,
+                        selection: composerBinding(\.energy),
                         options: MacSuiteFormCopy.energyChoices
-                    ) { option in
-                        model.mutateComposerIntent { $0.energy = option }
-                    }
+                    )
                 }
             }
 
             VStack(alignment: .leading, spacing: 6) {
                 MacSuiteFormRows.composerIntentCard("Schedule") {
-                    composerScheduleRow(
+                    MacSuiteFormRows.scheduleRow(
                         title: "Due",
                         icon: "calendar",
                         detail: Self.formatDueDate(model.composerIntent.dueDate),
-                        isOn: Binding(
-                            get: { model.composerIntent.dueEnabled },
-                            set: { enabled in model.mutateComposerIntent { $0.dueEnabled = enabled } }
-                        ),
-                        date: Binding(
-                            get: { model.composerIntent.dueDate },
-                            set: { date in model.mutateComposerIntent { $0.dueDate = date } }
-                        ),
+                        isOn: composerBinding(\.dueEnabled),
+                        date: composerBinding(\.dueDate),
                         components: .date
                     )
                     MacSuiteFormRows.divider()
-                    composerScheduleRow(
+                    MacSuiteFormRows.scheduleRow(
                         title: "Nudge",
                         icon: "bell",
                         detail: Self.formatNudgeTime(model.composerIntent.nudgeTime),
-                        isOn: Binding(
-                            get: { model.composerIntent.nudgeEnabled },
-                            set: { enabled in model.mutateComposerIntent { $0.nudgeEnabled = enabled } }
-                        ),
-                        date: Binding(
-                            get: { model.composerIntent.nudgeTime },
-                            set: { date in model.mutateComposerIntent { $0.nudgeTime = date } }
-                        ),
+                        isOn: composerBinding(\.nudgeEnabled),
+                        date: composerBinding(\.nudgeTime),
                         components: .hourAndMinute
                     )
                 }
@@ -225,11 +205,9 @@ struct MacDelegateFormView: View {
                     MacSuiteFormRows.menuRow(
                         title: "Lift",
                         icon: "sparkles",
-                        value: model.composerIntent.lift,
+                        selection: composerBinding(\.lift),
                         options: MacSuiteFormCopy.liftChoices
-                    ) { option in
-                        model.mutateComposerIntent { $0.lift = option }
-                    }
+                    )
                     MacSuiteFormRows.divider()
                     composerFlagRow
                 }
@@ -238,37 +216,11 @@ struct MacDelegateFormView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func composerScheduleRow(
-        title: String,
-        icon: String,
-        detail: String,
-        isOn: Binding<Bool>,
-        date: Binding<Date>,
-        components: DatePickerComponents
-    ) -> some View {
-        HStack(spacing: 6) {
-            MacSuiteFormRows.intentIcon(icon)
-            VStack(alignment: .leading, spacing: 0) {
-                Text(title)
-                    .font(Theme.savyRobotoMedium(9))
-                    .foregroundStyle(Color.black)
-                if isOn.wrappedValue {
-                    DatePicker("", selection: date, displayedComponents: components)
-                        .labelsHidden()
-                        .datePickerStyle(.compact)
-                        .font(Theme.savyRobotoMedium(8))
-                        .foregroundStyle(Theme.savyTertiaryText)
-                        .tint(Theme.savyCrimson)
-                } else {
-                    Text(detail)
-                        .font(Theme.savyRobotoMedium(8))
-                        .foregroundStyle(Theme.savyTertiaryText)
-                }
-            }
-            Spacer(minLength: 4)
-            MacSuiteFormRows.switchToggle(isOn: isOn)
-        }
-        .frame(minHeight: 19)
+    private func composerBinding<Value>(_ keyPath: WritableKeyPath<ComposerIntent, Value>) -> Binding<Value> {
+        Binding(
+            get: { model.composerIntent[keyPath: keyPath] },
+            set: { value in model.mutateComposerIntent { $0[keyPath: keyPath] = value } }
+        )
     }
 
     private var composerFlagRow: some View {
@@ -277,15 +229,11 @@ struct MacDelegateFormView: View {
             Text("Flag")
                 .font(Theme.savyRobotoMedium(9))
                 .foregroundStyle(Color.black)
-            Spacer(minLength: 4)
-            MacSuiteFormRows.switchToggle(
-                isOn: Binding(
-                    get: { model.composerIntent.isFlagged },
-                    set: { flagged in model.mutateComposerIntent { $0.isFlagged = flagged } }
-                )
-            )
+            Spacer(minLength: 0)
+            MacSuiteFormRows.switchToggle(isOn: composerBinding(\.isFlagged))
         }
-        .frame(minHeight: 18)
+        .frame(minHeight: 16)
+        .padding(.vertical, 1)
     }
 
     private var composerDivider: some View {
