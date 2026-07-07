@@ -1,4 +1,10 @@
 import SwiftUI
+import CoreText
+#if canImport(AppKit)
+import AppKit
+#elseif canImport(UIKit)
+import UIKit
+#endif
 
 /// Harness mac surfaces follow SAVY (`SAVY-iOS/SAVY/RootView.swift` `SavyTheme`): paper page, cream forms, crimson accents.
 /// Recall tokens remain for legacy references.
@@ -7,9 +13,18 @@ enum Theme {
 
     static let savyDeepNavy = Color(hex: 0x08172D)
     static let savyCrimson = Color(hex: 0xE60E44)
+    /// SAVY `SavyTheme.green` — live/leverage dot (`RootView.swift:1129`).
+    static let savyGreen = Color(hex: 0x2AB860)
     static let savyCard = Color(hex: 0xF3EAD5)
     static let savyPaper = Color(hex: 0xF8F4ED)
-    static let savyPaperAccent = Color(hex: 0xEFE7D6)
+    /// SAVY `SavyTheme.paperAccent` (`RootView.swift:1131` — 239/235/228).
+    static let savyPaperAccent = Color(hex: 0xEFEBE4)
+    /// SAVY `SavyTheme.beliefCard` (`RootView.swift:1132`).
+    static let savyBeliefCard = Color(red: 0.96, green: 0.94, blue: 0.90)
+    /// SAVY `SavyTheme.sectionBand` (`RootView.swift:1134` — 244/239/231).
+    static let savySectionBand = Color(hex: 0xF4EFE7)
+    /// SAVY `Brand.tabActive` — active tab label on tan (`ReminderBrandTheme.swift:24`).
+    static let savyTabActive = Color(hex: 0x2E2716)
     static let savyBottomNavTan = Color(red: 0.80, green: 0.70, blue: 0.58)
     static let savySecondaryText = Color.black.opacity(0.62)
     static let savyTertiaryText = Color.black.opacity(0.45)
@@ -72,6 +87,43 @@ enum Theme {
 
     // MARK: - Typography (Recall — desktop sizes, not phone hero scale)
 
+    /// Same faces SAVY resolves (`SavyTypography`, SAVY-iOS): Bodoni 72 Oldstyle first, bundled Moda second.
+    static let savyRecallSerifName = "Bodoni 72 Oldstyle"
+    static let savyBodoniModaName = "BodoniModa-Regular"
+    static let savyRobotoMediumName = "Roboto-Medium"
+
+    /// One-time registration of the bundled display fonts so `Font.custom` can find them.
+    /// `HarnessApp.init` also registers at launch; this static is the safety net for
+    /// previews and tests where the App initializer never runs. Re-registering is harmless.
+    private static let bundledFontsRegistered: Bool = {
+        for resource in ["PlayfairDisplay", "BodoniModa-Regular", "Roboto-Medium"] {
+            guard let url = Bundle.main.url(forResource: resource, withExtension: "ttf") else { continue }
+            CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+        }
+        return true
+    }()
+
+    /// Whether a font family/PostScript name resolves on this platform (post-registration).
+    static func savyFontAvailable(_ name: String) -> Bool {
+        _ = bundledFontsRegistered
+        #if canImport(AppKit)
+        return NSFont(name: name, size: 12) != nil
+        #elseif canImport(UIKit)
+        return UIFont(name: name, size: 12) != nil
+        #else
+        return false
+        #endif
+    }
+
+    /// SAVY's display-serif source, resolved once: Bodoni 72 Oldstyle → bundled BodoniModa → nil (system serif).
+    private static let resolvedDisplaySerifName: String? = {
+        if savyFontAvailable(savyRecallSerifName) { return savyRecallSerifName }
+        if savyFontAvailable(savyBodoniModaName) { return savyBodoniModaName }
+        return nil
+    }()
+
+    private static let robotoMediumAvailable: Bool = savyFontAvailable(savyRobotoMediumName)
+
     static func recallSerif(_ size: CGFloat, weight: Font.Weight = .bold) -> Font {
         .custom("BodoniModa-Regular", size: size).weight(weight)
     }
@@ -84,12 +136,22 @@ enum Theme {
         .system(size: size, weight: .heavy)
     }
 
+    /// Editorial serif — SAVY's chain (`SavyTypography.displaySerif`):
+    /// Bodoni 72 Oldstyle → bundled BodoniModa-Regular → system serif.
     static func savyDisplaySerif(_ size: CGFloat, weight: Font.Weight = .bold) -> Font {
-        recallSerif(size, weight: weight)
+        if let name = resolvedDisplaySerifName {
+            return .custom(name, size: size).weight(weight)
+        }
+        return .system(size: size, weight: weight, design: .serif)
     }
 
+    /// SAVY belief-list sans (`SavyTypography.robotoMedium`) — the bundled
+    /// Roboto-Medium.ttf when registered, system medium otherwise.
     static func savyRobotoMedium(_ size: CGFloat) -> Font {
-        .system(size: size, weight: .medium)
+        if robotoMediumAvailable {
+            return .custom(savyRobotoMediumName, size: size)
+        }
+        return .system(size: size, weight: .medium)
     }
 }
 

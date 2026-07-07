@@ -48,6 +48,10 @@ import Testing
     #expect(readiness == .pending(action: "install grok CLI or paste xAI API key"))
 }
 
+@Test func grokAuthorizationActionIsNamed() {
+    #expect(BackendReadiness.grokAuthorizationAction == "run grok login")
+}
+
 @Test func cliProbeFailureBecomesFailedWithMessage() {
     struct ProbeError: LocalizedError {
         var errorDescription: String? { "codex timed out after 5 seconds." }

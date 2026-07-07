@@ -2,6 +2,7 @@
 build/
 build-mac/
 .build/
+.build-app/
 DerivedData/
 *.xcuserstate
 xcuserdata/

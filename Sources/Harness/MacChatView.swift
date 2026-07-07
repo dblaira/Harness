@@ -69,7 +69,7 @@ struct MacChatView: View {
             }
         }
         .onChange(of: ontology.connections.count) { _, _ in model.updateOntology(ontology) }
-        .onChange(of: model.searchText) { _, _ in Task { await model.searchRuns() } }
+        .onChange(of: model.searchText) { _, _ in Task { await model.searchSessions() } }
         .onChange(of: model.opportunityBoardRows.map(\.id)) { _, ids in
             selectedOpportunityIDs.formIntersection(Set(ids))
         }
@@ -148,13 +148,38 @@ struct MacChatView: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 4) {
-                    ForEach(model.runs) { run in
-                        Button {
-                            Task { await model.selectRun(run) }
-                        } label: {
-                            sessionRow(run)
+                    if !model.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        if model.sessionSearchHits.isEmpty {
+                            Text("No matching sessions")
+                                .font(Theme.recallBody(12))
+                                .foregroundStyle(Theme.macMuted)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 6)
+                        } else {
+                            ForEach(model.sessionSearchHits) { hit in
+                                Button {
+                                    model.selectSessionSearchHit(hit)
+                                } label: {
+                                    sessionSearchHitRow(hit)
+                                }
+                                .buttonStyle(.plain)
+                            }
                         }
-                        .buttonStyle(.plain)
+                    } else if model.chatSessions.isEmpty {
+                        Text("No sessions yet")
+                            .font(Theme.recallBody(12))
+                            .foregroundStyle(Theme.macMuted)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
+                    } else {
+                        ForEach(model.chatSessions) { session in
+                            Button {
+                                model.selectSession(session)
+                            } label: {
+                                chatSessionRow(session)
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
                 }
             }
@@ -297,15 +322,33 @@ struct MacChatView: View {
         .foregroundStyle(Theme.macRed)
     }
 
-    private func sessionRow(_ run: HarnessRun) -> some View {
-        let selected = model.selectedDetail?.run.id == run.id
+    private func chatSessionRow(_ session: ChatSession) -> some View {
+        let selected = model.currentSessionId == session.id
         return VStack(alignment: .leading, spacing: 3) {
-            Text(run.prompt)
+            Text(session.title)
                 .font(Theme.recallBody(14, weight: .semibold))
                 .lineLimit(1)
-            Text("\(run.backend) - \(run.createdAt.formatted(date: .abbreviated, time: .shortened))")
+            Text(session.updatedAt.formatted(date: .abbreviated, time: .shortened))
                 .font(Theme.recallBody(12))
                 .lineLimit(1)
+                .foregroundStyle(selected ? Theme.macEntryInk.opacity(0.55) : Theme.macMuted)
+        }
+        .foregroundStyle(selected ? Theme.macEntryInk : Theme.macInk)
+        .padding(.vertical, 7)
+        .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(selected ? Theme.macEntry : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func sessionSearchHitRow(_ hit: SessionSearchHit) -> some View {
+        let selected = model.currentSessionId == hit.sessionId
+        return VStack(alignment: .leading, spacing: 3) {
+            Text(hit.title)
+                .font(Theme.recallBody(14, weight: .semibold))
+                .lineLimit(1)
+            Text(hit.snippet)
+                .font(Theme.recallBody(12))
+                .lineLimit(2)
                 .foregroundStyle(selected ? Theme.macEntryInk.opacity(0.55) : Theme.macMuted)
         }
         .foregroundStyle(selected ? Theme.macEntryInk : Theme.macInk)
@@ -1433,6 +1476,10 @@ struct MacChatView: View {
                 chatToolbarIcon("key.viewfinder", help: "Authorize") {
                     model.authorizeCodexAccount()
                 }
+            } else if model.backend == .grok, !model.hasSavedAPIKey {
+                chatToolbarIcon("key.viewfinder", help: "Authorize Grok") {
+                    model.authorizeGrokAccount()
+                }
             } else if model.backend != .hermes {
                 chatToolbarIcon(
                     model.hasSavedAPIKey ? "key.fill" : "key",
@@ -1500,21 +1547,22 @@ struct MacChatView: View {
                 .layoutPriority(2)
 
             if model.backend == .codex {
-                HStack(spacing: 6) {
-                    Image(systemName: "person.crop.circle.badge.checkmark")
-                        .font(.system(size: 12, weight: .semibold))
-                    Text("ChatGPT account")
-                        .font(.system(size: 12, weight: .semibold))
-                }
-                .foregroundStyle(Theme.macBarInk.opacity(0.82))
-                .padding(.horizontal, 10)
-                .frame(width: 150, height: 30)
-                .background(Theme.macEntry.opacity(0.65), in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
-                .help("Codex uses your ChatGPT authorization, not an OpenAI API key")
+                subscriptionAccountBadge(
+                    label: "ChatGPT account",
+                    help: "Codex uses your ChatGPT authorization, not an OpenAI API key"
+                )
 
                 toolbarIconButton("key.viewfinder", help: "Authorize Codex with ChatGPT") {
                     model.authorizeCodexAccount()
+                }
+            } else if model.backend == .grok, !model.hasSavedAPIKey {
+                subscriptionAccountBadge(
+                    label: "Grok account",
+                    help: "Grok uses your xAI subscription authorization, not an API key"
+                )
+
+                toolbarIconButton("key.viewfinder", help: "Authorize Grok with xAI") {
+                    model.authorizeGrokAccount()
                 }
             } else if model.backend != .hermes {
                 SecureField(macAPIKeyLabel(for: model.backend), text: $model.apiKey)
@@ -1620,6 +1668,21 @@ struct MacChatView: View {
         }
         .help(readiness.actionNeeded ?? readiness.statusWord)
         .accessibilityLabel("\(model.backend.rawValue) status: \(readiness.statusWord)")
+    }
+
+    private func subscriptionAccountBadge(label: String, help: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "person.crop.circle.badge.checkmark")
+                .font(.system(size: 12, weight: .semibold))
+            Text(label)
+                .font(.system(size: 12, weight: .semibold))
+        }
+        .foregroundStyle(Theme.macBarInk.opacity(0.82))
+        .padding(.horizontal, 10)
+        .frame(width: 150, height: 30)
+        .background(Theme.macEntry.opacity(0.65), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
+        .help(help)
     }
 
     private func statusWordColor(for readiness: BackendReadiness) -> Color {

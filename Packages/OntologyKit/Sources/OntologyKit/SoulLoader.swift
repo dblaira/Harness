@@ -15,7 +15,9 @@ public struct SoulDocument: Codable, Sendable, Equatable {
 }
 
 public enum SoulLoader {
-    public static let maxCharacters = 6_000
+    /// High enough that the full vault SOUL.md never truncates — the soul is
+    /// slot #1 of the stable prompt tier and must arrive whole.
+    public static let maxCharacters = 32_000
 
     public static func load(
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
