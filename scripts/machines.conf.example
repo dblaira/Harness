@@ -1,0 +1,6 @@
+# SSH host aliases — one per line (comments with #).
+# Requires passwordless SSH (Tailscale / LAN / ~/.ssh/config).
+#
+# Examples (rename to match your Host entries in ~/.ssh/config):
+# macbook-pro
+# mac-studio-other
