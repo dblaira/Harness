@@ -14,6 +14,7 @@ final class MacWorkbenchModel: ObservableObject {
         didSet { refreshRoutePlan() }
     }
     @Published var composerAttachments: [ComposerAttachment] = []
+    @Published var composerIntent = ComposerIntent()
     @Published var backend: Backend = .codex {
         didSet {
             guard backend != oldValue else { return }
@@ -112,8 +113,15 @@ final class MacWorkbenchModel: ObservableObject {
         chatThread = []
         draft = ""
         composerAttachments = []
+        composerIntent = ComposerIntent()
         searchText = ""
         status = "New session"
+    }
+
+    func mutateComposerIntent(_ body: (inout ComposerIntent) -> Void) {
+        var copy = composerIntent
+        body(&copy)
+        composerIntent = copy
     }
 
     func selectTool(_ tool: WorkbenchTool) {
@@ -465,7 +473,11 @@ final class MacWorkbenchModel: ObservableObject {
     }
 
     private var composedDraftPrompt: String {
-        ComposerAttachment.composedPrompt(userText: draft, attachments: composerAttachments)
+        ComposerIntent.composedPrompt(
+            userText: draft,
+            attachments: composerAttachments,
+            intent: composerIntent
+        )
     }
 
     var canSendComposer: Bool {
