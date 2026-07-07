@@ -51,6 +51,18 @@ log "user: ${user_id}"
 log "canonical_root: ${CANON:-MISSING}"
 log ""
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ "${MULTI_MAC_HEALTH_ONLY:-}" != "1" ]] && [[ -x "${SCRIPT_DIR}/sync-all-repos.sh" ]]; then
+  log "--- Auto-repair: clone missing + pull (sync-all-repos) ---"
+  if "${SCRIPT_DIR}/sync-all-repos.sh" >>"$REPORT" 2>&1; then
+    log "sync-all-repos: finished"
+  else
+    log "sync-all-repos: FAILED (see log)"
+    bump_issue
+  fi
+  log ""
+fi
+
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || { log "MISSING_CMD: $1"; bump_issue; return 1; }
 }
