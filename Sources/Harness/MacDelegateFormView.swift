@@ -47,6 +47,7 @@ struct MacDelegateFormView: View {
                     updateEditorHeight(viewportHeight: viewportHeight)
                     keepComposerCentered(scrollProxy, viewportHeight: viewportHeight)
                 }
+                .tint(Theme.savyCrimson)
                 .onChange(of: model.chatThread.count) { _, _ in
                     if let last = model.chatThread.last, last.role == .assistant {
                         DispatchQueue.main.async {
@@ -144,9 +145,9 @@ struct MacDelegateFormView: View {
     }
 
     private var composerIntentSections: some View {
-        HStack(alignment: .top, spacing: 8) {
-            VStack(alignment: .leading, spacing: 8) {
-                MacSuiteFormRows.intentCard("Pattern") {
+        HStack(alignment: .top, spacing: 6) {
+            VStack(alignment: .leading, spacing: 6) {
+                MacSuiteFormRows.composerIntentCard("Pattern") {
                     MacSuiteFormRows.menuRow(
                         title: "Pattern",
                         icon: "list.number",
@@ -157,7 +158,7 @@ struct MacDelegateFormView: View {
                     }
                 }
 
-                MacSuiteFormRows.intentCard("Choose") {
+                MacSuiteFormRows.composerIntentCard("Choose") {
                     MacSuiteFormRows.menuRow(
                         title: "Priority",
                         icon: "exclamationmark.3",
@@ -186,10 +187,9 @@ struct MacDelegateFormView: View {
                     }
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .top)
 
-            VStack(alignment: .leading, spacing: 8) {
-                MacSuiteFormRows.intentCard("Schedule") {
+            VStack(alignment: .leading, spacing: 6) {
+                MacSuiteFormRows.composerIntentCard("Schedule") {
                     composerScheduleRow(
                         title: "Due",
                         icon: "calendar",
@@ -221,7 +221,7 @@ struct MacDelegateFormView: View {
                     )
                 }
 
-                MacSuiteFormRows.intentCard("Organize") {
+                MacSuiteFormRows.composerIntentCard("Organize") {
                     MacSuiteFormRows.menuRow(
                         title: "Lift",
                         icon: "sparkles",
@@ -234,8 +234,8 @@ struct MacDelegateFormView: View {
                     composerFlagRow
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .top)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func composerScheduleRow(
@@ -265,12 +265,8 @@ struct MacDelegateFormView: View {
                         .foregroundStyle(Theme.savyTertiaryText)
                 }
             }
-            Spacer(minLength: 8)
-            Toggle("", isOn: isOn)
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .tint(Theme.savyCrimson)
+            Spacer(minLength: 4)
+            MacSuiteFormRows.switchToggle(isOn: isOn)
         }
         .frame(minHeight: 19)
     }
@@ -281,18 +277,13 @@ struct MacDelegateFormView: View {
             Text("Flag")
                 .font(Theme.savyRobotoMedium(9))
                 .foregroundStyle(Color.black)
-            Spacer(minLength: 8)
-            Toggle(
-                "",
+            Spacer(minLength: 4)
+            MacSuiteFormRows.switchToggle(
                 isOn: Binding(
                     get: { model.composerIntent.isFlagged },
                     set: { flagged in model.mutateComposerIntent { $0.isFlagged = flagged } }
                 )
             )
-            .labelsHidden()
-            .toggleStyle(.switch)
-            .controlSize(.mini)
-            .tint(Theme.savyCrimson)
         }
         .frame(minHeight: 18)
     }

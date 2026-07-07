@@ -201,7 +201,7 @@ struct ChatView: View {
         if APIKeyStore.loadKey(for: .grok) != nil { return .grok }
         return .claude
         #else
-        .codex
+        .harnessDefault
         #endif
     }
 

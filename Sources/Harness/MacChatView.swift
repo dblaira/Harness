@@ -430,6 +430,7 @@ struct MacChatView: View {
         macSuiteActionForm(activeDelegationRow)
             .padding(10)
         .background(Theme.savyPaper)
+        .tint(Theme.savyCrimson)
         .frame(minWidth: 660, idealWidth: 720, maxWidth: 780, minHeight: 520, idealHeight: 560, alignment: .top)
     }
 
@@ -736,11 +737,7 @@ struct MacChatView: View {
 
             Spacer(minLength: 8)
 
-            Toggle("", isOn: .constant(false))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .tint(Theme.savyCrimson)
+            MacSuiteFormRows.switchToggle(isOn: .constant(false))
         }
         .frame(minHeight: 19)
         .padding(.vertical, 0)
@@ -780,11 +777,7 @@ struct MacChatView: View {
                 .font(Theme.savyRobotoMedium(9))
                 .foregroundStyle(Color.black)
             Spacer(minLength: 8)
-            Toggle("", isOn: .constant(false))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .tint(Theme.savyCrimson)
+            MacSuiteFormRows.switchToggle(isOn: .constant(false))
         }
         .frame(minHeight: 18)
         .padding(.vertical, 0)

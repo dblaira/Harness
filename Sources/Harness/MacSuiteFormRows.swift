@@ -3,6 +3,16 @@ import SwiftUI
 
 /// Shared SAVY entry-form row styling — icons crimson, labels black, values crimson.
 enum MacSuiteFormRows {
+    static var switchToggleStyle: SwitchToggleStyle {
+        SwitchToggleStyle(tint: Theme.savyCrimson)
+    }
+
+    static func switchToggle(isOn: Binding<Bool>) -> some View {
+        Toggle("", isOn: isOn)
+            .labelsHidden()
+            .toggleStyle(switchToggleStyle)
+            .controlSize(.mini)
+    }
     static func sectionLabel(_ title: String) -> some View {
         Text(title)
             .font(Theme.savyRobotoMedium(8))
@@ -41,7 +51,7 @@ enum MacSuiteFormRows {
                 Text(title)
                     .font(Theme.savyRobotoMedium(9))
                     .foregroundStyle(Color.black)
-                Spacer(minLength: 8)
+                Spacer(minLength: 4)
                 Text(value)
                     .font(Theme.savyRobotoMedium(9))
                     .foregroundStyle(Theme.savyCrimson)
@@ -73,18 +83,15 @@ enum MacSuiteFormRows {
                     .font(Theme.savyRobotoMedium(8))
                     .foregroundStyle(Theme.savyTertiaryText)
             }
-            Spacer(minLength: 8)
-            Toggle("", isOn: isOn)
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .tint(Theme.savyCrimson)
+            Spacer(minLength: 4)
+            switchToggle(isOn: isOn)
         }
         .frame(minHeight: 19)
     }
 
     static func intentCard<Content: View>(
         _ title: String,
+        width: CGFloat? = nil,
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -94,13 +101,24 @@ enum MacSuiteFormRows {
             }
             .padding(.vertical, 1)
             .padding(.horizontal, 6)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: width == nil ? .infinity : width, alignment: .leading)
             .background(Theme.savyCard, in: RoundedRectangle(cornerRadius: 10))
             .overlay(
                 RoundedRectangle(cornerRadius: 10)
                     .stroke(Color.black.opacity(0.08), lineWidth: 1)
             )
         }
+        .frame(width: width, alignment: .leading)
+    }
+
+    /// Composer intent controls — fixed width so rows do not stretch across the chat column.
+    static let composerIntentCardWidth: CGFloat = 168
+
+    static func composerIntentCard<Content: View>(
+        _ title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        intentCard(title, width: composerIntentCardWidth, content: content)
     }
 }
 #endif
