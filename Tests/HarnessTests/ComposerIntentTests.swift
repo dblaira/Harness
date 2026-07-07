@@ -1,4 +1,5 @@
 import Foundation
+import OntologyKit
 import Testing
 @testable import Harness
 
@@ -30,7 +31,7 @@ import Testing
         intent: intent
     )
 
-    #expect(prompt.hasPrefix("DELEGATION CONTEXT"))
+    #expect(prompt.hasPrefix(DelegationContext.header))
     #expect(prompt.contains("Lift: Leverage"))
     #expect(prompt.contains("Ship the fix"))
 }

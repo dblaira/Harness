@@ -229,6 +229,9 @@ public enum PromptPacketBuilder {
             """
         }
         system += ClaudeClient.systemPrompt(from: ontology)
+        if DelegationContext.containsContext(in: prompt) {
+            system += "\n\n" + DelegationContext.systemInstruction + "\n"
+        }
         let cappedHistory = ConversationTurn.cappedHistory(conversationHistory)
         if !cappedHistory.isEmpty {
             system += "\n\nCHAT CONTINUITY: Prior turns in this thread are in the message history. Stay consistent with what you already said.\n"

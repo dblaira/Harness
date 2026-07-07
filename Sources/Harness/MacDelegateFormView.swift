@@ -355,6 +355,41 @@ struct MacDelegateFormView: View {
             .shadow(color: .black.opacity(0.06), radius: 2, y: 1)
     }
 
+    @ViewBuilder
+    private func userTurnBlock(_ text: String) -> some View {
+        let parsed = DelegationContext.parsePrompt(text)
+        VStack(alignment: .leading, spacing: 8) {
+            if !parsed.contextLines.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(parsed.contextLines, id: \.self) { line in
+                        Text(line)
+                            .font(Theme.savyRobotoMedium(9))
+                            .foregroundStyle(Theme.savyCrimson)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Color.white, in: Capsule())
+                            .overlay(Capsule().stroke(Theme.savyCrimson.opacity(0.35), lineWidth: 1))
+                    }
+                }
+            }
+
+            if !parsed.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text(parsed.message)
+                    .font(Theme.recallBody(17))
+                    .foregroundStyle(Color.black)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.savyCard, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.black.opacity(0.08), lineWidth: 1)
+        )
+    }
+
     private func fullTurnBlock(_ turn: ConversationTurn) -> some View {
         Group {
             if turn.role == .assistant {
@@ -367,18 +402,7 @@ struct MacDelegateFormView: View {
                 )
                 .textSelection(.enabled)
             } else {
-                Text(turn.text)
-                    .font(Theme.recallBody(17))
-                    .foregroundStyle(Theme.macInk)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Theme.macEntry, in: RoundedRectangle(cornerRadius: 10))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10)
-                            .stroke(Color.black.opacity(0.07), lineWidth: 1)
-                    )
+                userTurnBlock(turn.text)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

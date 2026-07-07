@@ -1,4 +1,5 @@
 import Foundation
+import OntologyKit
 
 /// Signals attached to a chat send so agents understand importance and intent.
 struct ComposerIntent: Equatable, Sendable {
@@ -36,7 +37,7 @@ struct ComposerIntent: Equatable, Sendable {
         if nudgeEnabled { lines.append("Nudge: \(Self.shortTime(nudgeTime))") }
         guard !lines.isEmpty else { return nil }
         return """
-        DELEGATION CONTEXT
+        \(DelegationContext.header)
         \(lines.joined(separator: "\n"))
         """
     }
@@ -49,7 +50,7 @@ struct ComposerIntent: Equatable, Sendable {
         let base = ComposerAttachment.composedPrompt(userText: userText, attachments: attachments)
         guard let context = intent.promptBlock() else { return base }
         guard !base.isEmpty else { return context }
-        return context + "\n\n---\n" + base
+        return context + DelegationContext.messageSeparator + base
     }
 
     private static let shortDateFormatter: DateFormatter = {
