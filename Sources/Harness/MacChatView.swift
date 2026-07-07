@@ -419,7 +419,7 @@ struct MacChatView: View {
                 .padding(14)
             }
         }
-        .background(Theme.savyDeepNavy)
+        .background(Theme.savyPaper)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(isPresented: $isDelegationEntryFormPresented) {
             delegationEntryFormSheet
@@ -429,7 +429,7 @@ struct MacChatView: View {
     private var delegationEntryFormSheet: some View {
         macSuiteActionForm(activeDelegationRow)
             .padding(10)
-        .background(Theme.savyDeepNavy)
+        .background(Theme.savyPaper)
         .frame(minWidth: 660, idealWidth: 720, maxWidth: 780, minHeight: 520, idealHeight: 560, alignment: .top)
     }
 

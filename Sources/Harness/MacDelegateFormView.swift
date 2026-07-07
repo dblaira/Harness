@@ -109,7 +109,7 @@ struct MacDelegateFormView: View {
             Button(action: model.send) {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 28))
-                    .foregroundStyle(model.canSendComposer ? Theme.macRed : Theme.macInk.opacity(0.25))
+                    .foregroundStyle(model.canSendComposer ? Theme.macRed : Theme.macFaint)
             }
             .buttonStyle(.plain)
             .disabled(!model.canSendComposer)
