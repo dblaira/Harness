@@ -6,7 +6,6 @@ enum APIKeyStore {
     private static let service = "com.adamblair.Harness"
     private static let claudeAccount = "anthropic_api_key"
     private static let xAIAccount = "xai_api_key"
-    private static let openAIAccount = "openai_api_key"
     private static let firecrawlAccount = "firecrawl_api_key"
 
     static func loadKey(for backend: Backend) -> String? {
@@ -97,7 +96,10 @@ enum APIKeyStore {
     private static func account(for backend: Backend) -> String? {
         switch backend {
         case .codex:
-            return openAIAccount
+            // No keychain account: Codex runs off its `codex login` session,
+            // and any OpenAI API key comes from the OPENAI_API_KEY env var —
+            // so selecting Codex never queries the keychain or prompts.
+            return nil
         case .grok:
             return xAIAccount
         case .claude:

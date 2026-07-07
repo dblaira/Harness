@@ -115,9 +115,10 @@ public struct CodexSessionClient: Sendable {
 
     /// Native tool calling through the ChatGPT subscriber `/responses` API,
     /// authenticated with the `codex login` session token instead of an API
-    /// key — so `.codex` is a full doer off the ChatGPT subscription. Uses
-    /// non-streaming so the `output` array (function calls + text) parses
-    /// cleanly. The Responses API tool shape is flat (no nested "function").
+    /// key — so `.codex` is a full doer off the ChatGPT subscription. The
+    /// endpoint REQUIRES `stream: true`, so this reads the SSE event stream and
+    /// assembles text + function calls from it. The Responses tool shape is
+    /// flat (no nested "function").
     public func send(
         messages: [Message],
         system: String,
@@ -144,14 +145,18 @@ public struct CodexSessionClient: Sendable {
             toolTranscript: toolTranscript
         ))
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (bytes, response) = try await URLSession.shared.bytes(for: request)
         let statusCode = (response as? HTTPURLResponse)?.statusCode
-        return try Self.parseToolResponse(data: data, statusCode: statusCode)
+        var lines: [String] = []
+        for try await line in bytes.lines { lines.append(line) }
+        return try Self.parseToolStream(lines: lines, statusCode: statusCode)
     }
 
     /// Responses-API request body with function tools. Prior loop turns replay
-    /// as `function_call` + `function_call_output` input items. Internal so
-    /// tests can assert the wire shape without network access.
+    /// as `function_call` + `function_call_output` input items. `stream` is
+    /// true because the codex `/responses` endpoint rejects non-streaming
+    /// requests ("Stream must be set to true"). Internal so tests can assert
+    /// the wire shape without network access.
     static func toolRequestBody(
         model: String,
         system: String,
@@ -189,7 +194,7 @@ public struct CodexSessionClient: Sendable {
             "instructions": system,
             "input": input,
             "store": false,
-            "stream": false,
+            "stream": true,
             "tools": tools.map {
                 [
                     "type": "function",
@@ -201,49 +206,61 @@ public struct CodexSessionClient: Sendable {
         ]
     }
 
-    /// Parse a Responses-API completion into text + tool calls. The `output`
-    /// array holds `function_call` and `message` items. Internal so tests can
-    /// feed fixture payloads.
-    static func parseToolResponse(data: Data, statusCode: Int?) throws -> BackendResponse {
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw CodexSessionError.badResponse("Unparseable Codex response.")
-        }
-        if let error = json["error"] as? [String: Any] {
-            let message = error["message"] as? String ?? "Unknown Codex API error"
-            if let statusCode {
-                throw CodexSessionError.badResponse("Codex session \(statusCode): \(message)")
-            }
-            throw CodexSessionError.badResponse(message)
-        }
-
+    /// Parse the Responses-API SSE stream into text + tool calls. Text comes
+    /// from `response.output_text.delta`; each completed function call arrives
+    /// whole in a `response.output_item.done` event (call_id + name +
+    /// arguments); usage rides on `response.completed`. Internal so tests can
+    /// feed fixture SSE lines.
+    static func parseToolStream(lines: [String], statusCode: Int?) throws -> BackendResponse {
         var text = ""
         var toolCalls: [ToolCallRequest] = []
-        for item in (json["output"] as? [[String: Any]]) ?? [] {
-            switch item["type"] as? String {
-            case "function_call":
-                guard let name = item["name"] as? String,
-                      let callId = item["call_id"] as? String else { continue }
-                let arguments = item["arguments"] as? String ?? "{}"
-                toolCalls.append(ToolCallRequest(id: callId, name: name, input: JSONValue.parse(arguments) ?? .object([:])))
-            case "message":
-                for part in (item["content"] as? [[String: Any]]) ?? []
-                where part["type"] as? String == "output_text" {
-                    if let piece = part["text"] as? String { text += piece }
+        var tokenCount: Int?
+        var streamedError: String?
+
+        for line in lines {
+            guard line.hasPrefix("data:") else { continue }
+            let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+            if payload == "[DONE]" { break }
+            guard let data = payload.data(using: .utf8),
+                  let event = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                continue
+            }
+            switch event["type"] as? String {
+            case "response.output_text.delta":
+                if let piece = event["delta"] as? String { text += piece }
+            case "response.output_item.done":
+                if let item = event["item"] as? [String: Any],
+                   item["type"] as? String == "function_call",
+                   let name = item["name"] as? String,
+                   let callId = item["call_id"] as? String {
+                    let arguments = item["arguments"] as? String ?? "{}"
+                    toolCalls.append(ToolCallRequest(id: callId, name: name, input: JSONValue.parse(arguments) ?? .object([:])))
                 }
+            case "response.completed":
+                if let resp = event["response"] as? [String: Any],
+                   let usage = resp["usage"] as? [String: Any],
+                   let total = usage["total_tokens"] as? Int, total > 0 {
+                    tokenCount = total
+                }
+            case "error", "response.failed":
+                streamedError = (event["error"] as? [String: Any])?["message"] as? String
+                    ?? event["message"] as? String
+                    ?? (event["response"] as? [String: Any]).flatMap { ($0["error"] as? [String: Any])?["message"] as? String }
             default:
                 continue
             }
         }
-        if text.isEmpty, let convenience = json["output_text"] as? String { text = convenience }
 
-        if let statusCode, statusCode != 200, text.isEmpty, toolCalls.isEmpty {
+        if let statusCode, statusCode != 200 {
+            let body = lines.joined(separator: "\n")
+            let message = Self.firstErrorMessage(from: body) ?? streamedError
+            if let message {
+                throw CodexSessionError.badResponse("Codex session \(statusCode): \(message)")
+            }
             throw CodexSessionError.badResponse("Codex session HTTP \(statusCode).")
         }
-
-        var tokenCount: Int?
-        if let usage = json["usage"] as? [String: Any],
-           let total = usage["total_tokens"] as? Int, total > 0 {
-            tokenCount = total
+        if text.isEmpty, toolCalls.isEmpty, let streamedError {
+            throw CodexSessionError.badResponse(streamedError)
         }
         return BackendResponse(text: text, tokenCount: tokenCount, cost: nil, toolCalls: toolCalls)
     }
