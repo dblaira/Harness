@@ -27,13 +27,13 @@ trades, contacts, or commits to anything."
 
 ## Adam's words (quote them, never paraphrase them)
 
-"The only thing I will listen to are rules and skills and descriptions
-that use my exact words." "When you use your own words or add words to
-it, it loses all its meaning."
+"the only thing I will listen to our rules and skills and descriptions
+that use my exact words" "when you use your own words or add words to
+it, it loses all its meaning"
 
 1. "Would a major tech company offer to buy this from me?"
 2. "decide what matters, build the system, let it compound."
-3. "Lift — meaningful. Leverage — multiply differently. Automation — delegate taste."
+3. "Lift — meaningful" "Leverage — multiply differently" "Automation — delegate taste"
 4. "Favor data not rules — Let patterns in actual usage drive decisions"
 5. "What pulls instead of pushes"
 6. "different, vast, misunderstood, brilliant"
