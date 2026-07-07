@@ -52,15 +52,31 @@ log "canonical_root: ${CANON:-MISSING}"
 log ""
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Skip auto-repair if run recently (avoids re-sync on every screen unlock)
+SYNC_STAMP="${REPORT_DIR}/last-auto-sync"
+MIN_GAP_SEC="${MULTI_MAC_SYNC_MIN_INTERVAL:-7200}"
+
 if [[ "${MULTI_MAC_HEALTH_ONLY:-}" != "1" ]] && [[ -x "${SCRIPT_DIR}/sync-all-repos.sh" ]]; then
-  log "--- Auto-repair: clone missing + pull (sync-all-repos) ---"
-  if "${SCRIPT_DIR}/sync-all-repos.sh" >>"$REPORT" 2>&1; then
-    log "sync-all-repos: finished"
-  else
-    log "sync-all-repos: FAILED (see log)"
-    bump_issue
+  run_sync=true
+  if [[ -f "$SYNC_STAMP" ]]; then
+    last="$(cat "$SYNC_STAMP" 2>/dev/null || echo 0)"
+    now="$(date +%s)"
+    if [[ "$((now - last))" -lt "$MIN_GAP_SEC" ]]; then
+      log "--- Auto-repair: skipped (synced within ${MIN_GAP_SEC}s) ---"
+      run_sync=false
+    fi
   fi
-  log ""
+  if [[ "$run_sync" == true ]]; then
+    log "--- Auto-repair: clone missing + pull (sync-all-repos) ---"
+    if "${SCRIPT_DIR}/sync-all-repos.sh" >>"$REPORT" 2>&1; then
+      log "sync-all-repos: finished"
+      date +%s >"$SYNC_STAMP"
+    else
+      log "sync-all-repos: FAILED (see log)"
+      bump_issue
+    fi
+    log ""
+  fi
 fi
 
 require_cmd() {
