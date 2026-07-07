@@ -29,7 +29,7 @@ struct MacDelegateFormView: View {
                         if model.isRunning {
                             ProgressView()
                                 .controlSize(.small)
-                                .tint(Theme.macInk.opacity(0.5))
+                                .tint(Theme.savyCrimson)
                                 .frame(maxWidth: .infinity)
                                 .id("running-status")
                         }
@@ -87,7 +87,7 @@ struct MacDelegateFormView: View {
 
     private var composerDelegateSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            composerSectionLabel("Delegate")
+            MacSuiteFormRows.sectionLabel("Delegate")
 
             VStack(alignment: .leading, spacing: 0) {
                 if !model.composerAttachments.isEmpty {
@@ -110,7 +110,7 @@ struct MacDelegateFormView: View {
 
                         TextEditor(text: $model.draft)
                             .font(Theme.recallBody(17))
-                            .foregroundStyle(Theme.macEntryInk)
+                            .foregroundStyle(Color.black)
                             .scrollContentBackground(.hidden)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 8)
@@ -133,10 +133,12 @@ struct MacDelegateFormView: View {
                 }
                 .padding(10)
             }
-            .background(Theme.macEntry, in: RoundedRectangle(cornerRadius: 10))
+            .padding(.vertical, 1)
+            .padding(.horizontal, 6)
+            .background(Theme.savyCard, in: RoundedRectangle(cornerRadius: 10))
             .overlay(
                 RoundedRectangle(cornerRadius: 10)
-                    .stroke(Color.black.opacity(0.09), lineWidth: 1)
+                    .stroke(Color.black.opacity(0.08), lineWidth: 1)
             )
         }
     }
@@ -144,8 +146,8 @@ struct MacDelegateFormView: View {
     private var composerIntentSections: some View {
         HStack(alignment: .top, spacing: 8) {
             VStack(alignment: .leading, spacing: 8) {
-                composerIntentCard("Pattern") {
-                    composerMenuRow(
+                MacSuiteFormRows.intentCard("Pattern") {
+                    MacSuiteFormRows.menuRow(
                         title: "Pattern",
                         icon: "list.number",
                         value: model.composerIntent.pattern,
@@ -155,8 +157,8 @@ struct MacDelegateFormView: View {
                     }
                 }
 
-                composerIntentCard("Choose") {
-                    composerMenuRow(
+                MacSuiteFormRows.intentCard("Choose") {
+                    MacSuiteFormRows.menuRow(
                         title: "Priority",
                         icon: "exclamationmark.3",
                         value: model.composerIntent.priority,
@@ -164,8 +166,8 @@ struct MacDelegateFormView: View {
                     ) { option in
                         model.mutateComposerIntent { $0.priority = option }
                     }
-                    composerDivider
-                    composerMenuRow(
+                    MacSuiteFormRows.divider()
+                    MacSuiteFormRows.menuRow(
                         title: "Effort",
                         icon: "timer",
                         value: model.composerIntent.effort,
@@ -173,8 +175,8 @@ struct MacDelegateFormView: View {
                     ) { option in
                         model.mutateComposerIntent { $0.effort = option }
                     }
-                    composerDivider
-                    composerMenuRow(
+                    MacSuiteFormRows.divider()
+                    MacSuiteFormRows.menuRow(
                         title: "Energy",
                         icon: "bolt",
                         value: model.composerIntent.energy,
@@ -187,14 +189,40 @@ struct MacDelegateFormView: View {
             .frame(maxWidth: .infinity, alignment: .top)
 
             VStack(alignment: .leading, spacing: 8) {
-                composerIntentCard("Schedule") {
-                    composerDueRow
-                    composerDivider
-                    composerNudgeRow
+                MacSuiteFormRows.intentCard("Schedule") {
+                    composerScheduleRow(
+                        title: "Due",
+                        icon: "calendar",
+                        detail: Self.formatDueDate(model.composerIntent.dueDate),
+                        isOn: Binding(
+                            get: { model.composerIntent.dueEnabled },
+                            set: { enabled in model.mutateComposerIntent { $0.dueEnabled = enabled } }
+                        ),
+                        date: Binding(
+                            get: { model.composerIntent.dueDate },
+                            set: { date in model.mutateComposerIntent { $0.dueDate = date } }
+                        ),
+                        components: .date
+                    )
+                    MacSuiteFormRows.divider()
+                    composerScheduleRow(
+                        title: "Nudge",
+                        icon: "bell",
+                        detail: Self.formatNudgeTime(model.composerIntent.nudgeTime),
+                        isOn: Binding(
+                            get: { model.composerIntent.nudgeEnabled },
+                            set: { enabled in model.mutateComposerIntent { $0.nudgeEnabled = enabled } }
+                        ),
+                        date: Binding(
+                            get: { model.composerIntent.nudgeTime },
+                            set: { date in model.mutateComposerIntent { $0.nudgeTime = date } }
+                        ),
+                        components: .hourAndMinute
+                    )
                 }
 
-                composerIntentCard("Organize") {
-                    composerMenuRow(
+                MacSuiteFormRows.intentCard("Organize") {
+                    MacSuiteFormRows.menuRow(
                         title: "Lift",
                         icon: "sparkles",
                         value: model.composerIntent.lift,
@@ -202,7 +230,7 @@ struct MacDelegateFormView: View {
                     ) { option in
                         model.mutateComposerIntent { $0.lift = option }
                     }
-                    composerDivider
+                    MacSuiteFormRows.divider()
                     composerFlagRow
                 }
             }
@@ -210,162 +238,48 @@ struct MacDelegateFormView: View {
         }
     }
 
-    private func composerSectionLabel(_ title: String) -> some View {
-        Text(title)
-            .font(Theme.savyRobotoMedium(11))
-            .foregroundStyle(Color.black.opacity(0.48))
-            .padding(.leading, 8)
-    }
-
-    private func composerIntentCard<Content: View>(
-        _ title: String,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            composerSectionLabel(title)
-            VStack(alignment: .leading, spacing: 0) {
-                content()
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.macEntry, in: RoundedRectangle(cornerRadius: 10))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(Color.black.opacity(0.09), lineWidth: 1)
-            )
-        }
-    }
-
-    private func composerMenuRow(
+    private func composerScheduleRow(
         title: String,
         icon: String,
-        value: String,
-        options: [String],
-        onSelect: @escaping (String) -> Void
+        detail: String,
+        isOn: Binding<Bool>,
+        date: Binding<Date>,
+        components: DatePickerComponents
     ) -> some View {
-        Menu {
-            ForEach(options, id: \.self) { option in
-                Button(option) { onSelect(option) }
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: icon)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Theme.macRed)
-                    .frame(width: 17)
+        HStack(spacing: 6) {
+            MacSuiteFormRows.intentIcon(icon)
+            VStack(alignment: .leading, spacing: 0) {
                 Text(title)
-                    .font(Theme.savyRobotoMedium(11))
+                    .font(Theme.savyRobotoMedium(9))
                     .foregroundStyle(Color.black)
-                Spacer(minLength: 8)
-                Text(value)
-                    .font(Theme.savyRobotoMedium(11))
-                    .foregroundStyle(Theme.macRed)
-                    .lineLimit(1)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 7, weight: .semibold))
-                    .foregroundStyle(Theme.macRed)
-            }
-            .frame(minHeight: 22)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var composerDueRow: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "calendar")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Theme.macRed)
-                .frame(width: 17)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Due")
-                    .font(Theme.savyRobotoMedium(11))
-                    .foregroundStyle(Color.black)
-                if model.composerIntent.dueEnabled {
-                    DatePicker(
-                        "",
-                        selection: Binding(
-                            get: { model.composerIntent.dueDate },
-                            set: { date in model.mutateComposerIntent { $0.dueDate = date } }
-                        ),
-                        displayedComponents: .date
-                    )
-                    .labelsHidden()
-                    .datePickerStyle(.compact)
-                    .font(Theme.savyRobotoMedium(10))
+                if isOn.wrappedValue {
+                    DatePicker("", selection: date, displayedComponents: components)
+                        .labelsHidden()
+                        .datePickerStyle(.compact)
+                        .font(Theme.savyRobotoMedium(8))
+                        .foregroundStyle(Theme.savyTertiaryText)
+                        .tint(Theme.savyCrimson)
+                } else {
+                    Text(detail)
+                        .font(Theme.savyRobotoMedium(8))
+                        .foregroundStyle(Theme.savyTertiaryText)
                 }
             }
-
             Spacer(minLength: 8)
-
-            Toggle(
-                "",
-                isOn: Binding(
-                    get: { model.composerIntent.dueEnabled },
-                    set: { enabled in model.mutateComposerIntent { $0.dueEnabled = enabled } }
-                )
-            )
-            .labelsHidden()
-            .toggleStyle(.switch)
-            .controlSize(.mini)
-            .tint(Theme.macRed)
+            Toggle("", isOn: isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .tint(Theme.savyCrimson)
         }
-        .frame(minHeight: 24)
-    }
-
-    private var composerNudgeRow: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "bell")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Theme.macRed)
-                .frame(width: 17)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Nudge")
-                    .font(Theme.savyRobotoMedium(11))
-                    .foregroundStyle(Color.black)
-                if model.composerIntent.nudgeEnabled {
-                    DatePicker(
-                        "",
-                        selection: Binding(
-                            get: { model.composerIntent.nudgeTime },
-                            set: { date in model.mutateComposerIntent { $0.nudgeTime = date } }
-                        ),
-                        displayedComponents: .hourAndMinute
-                    )
-                    .labelsHidden()
-                    .datePickerStyle(.compact)
-                    .font(Theme.savyRobotoMedium(10))
-                }
-            }
-
-            Spacer(minLength: 8)
-
-            Toggle(
-                "",
-                isOn: Binding(
-                    get: { model.composerIntent.nudgeEnabled },
-                    set: { enabled in model.mutateComposerIntent { $0.nudgeEnabled = enabled } }
-                )
-            )
-            .labelsHidden()
-            .toggleStyle(.switch)
-            .controlSize(.mini)
-            .tint(Theme.macRed)
-        }
-        .frame(minHeight: 24)
+        .frame(minHeight: 19)
     }
 
     private var composerFlagRow: some View {
         HStack(spacing: 6) {
-            Image(systemName: "flag")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Theme.macRed)
-                .frame(width: 17)
+            MacSuiteFormRows.intentIcon("flag")
             Text("Flag")
-                .font(Theme.savyRobotoMedium(11))
+                .font(Theme.savyRobotoMedium(9))
                 .foregroundStyle(Color.black)
             Spacer(minLength: 8)
             Toggle(
@@ -378,16 +292,35 @@ struct MacDelegateFormView: View {
             .labelsHidden()
             .toggleStyle(.switch)
             .controlSize(.mini)
-            .tint(Theme.macRed)
+            .tint(Theme.savyCrimson)
         }
-        .frame(minHeight: 22)
+        .frame(minHeight: 18)
     }
 
     private var composerDivider: some View {
-        Rectangle()
-            .fill(Color.black.opacity(0.08))
-            .frame(height: 1)
-            .padding(.leading, 12)
+        MacSuiteFormRows.divider()
+    }
+
+    private static let dueDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter
+    }()
+
+    private static let nudgeTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    private static func formatDueDate(_ date: Date) -> String {
+        dueDateFormatter.string(from: date)
+    }
+
+    private static func formatNudgeTime(_ date: Date) -> String {
+        nudgeTimeFormatter.string(from: date)
     }
 
     @ViewBuilder
@@ -402,7 +335,7 @@ struct MacDelegateFormView: View {
             Button(action: model.send) {
                 composerActionIcon(
                     "arrow.up",
-                    tint: model.canSendComposer ? Theme.macRed : Theme.macFaint
+                    tint: model.canSendComposer ? Theme.savyCrimson : Theme.savyTertiaryText
                 )
             }
             .buttonStyle(.plain)
@@ -482,7 +415,7 @@ struct MacDelegateFormView: View {
                 Label("New", systemImage: "plus.bubble")
             }
         } label: {
-            composerActionIcon("plus", tint: Theme.macRed)
+            composerActionIcon("plus", tint: Theme.savyCrimson)
         }
         .menuStyle(.borderlessButton)
         .help("Add")
@@ -494,7 +427,7 @@ struct MacDelegateFormView: View {
                 HStack(spacing: 4) {
                     Image(systemName: attachment.chipIcon)
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Theme.macRed)
+                        .foregroundStyle(Theme.savyCrimson)
                     Button { model.removeComposerAttachment(attachment) } label: {
                         Image(systemName: "xmark")
                             .font(.system(size: 9, weight: .bold))
