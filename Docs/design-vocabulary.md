@@ -40,12 +40,30 @@ Compiled 2026-07-06 from the four public repos at github.com/dblaira.
 | Overdue red | `#EF4444` | overdue action | `overdueRed` (Understood) |
 | Failed text | crimson `#DC143C` | failed status text | SAVY content status band |
 
-### Harness macOS palette (already shipped in `Sources/Harness/Theme.swift`)
+### Harness macOS palette (shipped in `Sources/Harness/Theme.swift`)
 
-`macBg #0E1B2A`, `macInk #C9B79A`, `macEntry #2A2E35`, `macHair #4A5568 @40%`,
-`macRed #C8102E`, `macFaint #8A93A0 @55%`, plus the SAVY copies
-(`savyDeepNavy`, `savyCrimson`, `savyCard`, `savyPaper`, `savyPaperAccent`,
-`savyBottomNavTan`).
+Harness mac surfaces are SAVY light: `macBg` = paper `#F8F4ED`, `macInk` ink
+`#000000`, `macEntry` cream card `#F3EAD5`, `macBarBg`/`macTan` bottom-nav tan
+`#CCB394`, `macRed` SAVY shell crimson `#E60E44`, `macHair` black @8%,
+`macFaint` black @45%, `macMuted` black @62%. SAVY tokens quoted verbatim from
+SAVY-iOS: `savyDeepNavy #08172D`, `savyCrimson #E60E44`, `savyGreen #2AB860`
+(`SavyTheme.green`), `savyCard #F3EAD5`, `savyPaper #F8F4ED`, `savyPaperAccent
+#EFEBE4` (`SavyTheme.paperAccent`), `savyBeliefCard #F5F0E6`
+(`SavyTheme.beliefCard`), `savySectionBand #F4EFE7` (`SavyTheme.sectionBand`),
+`savyTabActive #2E2716` (`Brand.tabActive`), `savyBottomNavTan #CCB394`,
+`savySecondaryText` black @62%, `savyTertiaryText` black @45%.
+
+The SAVY component set lives in `Sources/Harness/SavyComponents.swift`, each
+ported from SAVY-iOS with its source cited in code: `SavyHeroHeader`
+(display serif 48–64 + crimson divider, navy and paper variants),
+`SavyEyebrowBand` (15pt heavy, tracking 2.5, tan on navy), the four card
+species `SavyLeverageCard` (white, shadow black @5% radius 10 y 4),
+`SavyStoryCard` (cream, flat), `SavyQuoteCard` (white, crimson bar, shadow
+black @6% radius 12 y 5), `SavyDarkCard` (near-black, white @8% hairline),
+plus `SavyLockedInToast` (the `"Locked In"` save confirmation, shadow black
+@20% radius 28 y 12) and `SavyTagChip` (15pt semibold capsule).
+`SavyComponentTypography.timesSerif` is the Times New Roman quote/carousel
+serif already listed under Fonts.
 
 ---
 

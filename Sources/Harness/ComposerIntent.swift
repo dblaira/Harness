@@ -75,3 +75,43 @@ struct ComposerIntent: Equatable, Sendable {
         shortTimeFormatter.string(from: date)
     }
 }
+
+// MARK: - One-shot routine creation (Due / Nudge)
+
+/// The Schedule signals are not just prompt annotations any more: a send
+/// with a Due date or a Nudge time also registers a oneshot routine, so the
+/// agent actually comes back to the work when the moment arrives.
+extension ComposerIntent {
+    /// The oneshot routine drafts this intent implies for a given send.
+    /// Due schedules at the due date; a Nudge already in the past rolls
+    /// forward to the next day at the same wall-clock time.
+    func scheduledRoutineDrafts(userText: String, now: Date = Date()) -> [RoutineDraft] {
+        ComposerRoutineDrafts.drafts(
+            userText: userText,
+            dueDate: dueEnabled ? dueDate : nil,
+            nudgeTime: nudgeEnabled ? nudgeTime : nil,
+            now: now
+        )
+    }
+
+    /// Send-time hook: registers the implied oneshot routines with the
+    /// running scheduler and returns a copy with the schedule signals
+    /// consumed, so re-sending in the same session cannot double-register.
+    /// Call this once per send, with the same prompt handed to the run —
+    /// e.g. `composerIntent = composerIntent.registeringScheduledRoutines(userText: prompt)`.
+    func registeringScheduledRoutines(
+        userText: String,
+        scheduler: RoutineScheduler? = RoutineScheduler.shared,
+        now: Date = Date()
+    ) -> ComposerIntent {
+        guard dueEnabled || nudgeEnabled else { return self }
+        guard let scheduler else { return self }
+        for draft in scheduledRoutineDrafts(userText: userText, now: now) {
+            scheduler.add(draft, now: now)
+        }
+        var consumed = self
+        consumed.dueEnabled = false
+        consumed.nudgeEnabled = false
+        return consumed
+    }
+}

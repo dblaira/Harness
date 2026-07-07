@@ -5,9 +5,17 @@ import OntologyKit
 /// Words only in the editor and in thread content. Plus to attach, arrow to send.
 struct MacDelegateFormView: View {
     @ObservedObject var model: MacWorkbenchModel
+    /// The bouncer's pending queue (same instance as `model.toolApprovals`),
+    /// observed here so approval cards appear the moment the loop suspends.
+    @ObservedObject var approvals: ToolApprovalStore
     @State private var showAttachments = false
     @State private var editorHeight: CGFloat = 156
     @FocusState private var questionFocused: Bool
+
+    init(model: MacWorkbenchModel) {
+        self.model = model
+        self.approvals = model.toolApprovals
+    }
 
     private let columnMaxWidth: CGFloat = 780
 
@@ -23,15 +31,38 @@ struct MacDelegateFormView: View {
                                 .id(turn.id)
                         }
 
+                        ForEach(approvals.pendingRequests) { request in
+                            MacToolApprovalCard(
+                                request: request,
+                                onApprove: { always in
+                                    model.approveToolRequest(request, always: always)
+                                },
+                                onDeny: {
+                                    model.denyToolRequest(request)
+                                }
+                            )
+                            .id("approval-\(request.id)")
+                        }
+
                         composerBlock
                             .id("composer")
 
                         if model.isRunning {
-                            ProgressView()
-                                .controlSize(.small)
-                                .tint(Theme.savyCrimson)
-                                .frame(maxWidth: .infinity)
-                                .id("running-status")
+                            Group {
+                                if let monitor = model.activeToolLoop {
+                                    MacToolLoopStatusRow(
+                                        monitor: monitor,
+                                        fallbackStatus: model.status,
+                                        onCancel: model.cancelRun
+                                    )
+                                } else {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                        .tint(Theme.savyCrimson)
+                                        .frame(maxWidth: .infinity)
+                                }
+                            }
+                            .id("running-status")
                         }
                     }
                     .padding(.horizontal, 32)
@@ -62,10 +93,29 @@ struct MacDelegateFormView: View {
                 .onChange(of: model.isRunning) { _, _ in
                     keepComposerCentered(scrollProxy, viewportHeight: viewportHeight)
                 }
+                .onChange(of: approvals.pendingRequests.count) { old, new in
+                    // Scroll to the request that was just added (the newest is
+                    // appended last), not whichever happens to be first.
+                    guard new > old, let newest = approvals.pendingRequests.last else { return }
+                    DispatchQueue.main.async {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            scrollProxy.scrollTo("approval-\(newest.id)", anchor: .center)
+                        }
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.macBg)
+        .overlay {
+            if model.showApprovalToast {
+                // Confirmation only — never intercept taps, or its ~1.4s
+                // lifetime would swallow clicks on the next approval card.
+                SavyLockedInToast()
+                    .allowsHitTesting(false)
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: model.showApprovalToast)
         .sheet(isPresented: $showAttachments) {
             MacComposerAttachmentSheet(model: model)
         }
@@ -457,6 +507,172 @@ struct MacDelegateFormView: View {
             }
         }
         .padding(.bottom, 6)
+    }
+}
+
+// MARK: - The bouncer's approval card
+
+/// The law rendered as UI: "Agents propose. The bouncer checks. You decide."
+/// A suspended tool call shows exactly what the agent proposes — command,
+/// path, or content preview, verbatim — and waits for Adam. Approve unblocks
+/// the one call; Always allow also persists the fired pattern ids; Deny feeds
+/// the refusal back to the agent as an error result and the loop continues.
+private struct MacToolApprovalCard: View {
+    let request: ToolApprovalRequest
+    let onApprove: (_ always: Bool) -> Void
+    let onDeny: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SavyDarkCard(
+                badge: "Agents propose. The bouncer checks. You decide.",
+                badgeIcon: "shield.lefthalf.filled",
+                title: request.toolName,
+                detail: request.reason
+            )
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("PROPOSED")
+                    .font(.system(size: 10, weight: .heavy))
+                    .tracking(1.8)
+                    .foregroundStyle(Theme.savyTertiaryText)
+
+                Text(request.summary)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(Color.black)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(Theme.savyCard, in: RoundedRectangle(cornerRadius: 8))
+
+                if let detail = request.detail,
+                   !detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    ScrollView {
+                        Text(detail)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(Color.black.opacity(0.72))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 140)
+                    .padding(10)
+                    .background(Theme.savyCard, in: RoundedRectangle(cornerRadius: 8))
+                }
+
+                HStack(spacing: 10) {
+                    approvalButton("Deny", role: .secondary) { onDeny() }
+                        .help("Refuse this call; the agent is told no and keeps going")
+
+                    Spacer(minLength: 8)
+
+                    if !request.patternIds.isEmpty {
+                        approvalButton("Always allow", role: .secondary) { onApprove(true) }
+                            .help("Approve and allowlist this pattern for future runs")
+                    }
+
+                    approvalButton("Approve", role: .primary) { onApprove(false) }
+                        .help("Let this one call run")
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.white)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.black.opacity(0.08), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.16), radius: 16, y: 8)
+    }
+
+    private enum ButtonRole {
+        case primary
+        case secondary
+    }
+
+    private func approvalButton(
+        _ title: String,
+        role: ButtonRole,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(role == .primary ? Color.white : Color.black)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 7)
+                .background(
+                    role == .primary ? Theme.savyCrimson : Color.white,
+                    in: Capsule()
+                )
+                .overlay(Capsule().stroke(Color.black.opacity(role == .primary ? 0 : 0.12), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Live tool-loop status
+
+/// Updating status row for an active run: current phase, running tool,
+/// iteration budget, and a Cancel control that aborts the loop and kills any
+/// tool subprocesses.
+private struct MacToolLoopStatusRow: View {
+    @ObservedObject var monitor: ToolLoopMonitor
+    let fallbackStatus: String
+    let onCancel: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+                .tint(Theme.savyCrimson)
+
+            Text(statusText)
+                .font(Theme.savyRobotoMedium(10))
+                .foregroundStyle(Color.black.opacity(0.62))
+                .lineLimit(1)
+
+            if monitor.progress.iteration > 0 {
+                Text("\(monitor.progress.iteration)/\(monitor.progress.maxIterations)")
+                    .font(Theme.savyRobotoMedium(9))
+                    .foregroundStyle(Theme.savyTertiaryText)
+            }
+
+            Spacer(minLength: 8)
+
+            Button("Cancel") { onCancel() }
+                .buttonStyle(.plain)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.savyCrimson)
+                .help("Cancel the run and kill any tool subprocesses")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.black.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    private var statusText: String {
+        switch monitor.progress.phase {
+        case .idle, .callingModel:
+            return "Calling model…"
+        case .runningTool:
+            return "Running \(monitor.progress.currentTool ?? "tool")…"
+        case .finished:
+            return "Finishing…"
+        case .budgetExhausted:
+            return "Tool budget exhausted"
+        case .cancelled:
+            return "Cancelling…"
+        case .failed:
+            return fallbackStatus
+        }
     }
 }
 

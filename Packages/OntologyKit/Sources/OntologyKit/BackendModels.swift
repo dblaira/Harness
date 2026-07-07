@@ -26,6 +26,8 @@ public enum TraceStage: String, Codable, Sendable, Equatable {
     case graphHealth
     case authorityRetrieval
     case supportingRetrieval
+    case toolCall
+    case toolResult
     case modelExecution
     case evaluation
     case traceSaved
@@ -427,6 +429,11 @@ public struct ModelPacket: Codable, Sendable, Equatable {
     public let conversationHistory: [ConversationTurn]
     public let soulPath: String?
     public let promptPacketHash: String
+    /// Tool definitions the model may call (empty means single-shot). The
+    /// tools list is the ONLY capability grant — no spend/trade/contact/
+    /// commit tool exists in `HarnessToolCatalog`, and every mutation a tool
+    /// can reach routes through the bouncer.
+    public let tools: [ToolSpec]
 
     public init(
         userPrompt: String,
@@ -437,7 +444,8 @@ public struct ModelPacket: Codable, Sendable, Equatable {
         images: [ModelImageAttachment] = [],
         conversationHistory: [ConversationTurn] = [],
         soulPath: String? = nil,
-        promptPacketHash: String
+        promptPacketHash: String,
+        tools: [ToolSpec] = []
     ) {
         self.userPrompt = userPrompt
         self.system = system
@@ -448,6 +456,68 @@ public struct ModelPacket: Codable, Sendable, Equatable {
         self.conversationHistory = conversationHistory
         self.soulPath = soulPath
         self.promptPacketHash = promptPacketHash
+        self.tools = tools
+    }
+
+    /// Copy of this packet with a tool catalog attached. Lets the run
+    /// service grant tools without changing `PromptPacketBuilder.makePacket`
+    /// call sites (WS-A1 owns that file).
+    public func withTools(_ tools: [ToolSpec]) -> ModelPacket {
+        ModelPacket(
+            userPrompt: userPrompt,
+            system: system,
+            authorityHits: authorityHits,
+            memoryHits: memoryHits,
+            policyDirectives: policyDirectives,
+            images: images,
+            conversationHistory: conversationHistory,
+            soulPath: soulPath,
+            promptPacketHash: promptPacketHash,
+            tools: tools
+        )
+    }
+}
+
+/// One tool call the model asked for: the provider call id (tool_use id for
+/// Anthropic, tool_call id for OpenAI-compatible APIs), the tool name, and
+/// the parsed JSON input.
+public struct ToolCallRequest: Codable, Sendable, Equatable {
+    public let id: String
+    public let name: String
+    public let input: JSONValue
+
+    public init(id: String, name: String, input: JSONValue) {
+        self.id = id
+        self.name = name
+        self.input = input
+    }
+}
+
+/// The executor's answer to one tool call, keyed by the provider call id so
+/// clients can pair tool_result/tool messages with the originating call.
+public struct ToolCallResult: Codable, Sendable, Equatable {
+    public let callId: String
+    public let result: ToolResult
+
+    public init(callId: String, result: ToolResult) {
+        self.callId = callId
+        self.result = result
+    }
+}
+
+/// One completed round of the agentic loop: what the model said, the tool
+/// calls it made, and what the tools returned. Backends replay these as
+/// provider-native tool_use/tool_result (Anthropic) or tool_calls/tool
+/// (OpenAI-compatible) messages when continuing the conversation.
+public struct ToolLoopTurn: Codable, Sendable, Equatable {
+    public let assistantText: String
+    public let toolCalls: [ToolCallRequest]
+    public let toolResults: [ToolCallResult]
+
+    public init(assistantText: String, toolCalls: [ToolCallRequest], toolResults: [ToolCallResult]) {
+        self.assistantText = assistantText
+        self.toolCalls = toolCalls
+        self.toolResults = toolResults
     }
 }
 
@@ -455,15 +525,107 @@ public struct BackendResponse: Codable, Sendable, Equatable {
     public let text: String
     public let tokenCount: Int?
     public let cost: Double?
+    /// Tool calls the model wants executed before it can finish. Empty for
+    /// single-shot backends and for the final answer of a tool loop.
+    public let toolCalls: [ToolCallRequest]
 
-    public init(text: String, tokenCount: Int?, cost: Double?) {
+    public init(text: String, tokenCount: Int?, cost: Double?, toolCalls: [ToolCallRequest] = []) {
         self.text = text
         self.tokenCount = tokenCount
         self.cost = cost
+        self.toolCalls = toolCalls
     }
 }
 
 public protocol ModelBackendAdapter: Sendable {
     var metadata: BackendMetadata { get }
     func execute(packet: ModelPacket) async throws -> BackendResponse
+}
+
+/// A backend that can run the native tool loop: it accepts the packet's tool
+/// catalog, replays prior loop turns, and surfaces new tool calls on the
+/// response. Backends without native tool support simply never conform (or
+/// report `supportsTools == false`) and stay single-shot.
+public protocol ToolCapableModelBackend: ModelBackendAdapter {
+    /// Whether this backend can actually speak native tool calls right now
+    /// (e.g. Grok can through xAI API keys or the Grok session proxy; CLI
+    /// subprocess fallbacks stay single-shot with their safety flags).
+    var supportsTools: Bool { get }
+    func execute(packet: ModelPacket, toolTranscript: [ToolLoopTurn]) async throws -> BackendResponse
+}
+
+// MARK: - JSONValue <-> Foundation bridging
+
+public extension JSONValue {
+    /// Foundation representation for JSONSerialization request bodies.
+    var anyValue: Any {
+        switch self {
+        case .null:
+            return NSNull()
+        case .bool(let value):
+            return value
+        case .number(let value):
+            if let int = Int(exactly: value) { return int }
+            return value
+        case .string(let value):
+            return value
+        case .array(let values):
+            return values.map(\.anyValue)
+        case .object(let values):
+            return values.mapValues(\.anyValue)
+        }
+    }
+
+    /// Parse a JSONSerialization tree (the shape provider responses arrive in).
+    init?(any: Any) {
+        if any is NSNull {
+            self = .null
+            return
+        }
+        if let number = any as? NSNumber {
+            if CFGetTypeID(number) == CFBooleanGetTypeID() {
+                self = .bool(number.boolValue)
+            } else {
+                self = .number(number.doubleValue)
+            }
+            return
+        }
+        if let string = any as? String {
+            self = .string(string)
+            return
+        }
+        if let array = any as? [Any] {
+            var values: [JSONValue] = []
+            values.reserveCapacity(array.count)
+            for element in array {
+                guard let value = JSONValue(any: element) else { return nil }
+                values.append(value)
+            }
+            self = .array(values)
+            return
+        }
+        if let dictionary = any as? [String: Any] {
+            var values: [String: JSONValue] = [:]
+            values.reserveCapacity(dictionary.count)
+            for (key, element) in dictionary {
+                guard let value = JSONValue(any: element) else { return nil }
+                values[key] = value
+            }
+            self = .object(values)
+            return
+        }
+        return nil
+    }
+
+    /// Compact JSON text (OpenAI-compatible tool_calls carry arguments as a
+    /// JSON string).
+    var jsonString: String {
+        guard let data = try? JSONSerialization.data(
+            withJSONObject: anyValue,
+            options: [.fragmentsAllowed, .sortedKeys]
+        ), let text = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return text
+    }
 }

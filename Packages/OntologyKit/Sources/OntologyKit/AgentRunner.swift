@@ -24,6 +24,7 @@ public enum BackendReadiness: Equatable, Sendable {
     case failed(message: String)
 
     public static let codexAuthorizationAction = "install codex CLI and run codex login --device-auth"
+    public static let grokAuthorizationAction = "run grok login"
 
     /// The status word, verbatim from SAVY's content status band.
     public var statusWord: String {
@@ -126,6 +127,10 @@ public struct AgentRunner: Sendable {
                 localServerReachable: await hermesReachable()
             )
         case .codex:
+            let openAIEnvKey = ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? ""
+            if keyPresent || !openAIEnvKey.isEmpty {
+                return .live
+            }
             #if os(macOS)
             guard let binary = codexPath else {
                 return BackendReadiness.evaluate(
@@ -151,26 +156,16 @@ public struct AgentRunner: Sendable {
             #endif
         case .grok:
             #if os(macOS)
-            let binary = grokPath
-            var probe: Result<Void, Error>?
-            if !keyPresent, let binary {
-                let runner = self
-                probe = await Task.detached(priority: .userInitiated) {
-                    do {
-                        _ = try runner.shell(binary, ["--version"], timeout: 5)
-                        return Result<Void, Error>.success(())
-                    } catch {
-                        return Result<Void, Error>.failure(error)
-                    }
-                }.value
+            if keyPresent {
+                return BackendReadiness.evaluate(
+                    backend: backend,
+                    keyPresent: true,
+                    cliFound: grokPath != nil,
+                    cliProbe: nil,
+                    localServerReachable: false
+                )
             }
-            return BackendReadiness.evaluate(
-                backend: backend,
-                keyPresent: keyPresent,
-                cliFound: binary != nil,
-                cliProbe: probe,
-                localServerReachable: false
-            )
+            return grokAccountReadiness(binary: grokPath)
             #else
             return BackendReadiness.evaluate(
                 backend: backend,
@@ -200,6 +195,20 @@ public struct AgentRunner: Sendable {
             return .failed(message: message)
         }
     }
+
+    private func grokAccountReadiness(binary: String?) -> BackendReadiness {
+        switch GrokSessionClient.sessionStatus() {
+        case .valid:
+            return .live
+        case .expired:
+            return .pending(action: BackendReadiness.grokAuthorizationAction)
+        case .missing:
+            guard binary != nil else {
+                return .pending(action: "install grok CLI or paste xAI API key")
+            }
+            return .pending(action: BackendReadiness.grokAuthorizationAction)
+        }
+    }
     #endif
 
     private func hermesReachable() async -> Bool {
@@ -223,6 +232,17 @@ public struct AgentRunner: Sendable {
         let transcriptPrompt = Self.transcriptPrompt(system: system, history: history, user: user)
         switch backend {
         case .codex:
+            // ChatGPT via the OpenAI API when a key is present; else the
+            // existing ChatGPT session / CLI path. Options stay open.
+            let codexKey = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let hasOpenAIKey = !codexKey.isEmpty
+                || !(ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? "").isEmpty
+            if hasOpenAIKey {
+                return try await OpenAIClient(apiKey: codexKey.isEmpty ? nil : codexKey).send(
+                    messages: Self.openAIMessages(history: history, user: user, images: images),
+                    system: system
+                )
+            }
             if CodexSessionClient.loadSessionToken() != nil {
                 return try await CodexSessionClient().send(
                     messages: Self.codexMessages(history: history, user: user, images: images),
@@ -281,6 +301,79 @@ public struct AgentRunner: Sendable {
         }
     }
 
+    /// Whether the backend can run the native tool loop right now.
+    /// Claude and Grok via their HTTPS APIs (Anthropic tool_use / OpenAI-
+    /// compatible tool_calls). The Grok session proxy uses the same tool-call
+    /// shape with `grok login` auth. The grok CLI and Codex CLI stay
+    /// single-shot — their tool-disabling safety flags are deliberately
+    /// untouched.
+    public func supportsToolLoop(backend: Backend, apiKey: String? = nil) -> Bool {
+        let key = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        switch backend {
+        case .claude:
+            let envKey = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] ?? ""
+            return !key.isEmpty || !envKey.isEmpty
+        case .grok:
+            let envKey = ProcessInfo.processInfo.environment["XAI_API_KEY"] ?? ""
+            return !key.isEmpty || !envKey.isEmpty || GrokSessionClient.sessionStatus() == .valid
+        case .codex:
+            // ChatGPT is tool-capable through the OpenAI API when a key exists.
+            let envKey = ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? ""
+            return !key.isEmpty || !envKey.isEmpty
+        case .hermes:
+            return false
+        }
+    }
+
+    /// One tool-loop step: send prompt + prior loop turns + the tool catalog
+    /// to a tool-capable API backend. Throws for backends without native
+    /// tool support — callers should check `supportsToolLoop` and degrade to
+    /// `run(backend:...)` single-shot instead.
+    public func runWithTools(
+        backend: Backend,
+        system: String,
+        user: String,
+        conversationHistory: [ConversationTurn] = [],
+        images: [ModelImageAttachment] = [],
+        apiKey: String? = nil,
+        tools: [ToolSpec],
+        toolTranscript: [ToolLoopTurn]
+    ) async throws -> BackendResponse {
+        let history = ConversationTurn.cappedHistory(conversationHistory)
+        // Empty strings fall back to the environment key, matching how the
+        // clients' initializers treat nil.
+        let trimmedKey = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let effectiveKey = (trimmedKey?.isEmpty == false) ? trimmedKey : nil
+        switch backend {
+        case .claude:
+            return try await ClaudeClient(apiKey: effectiveKey).send(
+                messages: Self.claudeMessages(history: history, user: user),
+                system: system,
+                tools: tools,
+                toolTranscript: toolTranscript
+            )
+        case .grok:
+            if let effectiveKey {
+                return try await XAIClient(apiKey: effectiveKey).send(
+                    messages: Self.xaiMessages(history: history, user: user, images: images),
+                    system: system,
+                    tools: tools,
+                    toolTranscript: toolTranscript
+                )
+            }
+            return try await GrokSessionClient().send(
+                messages: Self.grokMessages(history: history, user: user, images: images),
+                system: system,
+                tools: tools,
+                toolTranscript: toolTranscript
+            )
+        case .codex:
+            throw RunError.failed("\(backend.rawValue) has no native tool support; run it single-shot instead.")
+        case .hermes:
+            throw RunError.failed("\(backend.rawValue) has no native tool support; run it single-shot instead.")
+        }
+    }
+
     private static func transcriptPrompt(system: String, history: [ConversationTurn], user: String) -> String {
         var transcript = system + "\n\n---\n"
         for turn in history {
@@ -300,6 +393,18 @@ public struct AgentRunner: Sendable {
             CodexSessionClient.Message(role: $0.role.rawValue, text: $0.text)
         }
         messages.append(CodexSessionClient.Message(role: "user", text: user, images: images))
+        return messages
+    }
+
+    private static func openAIMessages(
+        history: [ConversationTurn],
+        user: String,
+        images: [ModelImageAttachment]
+    ) -> [OpenAIClient.Message] {
+        var messages = history.map {
+            OpenAIClient.Message(role: $0.role.rawValue, text: $0.text)
+        }
+        messages.append(OpenAIClient.Message(role: "user", text: user, images: images))
         return messages
     }
 
@@ -402,6 +507,30 @@ public struct AgentRunner: Sendable {
     }
     #endif
 
+    /// Remove credential-shaped variables from an environment dictionary.
+    /// Broad on purpose: over-removing a variable only affects one shell call,
+    /// while under-removing leaks a secret. Explicitly covers the app's own
+    /// keys (ANTHROPIC_API_KEY, XAI_API_KEY) plus anything named like a token,
+    /// secret, password, or key.
+    static func scrubbingSecretEnvironment(_ env: [String: String]) -> [String: String] {
+        env.filter { name, _ in !isSecretEnvironmentName(name) }
+    }
+
+    static func isSecretEnvironmentName(_ name: String) -> Bool {
+        let upper = name.uppercased()
+        let needles = [
+            "API_KEY", "APIKEY", "SECRET", "TOKEN", "PASSWORD", "PASSWD",
+            "CREDENTIAL", "ACCESS_KEY", "PRIVATE_KEY", "SIGNING_KEY",
+            "_KEY", "KEY_", "AUTH_TOKEN", "BEARER", "SESSION_KEY",
+        ]
+        if needles.contains(where: { upper.contains($0) }) { return true }
+        let exact: Set<String> = [
+            "ANTHROPIC_API_KEY", "XAI_API_KEY", "OPENAI_API_KEY",
+            "GITHUB_TOKEN", "GH_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
+        ]
+        return exact.contains(upper)
+    }
+
     /// Run a CLI to completion, capturing stdout. Uses a PTY-free pipe.
     ///
     /// Output is drained WHILE the process runs. A macOS pipe buffer holds
@@ -413,7 +542,8 @@ public struct AgentRunner: Sendable {
         _ launchPath: String,
         _ args: [String],
         timeout: TimeInterval = 90,
-        includeStderrOnSuccess: Bool = false
+        includeStderrOnSuccess: Bool = false,
+        scrubSecretEnvironment: Bool = false
     ) throws -> String {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: launchPath)
@@ -421,6 +551,13 @@ public struct AgentRunner: Sendable {
         // Give the child the user's real PATH so nested tools resolve.
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = "\(NSHomeDirectory())/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+        // Agent-invoked shell: strip the app's own API keys (and any other
+        // credential-shaped var) so `echo $XAI_API_KEY` / `env` can't
+        // exfiltrate them. No pattern matcher can catch every way to read an
+        // env var, so the only robust defence is to remove the value.
+        if scrubSecretEnvironment {
+            env = Self.scrubbingSecretEnvironment(env)
+        }
         proc.environment = env
         let out = Pipe(); let err = Pipe()
         proc.standardOutput = out

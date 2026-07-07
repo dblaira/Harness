@@ -6,6 +6,7 @@ enum APIKeyStore {
     private static let service = "com.adamblair.Harness"
     private static let claudeAccount = "anthropic_api_key"
     private static let xAIAccount = "xai_api_key"
+    private static let openAIAccount = "openai_api_key"
     private static let firecrawlAccount = "firecrawl_api_key"
 
     static func loadKey(for backend: Backend) -> String? {
@@ -96,7 +97,7 @@ enum APIKeyStore {
     private static func account(for backend: Backend) -> String? {
         switch backend {
         case .codex:
-            return nil
+            return openAIAccount
         case .grok:
             return xAIAccount
         case .claude:

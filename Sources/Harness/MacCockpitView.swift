@@ -8,6 +8,7 @@ struct MacCockpitView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 header
+                routines
                 systemTree
                 wordsAndIcons
                 appMap
@@ -40,6 +41,12 @@ struct MacCockpitView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.macEntry.opacity(0.22), in: RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
+    }
+
+    /// Both routine sources: Hermes cron mirrored read-only (last_status
+    /// verbatim) and native Harness routines with pause / run-now / delete.
+    private var routines: some View {
+        RoutinesView()
     }
 
     private var systemTree: some View {

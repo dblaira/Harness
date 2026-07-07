@@ -30,6 +30,11 @@ final class MacWorkbenchModel: ObservableObject {
     @Published var isRunning = false
     @Published var status = "Ledger ready"
     @Published var searchText = ""
+    @Published var chatSessions: [ChatSession] = []
+    @Published var sessionSearchHits: [SessionSearchHit] = []
+    @Published var currentSessionId: String?
+    @Published var activeToolLoop: ToolLoopMonitor?
+    @Published var showApprovalToast = false
     @Published var selectedTool: WorkbenchTool?
     @Published var reviewQueueCandidates: [MemoryCandidate] = []
     @Published var opportunityBoardRows: [OpportunityBoardRow] = []
@@ -51,10 +56,16 @@ final class MacWorkbenchModel: ObservableObject {
         WorkbenchToolGroup.defaults + [WorkbenchToolGroup.communicationSkills(from: capabilities)]
     }
 
+    /// The bouncer's queue, observed directly by the approval cards in the
+    /// chat transcript. "Agents propose. The bouncer checks. You decide."
+    let toolApprovals = ToolApprovalStore()
+
     private let ledger: RunLedgerStore
     private let service: HarnessRunService
     private let reviewQueue: ReviewQueueStore
+    private let sessions: SessionStore
     private var runTask: Task<Void, Never>?
+    private var approvalToastTask: Task<Void, Never>?
 
     init() {
         let store: RunLedgerStore
@@ -66,11 +77,14 @@ final class MacWorkbenchModel: ObservableObject {
         self.ledger = store
         self.service = HarnessRunService(ledger: store)
         self.reviewQueue = ReviewQueueStore(ledger: store)
+        self.sessions = SessionStore(ledger: store)
         self.hasFirecrawlAPIKey = Self.loadFirecrawlAPIKey() != nil
         loadAPIKey(for: backend)
         refreshReadiness(for: backend)
         Task {
             await refreshRuns()
+            await restoreMostRecentSession()
+            await refreshSessions()
             await refreshReviewQueue()
             refreshOpportunityBoard()
             refreshConnectors()
@@ -111,11 +125,130 @@ final class MacWorkbenchModel: ObservableObject {
     func newSession() {
         selectedDetail = nil
         chatThread = []
+        currentSessionId = nil
+        sessionSearchHits = []
         draft = ""
         composerAttachments = []
         composerIntent = ComposerIntent()
         searchText = ""
         status = "New session"
+    }
+
+    // MARK: Sessions (WS-A4 SessionStore)
+
+    func refreshSessions() async {
+        do {
+            chatSessions = try await sessions.listSessions()
+        } catch {
+            status = "Sessions unavailable: \(error.localizedDescription)"
+        }
+    }
+
+    /// Launch restore: reopen the most recently touched session so the
+    /// conversation survives relaunch.
+    func restoreMostRecentSession() async {
+        do {
+            guard let session = try await sessions.mostRecentSession() else { return }
+            await loadSession(session)
+        } catch {
+            status = "Session restore failed: \(error.localizedDescription)"
+        }
+    }
+
+    func selectSession(_ session: ChatSession) {
+        Task { await loadSession(session) }
+    }
+
+    func selectSessionSearchHit(_ hit: SessionSearchHit) {
+        Task {
+            do {
+                guard let session = try await sessions.session(id: hit.sessionId) else {
+                    status = "Session no longer exists."
+                    return
+                }
+                await loadSession(session)
+            } catch {
+                status = error.localizedDescription
+            }
+        }
+    }
+
+    private func loadSession(_ session: ChatSession) async {
+        do {
+            let messages = try await sessions.thread(sessionId: session.id)
+            currentSessionId = session.id
+            chatThread = messages
+                .filter { $0.role == .user || $0.role == .assistant }
+                .map { ConversationTurn(id: $0.id, role: $0.role, text: $0.text) }
+            if let lastRunId = messages.last(where: { $0.runId != nil })?.runId {
+                selectedDetail = try? await ledger.runDetail(id: lastRunId)
+            }
+            status = "Session restored: \(session.title)"
+        } catch {
+            status = "Session load failed: \(error.localizedDescription)"
+        }
+    }
+
+    /// Episodic search over persisted sessions (FTS5 when available,
+    /// LIKE fallback otherwise). Feeds the sidebar SESSIONS list.
+    func searchSessions() async {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            sessionSearchHits = []
+            return
+        }
+        do {
+            let hits = try await sessions.searchSessions(query: query, limit: 20)
+            // Drop results for a query the user has since edited past — an
+            // out-of-order completion must not show hits for stale text.
+            guard searchText.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }
+            sessionSearchHits = hits
+        } catch {
+            guard searchText.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }
+            sessionSearchHits = []
+            status = "Session search failed: \(error.localizedDescription)"
+        }
+    }
+
+    nonisolated static func sessionTitle(from prompt: String, maxLength: Int = 48) -> String {
+        let firstLine = prompt
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .first
+            .map(String.init) ?? prompt
+        let trimmed = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "New session" }
+        guard trimmed.count > maxLength else { return trimmed }
+        return String(trimmed.prefix(maxLength - 1)) + "…"
+    }
+
+    // MARK: Bouncer decisions (ToolApprovalStore)
+
+    /// Adam approves a proposed tool call. `always: true` also persists the
+    /// fired pattern ids to the allowlist. Mutations never execute silently —
+    /// this is the one place a suspended call gets unblocked.
+    func approveToolRequest(_ request: ToolApprovalRequest, always: Bool = false) {
+        toolApprovals.approve(id: request.id, always: always)
+        status = always
+            ? "\(request.toolName) approved; pattern allowlisted"
+            : "\(request.toolName) approved"
+        flashApprovalToast()
+    }
+
+    /// Adam denies a proposed tool call. The agent receives the refusal as an
+    /// error tool result and the loop continues.
+    func denyToolRequest(_ request: ToolApprovalRequest) {
+        toolApprovals.deny(id: request.id)
+        status = "\(request.toolName) denied; the agent was told no"
+    }
+
+    private func flashApprovalToast() {
+        approvalToastTask?.cancel()
+        showApprovalToast = true
+        approvalToastTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_400_000_000)
+            guard !Task.isCancelled else { return }
+            self?.showApprovalToast = false
+        }
     }
 
     func mutateComposerIntent(_ body: (inout ComposerIntent) -> Void) {
@@ -330,7 +463,28 @@ final class MacWorkbenchModel: ObservableObject {
         routeExecutionResult = nil
     }
 
+    /// Attach a skill to the draft. Skills load their FULL file content
+    /// verbatim (Adam's exact-words law: rules travel as written, never as a
+    /// bare `[Skill: name]` marker the model cannot read). Plugins and
+    /// unreadable files fall back to the reference marker.
     func insertCapabilityReference(_ capability: HarnessCapability) {
+        if capability.kind == .skill,
+           let content = Self.loadSkillContent(at: capability.path) {
+            guard !composerAttachments.contains(where: { $0.localPath == capability.path.path }) else {
+                status = "\(capability.name) is already attached."
+                return
+            }
+            composerAttachments.append(ComposerAttachment(
+                kind: .file,
+                title: "Skill: \(capability.name)",
+                localPath: capability.path.path,
+                excerpt: content
+            ))
+            refreshRoutePlan()
+            status = "\(capability.name) skill loaded verbatim into the draft."
+            return
+        }
+
         let label = capability.kind == .plugin ? "Plugin" : "Skill"
         let insertion = "[\(label): \(capability.name)]"
         if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -339,6 +493,20 @@ final class MacWorkbenchModel: ObservableObject {
             draft += "\n\(insertion) "
         }
         status = "\(capability.name) added to draft."
+    }
+
+    /// Reads the skill file as-is at attach time. Only a length cap is
+    /// applied (same limit as file attachments); the retained prefix is
+    /// byte-for-byte Adam's words.
+    nonisolated static func loadSkillContent(
+        at url: URL,
+        maxLength: Int = ComposerAttachmentStore.maxTextExcerptLength
+    ) -> String? {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard trimmed.count > maxLength else { return trimmed }
+        return String(trimmed.prefix(maxLength)) + "\n...(truncated)"
     }
 
     func notebookLMSourceFiles(limit: Int = 20) -> [NotebookLMSourceFile] {
@@ -776,14 +944,23 @@ final class MacWorkbenchModel: ObservableObject {
         }
     }
 
-    /// Cancel the in-flight run: kill any CLI child and restore the UI.
+    /// Cancel the in-flight run: abort the tool loop (which kills CLI/shell
+    /// subprocesses), kill any CLI child, and restore the UI. A call already
+    /// suspended on an approval card stays pending — the queue is never
+    /// silently drained; Adam decides it from the card.
     func cancelRun() {
         guard isRunning else { return }
+        activeToolLoop?.cancel()
+        // Drop the monitor so the run's own completion handler sees it is no
+        // longer the active run and skips clobbering fresh UI state.
+        activeToolLoop = nil
         AgentRunner.terminateRunningProcesses()
         runTask?.cancel()
         runTask = nil
         isRunning = false
-        status = "Cancelled"
+        status = toolApprovals.pendingSnapshot().isEmpty
+            ? "Cancelled"
+            : "Cancelled; pending proposals still need your decision"
     }
 
     func saveAPIKey() {
@@ -833,7 +1010,7 @@ final class MacWorkbenchModel: ObservableObject {
     ) -> String {
         let environmentName: String?
         switch backend {
-        case .codex: environmentName = nil
+        case .codex: environmentName = "OPENAI_API_KEY"
         case .grok: environmentName = "XAI_API_KEY"
         case .claude: environmentName = "ANTHROPIC_API_KEY"
         case .hermes: environmentName = nil
@@ -849,9 +1026,12 @@ final class MacWorkbenchModel: ObservableObject {
 
     nonisolated static func usesAPIKey(_ backend: Backend) -> Bool {
         switch backend {
-        case .grok, .claude:
+        case .codex, .grok, .claude:
+            // ChatGPT (OpenAI), Grok (xAI), Claude (Anthropic) all accept an
+            // API key that turns on their tool loop. Codex keeps its session
+            // fallback when no key is pasted.
             return true
-        case .codex, .hermes:
+        case .hermes:
             return false
         }
     }
@@ -864,7 +1044,28 @@ final class MacWorkbenchModel: ObservableObject {
             refreshReadiness(for: .codex)
             return
         }
-        let command = "\(Self.shellQuote(codex)) login --device-auth"
+        openTerminalLogin(command: "\(Self.shellQuote(codex)) login --device-auth", backend: .codex)
+        #else
+        status = "Codex authorization requires the Codex CLI on macOS."
+        #endif
+    }
+
+    func authorizeGrokAccount() {
+        guard backend == .grok else { return }
+        #if os(macOS)
+        guard let grok = Self.grokExecutablePath() else {
+            status = BackendReadiness.grokAuthorizationAction
+            refreshReadiness(for: .grok)
+            return
+        }
+        openTerminalLogin(command: "\(Self.shellQuote(grok)) login", backend: .grok)
+        #else
+        status = "Grok authorization requires the Grok CLI on macOS."
+        #endif
+    }
+
+    #if os(macOS)
+    private func openTerminalLogin(command: String, backend: Backend) {
         let appleScript = """
         tell application "Terminal"
             activate
@@ -876,15 +1077,13 @@ final class MacWorkbenchModel: ObservableObject {
         process.arguments = ["-e", appleScript]
         do {
             try process.run()
-            status = "Codex authorization opened in Terminal."
+            status = "\(backend.rawValue) authorization opened in Terminal."
         } catch {
-            status = "Codex authorization failed: \(error.localizedDescription)"
+            status = "\(backend.rawValue) authorization failed: \(error.localizedDescription)"
         }
-        refreshReadiness(for: .codex)
-        #else
-        status = "Codex authorization requires the Codex CLI on macOS."
-        #endif
+        refreshReadiness(for: backend)
     }
+    #endif
 
     nonisolated private static func codexExecutablePath() -> String? {
         let candidates = [
@@ -892,6 +1091,16 @@ final class MacWorkbenchModel: ObservableObject {
             "\(NSHomeDirectory())/.local/bin/codex",
             "/opt/homebrew/bin/codex",
             "/usr/local/bin/codex"
+        ]
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    nonisolated private static func grokExecutablePath() -> String? {
+        let candidates = [
+            "\(NSHomeDirectory())/.grok/bin/grok",
+            "\(NSHomeDirectory())/.local/bin/grok",
+            "/opt/homebrew/bin/grok",
+            "/usr/local/bin/grok"
         ]
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
@@ -1073,6 +1282,10 @@ final class MacWorkbenchModel: ObservableObject {
         let prompt = composedDraftPrompt
         let attachmentsSnapshot = composerAttachments
         guard ComposerAttachment.canSend(userText: draft, attachments: attachmentsSnapshot), !isRunning else { return }
+        // Send-time hook: a Due date or Nudge time also registers a oneshot
+        // routine with the scheduler, and the returned copy has the schedule
+        // signals consumed so a re-send cannot double-register.
+        composerIntent = composerIntent.registeringScheduledRoutines(userText: prompt)
         refreshRoutePlan()
         let plannedRoute = routePlan
         draft = ""
@@ -1092,34 +1305,80 @@ final class MacWorkbenchModel: ObservableObject {
         let service = service
         let ledger = ledger
         let ontology = ontology
+        let sessionStore = sessions
+        let existingSessionId = currentSessionId
+
+        // One monitor per run: the loop reports progress into it and the
+        // Cancel control aborts through it. The executor routes every tool
+        // call through the bouncer before anything runs.
+        let monitor = ToolLoopMonitor()
+        activeToolLoop = monitor
+        let executor = ToolExecutor.standard(approvals: toolApprovals, ledger: ledger)
 
         let historySnapshot = chatThread
         runTask = Task.detached(priority: .userInitiated) {
             let adapter = AgentRunnerBackendAdapter(backend: selectedBackend, apiKey: key)
             do {
+                let sessionId: String
+                if let existingSessionId {
+                    sessionId = existingSessionId
+                } else {
+                    sessionId = try await sessionStore
+                        .createSession(title: Self.sessionTitle(from: prompt))
+                        .id
+                    await MainActor.run { self.currentSessionId = sessionId }
+                }
+
                 let visionImages = try ComposerAttachmentStore.visionImages(from: attachmentsSnapshot)
                 let detail = try await service.createRun(
                     prompt: prompt,
                     ontology: ontology,
                     backend: adapter,
                     images: visionImages,
-                    conversationHistory: historySnapshot
+                    conversationHistory: historySnapshot,
+                    tools: HarnessToolCatalog.v1,
+                    toolExecutor: executor,
+                    toolLoop: monitor,
+                    sessionId: sessionId
                 )
+                // Link the run and its transcript into the session so the
+                // thread survives relaunch and becomes searchable.
+                try? await sessionStore.attachRun(runId: detail.run.id, toSession: sessionId)
+                let latestSessions = (try? await sessionStore.listSessions()) ?? []
                 let latestRuns = try await ledger.listRuns()
                 let answer = detail.messages.last(where: { $0.role == .assistant })?.text ?? detail.run.finalAnswer
                 await MainActor.run {
+                    // Only the still-active run may commit UI state. If this run
+                    // was cancelled or superseded by a newer send, activeToolLoop
+                    // no longer points at our monitor — leave the newer run alone.
+                    guard self.activeToolLoop === monitor else { return }
                     self.runTask = nil
-                    self.chatThread.append(ConversationTurn(role: .user, text: prompt))
-                    self.chatThread.append(ConversationTurn(role: .assistant, text: answer))
+                    self.activeToolLoop = nil
+                    self.isRunning = false
                     self.selectedDetail = detail
                     self.runs = latestRuns
-                    self.status = detail.run.success ? "Trace saved" : "Backend failed; trace saved"
-                    self.isRunning = false
+                    if !latestSessions.isEmpty {
+                        self.chatSessions = latestSessions
+                    }
+                    // Append to the visible thread only if the run's own session
+                    // is still on screen; if Adam switched sessions mid-run, the
+                    // transcript is already persisted and reappears when he
+                    // reopens that session.
+                    if self.currentSessionId == sessionId {
+                        self.chatThread.append(ConversationTurn(role: .user, text: prompt))
+                        self.chatThread.append(ConversationTurn(role: .assistant, text: answer))
+                        self.status = detail.run.success ? "Trace saved" : "Backend failed; trace saved"
+                    } else {
+                        self.status = "Background run finished in another session"
+                    }
                 }
             } catch {
                 await MainActor.run {
+                    // Same supersession guard: a cancelled/superseded run must
+                    // not clobber the newer run's status or isRunning flag.
+                    guard self.activeToolLoop === monitor else { return }
                     self.runTask = nil
-                    guard self.isRunning else { return } // cancelled; status already says so
+                    self.activeToolLoop = nil
                     self.status = error.localizedDescription
                     self.isRunning = false
                 }
@@ -1434,7 +1693,7 @@ struct WorkbenchToolGroup: Identifiable, Equatable {
                     state: .available,
                     detail: "local CLI",
                     summary: "Routes model packets to the local Grok CLI on macOS.",
-                    permission: "Uses existing CLI authentication.",
+                    permission: "Uses Grok authorization from the Grok CLI.",
                     provenance: "Backend metadata records local-cli invocation."
                 ),
                 WorkbenchTool(

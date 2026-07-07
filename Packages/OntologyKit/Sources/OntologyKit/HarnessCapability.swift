@@ -17,6 +17,8 @@ public struct HarnessCapability: Identifiable, Codable, Sendable, Equatable {
     public let path: URL
     public let state: HarnessConnectorState
     public let provenance: String
+    /// YAML-frontmatter `platforms` list. Empty means every platform.
+    public let platforms: [String]
 
     public init(
         id: String? = nil,
@@ -27,7 +29,8 @@ public struct HarnessCapability: Identifiable, Codable, Sendable, Equatable {
         description: String,
         path: URL,
         state: HarnessConnectorState = .available,
-        provenance: String
+        provenance: String,
+        platforms: [String] = []
     ) {
         self.id = id ?? "\(sourceSystem):\(kind.rawValue):\(path.path)"
         self.name = name
@@ -38,6 +41,30 @@ public struct HarnessCapability: Identifiable, Codable, Sendable, Equatable {
         self.path = path
         self.state = state
         self.provenance = provenance
+        self.platforms = platforms
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        kind = try container.decode(HarnessCapabilityKind.self, forKey: .kind)
+        sourceSystem = try container.decode(String.self, forKey: .sourceSystem)
+        category = try container.decode(String.self, forKey: .category)
+        description = try container.decode(String.self, forKey: .description)
+        path = try container.decode(URL.self, forKey: .path)
+        state = try container.decode(HarnessConnectorState.self, forKey: .state)
+        provenance = try container.decode(String.self, forKey: .provenance)
+        platforms = try container.decodeIfPresent([String].self, forKey: .platforms) ?? []
+    }
+
+    /// Whether this capability applies to the platform Harness runs on (macOS).
+    /// An empty platforms list means the skill is universal.
+    public var matchesCurrentPlatform: Bool {
+        guard !platforms.isEmpty else { return true }
+        let normalized = Set(platforms.map { $0.lowercased() })
+        let current: Set<String> = ["macos", "mac", "darwin", "osx", "all", "any"]
+        return !normalized.isDisjoint(with: current)
     }
 }
 
@@ -58,6 +85,67 @@ public enum HarnessCapabilityRegistry {
                 if lhs.value == rhs.value { return lhs.key < rhs.key }
                 return lhs.value > rhs.value
             }
+    }
+
+    /// Hard-sell skills index for the STABLE prompt tier. The header language
+    /// is adapted verbatim from Hermes's build_skills_system_prompt so the
+    /// model actually loads skills instead of winging it. Vault Skills/ wins
+    /// name collisions; skills whose frontmatter names other platforms are
+    /// filtered out.
+    public static func skillsIndexPrompt(capabilities: [HarnessCapability]) -> String {
+        let skills = vaultPreferred(
+            capabilities.filter { $0.kind == .skill && $0.matchesCurrentPlatform }
+        )
+        guard !skills.isEmpty else { return "" }
+
+        let grouped = Dictionary(grouping: skills) { $0.category }
+        var indexLines: [String] = []
+        for category in grouped.keys.sorted(by: { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }) {
+            indexLines.append("  \(category):")
+            var seen: Set<String> = []
+            let entries = grouped[category, default: []]
+                .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            for skill in entries {
+                let key = skill.name.lowercased()
+                guard !seen.contains(key) else { continue }
+                seen.insert(key)
+                if skill.description.isEmpty {
+                    indexLines.append("    - \(skill.name)")
+                } else {
+                    indexLines.append("    - \(skill.name): \(skill.description)")
+                }
+            }
+        }
+
+        return """
+        ## Skills (mandatory)
+        Before replying, scan the skills below. If a skill matches or is even partially relevant to your task, you MUST load its file and follow its instructions. Err on the side of loading — it is always better to have context you don't need than to miss critical steps, pitfalls, or established workflows. Skills contain specialized knowledge — proven workflows, exact commands, and pitfalls that outperform general-purpose approaches. Load the skill even if you think you could handle the task with basic tools. Skills also encode Adam's preferred approach, conventions, and quality standards for tasks like code review, planning, and testing — load them even for tasks you already know how to do, because the skill defines how it should be done here.
+
+        <available_skills>
+        \(indexLines.joined(separator: "\n"))
+        </available_skills>
+
+        Only proceed without loading a skill if genuinely none are relevant to the task.
+        """
+    }
+
+    /// Collapses name collisions so the vault copy wins — the vault is the
+    /// canonical home of Adam's skills; deployed copies are replicas.
+    public static func vaultPreferred(_ capabilities: [HarnessCapability]) -> [HarnessCapability] {
+        var winners: [String: HarnessCapability] = [:]
+        var order: [String] = []
+        for capability in capabilities {
+            let key = capability.name.lowercased()
+            if let existing = winners[key] {
+                if existing.sourceSystem != "Vault" && capability.sourceSystem == "Vault" {
+                    winners[key] = capability
+                }
+            } else {
+                winners[key] = capability
+                order.append(key)
+            }
+        }
+        return order.compactMap { winners[$0] }
     }
 
     public static let adamCommunicationSkillNames: Set<String> = [
@@ -123,7 +211,8 @@ public enum HarnessCapabilityRegistry {
             category: "communication",
             description: description,
             path: file,
-            provenance: "Vault note: \(relativePath(root: root, file: file))"
+            provenance: "Vault note: \(relativePath(root: root, file: file))",
+            platforms: parseListValue(frontmatter["platforms"])
         )
     }
 
@@ -196,8 +285,23 @@ public enum HarnessCapabilityRegistry {
             category: category,
             description: description,
             path: skillFile,
-            provenance: "\(sourceSystem) skill: \(relativePath(root: root, file: skillFile))"
+            provenance: "\(sourceSystem) skill: \(relativePath(root: root, file: skillFile))",
+            platforms: parseListValue(frontmatter["platforms"])
         )
+    }
+
+    /// Parses a frontmatter list value: `[macos, ios]`, `macos, ios`, or a
+    /// single bare token all yield the same normalized array.
+    static func parseListValue(_ raw: String?) -> [String] {
+        guard let raw else { return [] }
+        return raw
+            .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+            .split(separator: ",")
+            .map {
+                $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            }
+            .filter { !$0.isEmpty }
     }
 
     private static func pluginCapability(sourceSystem: String, root: URL, manifest: URL) -> HarnessCapability? {
