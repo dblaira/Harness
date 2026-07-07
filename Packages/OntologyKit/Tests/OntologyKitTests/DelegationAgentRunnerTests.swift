@@ -277,6 +277,27 @@ import Testing
     #expect(result.detail.traceEvents.contains { $0.message.contains("no delegation files written") })
 }
 
+@Test func triagePromptsRequireVerbatimSourceWords() {
+    let system = DelegationAgentRunner.triageSystemPrompt()
+    #expect(system.contains("Quote, never restate."))
+    #expect(system.contains("When you use your own words or add words to it, it loses all its meaning."))
+
+    let user = DelegationAgentRunner.triageUserPrompt(
+        DelegationAgentTriageRequest(
+            prompt: "export shutdown journaling",
+            result: FirecrawlSearchResult(
+                title: "Journal app export API shutdown",
+                url: "https://example.com/export-shutdown",
+                description: "A journaling app changes export API access and pricing.",
+                markdown: "The app is changing export behavior."
+            ),
+            rules: []
+        )
+    )
+    #expect(user.contains("copied word-for-word from the source or the Adam prompt"))
+    #expect(!user.contains("one plain sentence"))
+}
+
 private func acceptedRule() -> GraphAuthorityHit {
     GraphAuthorityHit(
         subject: "understood:adam-pattern/step-4",

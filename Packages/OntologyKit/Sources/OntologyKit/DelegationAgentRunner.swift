@@ -470,6 +470,9 @@ public struct DelegationAgentRunner: Sendable {
         Allowed effort values: in, above, below.
         Every decision must cite the supplied accepted rules in rationale.
         Never recommend spending, trading, contacting, purchasing, committing, or executing.
+        Quote, never restate. Title and description must be copied word-for-word from the source \
+        title, description, or excerpt, or from the Adam prompt. Do not paraphrase, summarize, \
+        or add your own words: "When you use your own words or add words to it, it loses all its meaning."
         """
     }
 
@@ -491,8 +494,8 @@ public struct DelegationAgentRunner: Sendable {
 
         Return exactly this JSON shape:
         {
-          "title": "short Delegation title",
-          "description": "one plain sentence",
+          "title": "a short phrase copied word-for-word from the source or the Adam prompt",
+          "description": "one sentence copied word-for-word from the source or the Adam prompt",
           "app": "News Calm|Notorious Recall|Understood|SAVY",
           "fit": 0.0,
           "window_days": 14,

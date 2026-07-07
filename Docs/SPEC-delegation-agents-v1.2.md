@@ -243,3 +243,11 @@ precision stats.
 - Speak Suite words. Banned: scan, now, band, stage, field app,
   surface, opportunity card, opportunity board. When a new word is
   needed, take it from Adam's apps — never invent one.
+- Quote, never restate. Adam's rule, verbatim: "When you use your own
+  words or add words to it, it loses all its meaning." A delegation's
+  `title`, `description`, and body must quote the `resource` source
+  (or Adam's prompt) word-for-word. Paraphrase is a defect. When the
+  source is not Adam's writing (a spreadsheet, a book highlight, a
+  history export, a code file), say so in the first body line and
+  quote that source verbatim instead. When no source wording can be
+  found, label the body WORDING UNVERIFIED rather than inventing prose.
