@@ -91,6 +91,7 @@ else
     path="${CANON}/${name}"
     if [[ ! -d "$path/.git" ]]; then
       log "MISSING: ${name} (not cloned at ${path})"
+      bump_issue
       continue
     fi
     git -C "$path" fetch origin --prune --quiet 2>/dev/null || true
