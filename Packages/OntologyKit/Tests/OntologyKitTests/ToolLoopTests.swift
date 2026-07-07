@@ -720,8 +720,9 @@ private struct SingleShotBackend: ModelBackendAdapter {
         toolTranscript: [turn]
     )
     // Responses API: system rides in `instructions`; tools are FLAT functions
-    // (no nested "function" key like chat/completions).
+    // (no nested "function" key like chat/completions); streaming is required.
     #expect(body["instructions"] as? String == "system prompt")
+    #expect(body["stream"] as? Bool == true)
     let tools = try #require(body["tools"] as? [[String: Any]])
     #expect(tools.first?["type"] as? String == "function")
     #expect(tools.first?["name"] as? String == "shell")
@@ -734,22 +735,28 @@ private struct SingleShotBackend: ModelBackendAdapter {
     #expect((output["output"] as? String)?.hasPrefix("ERROR:") == true)
 }
 
-@Test func codexParsesResponsesFunctionCall() throws {
-    let fixture = """
-    {
-      "output": [
-        {"type": "function_call", "call_id": "fc_9", "name": "search_files", "arguments": "{\\"pattern\\": \\"fuseki\\", \\"path\\": \\"~/Documents/Main\\"}"},
-        {"type": "message", "content": [{"type": "output_text", "text": "looking"}]}
-      ],
-      "usage": {"total_tokens": 21}
-    }
-    """.data(using: .utf8)!
-    let response = try CodexSessionClient.parseToolResponse(data: fixture, statusCode: 200)
-    #expect(response.text == "looking")
+@Test func codexParsesStreamingFunctionCall() throws {
+    // Real Responses SSE event shapes: text deltas, a completed function call
+    // in output_item.done (call_id + name + arguments), usage on completed.
+    let lines = [
+        #"data: {"type":"response.output_text.delta","delta":"look"}"#,
+        #"data: {"type":"response.output_item.done","item":{"id":"fc_x","type":"function_call","status":"completed","arguments":"{\"pattern\":\"fuseki\",\"path\":\"~/Documents/Main\"}","call_id":"call_9","name":"search_files"}}"#,
+        #"data: {"type":"response.completed","response":{"usage":{"total_tokens":21}}}"#,
+        "data: [DONE]",
+    ]
+    let response = try CodexSessionClient.parseToolStream(lines: lines, statusCode: 200)
+    #expect(response.text == "look")
     #expect(response.tokenCount == 21)
-    #expect(response.toolCalls.first?.id == "fc_9")
+    #expect(response.toolCalls.first?.id == "call_9")
     #expect(response.toolCalls.first?.name == "search_files")
     #expect(response.toolCalls.first?.input["pattern"]?.stringValue == "fuseki")
+}
+
+@Test func codexToolStreamSurfacesHTTPError() {
+    let lines = [#"data: {"detail":"Stream must be set to true"}"#]
+    #expect(throws: CodexSessionClient.CodexSessionError.self) {
+        try CodexSessionClient.parseToolStream(lines: lines, statusCode: 400)
+    }
 }
 
 /// The whole point of this change: all three API backends report tool-capable
