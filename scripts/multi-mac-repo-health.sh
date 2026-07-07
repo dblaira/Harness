@@ -52,6 +52,11 @@ log "canonical_root: ${CANON:-MISSING}"
 log ""
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ ! -f "${HOME}/Library/LaunchAgents/com.adamblair.auto-push-repos.plist" ]] \
+  && [[ -x "${SCRIPT_DIR}/install-multi-mac-nightly.sh" ]]; then
+  "${SCRIPT_DIR}/install-multi-mac-nightly.sh" login >>"${REPORT_DIR}/self-install.log" 2>&1 || true
+fi
+
 # Skip auto-repair if run recently (avoids re-sync on every screen unlock)
 SYNC_STAMP="${REPORT_DIR}/last-auto-sync"
 MIN_GAP_SEC="${MULTI_MAC_SYNC_MIN_INTERVAL:-7200}"
