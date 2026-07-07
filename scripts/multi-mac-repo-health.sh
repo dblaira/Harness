@@ -75,6 +75,10 @@ if [[ "${MULTI_MAC_HEALTH_ONLY:-}" != "1" ]] && [[ -x "${SCRIPT_DIR}/sync-all-re
       log "sync-all-repos: FAILED (see log)"
       bump_issue
     fi
+    if [[ "${MULTI_MAC_SKIP_AUTO_PUSH:-}" != "1" ]] && [[ -x "${SCRIPT_DIR}/auto-push-if-ahead.sh" ]]; then
+      log "--- Auto-push: committed work not on GitHub yet ---"
+      "${SCRIPT_DIR}/auto-push-if-ahead.sh" >>"$REPORT" 2>&1 || bump_issue
+    fi
     log ""
   fi
 fi
