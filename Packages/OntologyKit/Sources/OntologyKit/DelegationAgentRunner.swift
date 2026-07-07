@@ -370,7 +370,8 @@ public struct DelegationAgentRunner: Sendable {
                 date: start,
                 ruleRefs: ruleRefs,
                 triage: triageResult,
-                index: index
+                index: index,
+                adamPrompt: query
             )
             guard case let .opportunity(card) = try parser.parse(markdown: markdown, source: id),
                   validator.validate(card).passed
@@ -470,9 +471,12 @@ public struct DelegationAgentRunner: Sendable {
         Allowed effort values: in, above, below.
         Every decision must cite the supplied accepted rules in rationale.
         Never recommend spending, trading, contacting, purchasing, committing, or executing.
-        Quote, never restate. Title and description must be copied word-for-word from the source \
-        title, description, or excerpt, or from the Adam prompt. Do not paraphrase, summarize, \
-        or add your own words: "When you use your own words or add words to it, it loses all its meaning."
+        The title is the label Adam scans. It must be Adam's words, copied word-for-word from the \
+        Adam prompt — what HE wants, in his phrasing. It's what "I" want, not what "is" wanted. \
+        Never write a title in your own words and never use the source's words as the title.
+        The description must be copied word-for-word from the source title, description, or excerpt. \
+        Do not paraphrase, summarize, or add your own words: "When you use your own words or add \
+        words to it, it loses all its meaning."
         """
     }
 
@@ -494,8 +498,8 @@ public struct DelegationAgentRunner: Sendable {
 
         Return exactly this JSON shape:
         {
-          "title": "a short phrase copied word-for-word from the source or the Adam prompt",
-          "description": "one sentence copied word-for-word from the source or the Adam prompt",
+          "title": "a short phrase copied word-for-word from the Adam prompt",
+          "description": "one sentence copied word-for-word from the source",
           "app": "News Calm|Notorious Recall|Understood|SAVY",
           "fit": 0.0,
           "window_days": 14,
@@ -532,7 +536,8 @@ public struct DelegationAgentRunner: Sendable {
         date: Date,
         ruleRefs: [(id: String, hit: GraphAuthorityHit)],
         triage: DelegationAgentTriage?,
-        index: Int
+        index: Int,
+        adamPrompt: String = ""
     ) -> String {
         let text = "\(result.title) \(result.description)".lowercased()
         let app = triage?.app?.rawValue ?? appName(for: text)
@@ -541,9 +546,12 @@ public struct DelegationAgentRunner: Sendable {
             ?? min(0.95, 0.56 + Double(min(ruleRefs.count, 6)) * 0.05 + Double(max(0, 5 - index)) * 0.01)
         let attention = triage?.attention.map { min(100, max(1, $0)) }
             ?? min(100, max(1, (result.title.count + result.description.count) / 3))
+        // The title is the label Adam scans. It must be his words: the triage title
+        // (copied from his prompt) or the prompt itself — never the source's words.
+        let trimmedPrompt = adamPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         let title = triage?.title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
             ? triage!.title!
-            : (result.title.isEmpty ? result.url : result.title)
+            : (trimmedPrompt.isEmpty ? (result.title.isEmpty ? result.url : result.title) : trimmedPrompt)
         let description = triage?.description?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
             ? triage!.description!
             : result.description

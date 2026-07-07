@@ -277,9 +277,10 @@ import Testing
     #expect(result.detail.traceEvents.contains { $0.message.contains("no delegation files written") })
 }
 
-@Test func triagePromptsRequireVerbatimSourceWords() {
+@Test func triagePromptsRequireAdamsWordsForTitleAndVerbatimSource() {
     let system = DelegationAgentRunner.triageSystemPrompt()
-    #expect(system.contains("Quote, never restate."))
+    #expect(system.contains("It must be Adam's words"))
+    #expect(system.contains("It's what \"I\" want, not what \"is\" wanted."))
     #expect(system.contains("When you use your own words or add words to it, it loses all its meaning."))
 
     let user = DelegationAgentRunner.triageUserPrompt(
@@ -294,7 +295,8 @@ import Testing
             rules: []
         )
     )
-    #expect(user.contains("copied word-for-word from the source or the Adam prompt"))
+    #expect(user.contains("copied word-for-word from the Adam prompt"))
+    #expect(user.contains("copied word-for-word from the source"))
     #expect(!user.contains("one plain sentence"))
 }
 
