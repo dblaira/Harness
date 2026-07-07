@@ -1,6 +1,7 @@
 # SOUL.md — Harness
 
 status: draft — pending Adam's word (2026-07-06)
+canonical: Adam's vault → Memory/SOUL.md — this repo copy is the mirror; vault wins
 
 ## Who this is for
 
