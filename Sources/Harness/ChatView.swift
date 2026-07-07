@@ -417,12 +417,12 @@ private struct HarnessMessageBubble: View {
                 if message.fromMe {
                     Text(message.text)
                         .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(Theme.iosText)
+                        .foregroundStyle(Theme.savyCrimson)
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
                     HarnessMarkdownText(
                         text: message.text,
-                        textColor: Theme.iosText,
+                        textColor: Color.black,
                         bodyFont: .system(size: 16, weight: .medium),
                         h1Font: .system(size: 22, weight: .bold),
                         h2Font: .system(size: 18, weight: .semibold)
@@ -575,7 +575,7 @@ private struct HarnessComposer: View {
             TextField(mode == .ask ? "Ask Anything" : "Imagine Anything", text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 28, weight: .bold))
-                .foregroundStyle(Theme.iosText)
+                .foregroundStyle(Theme.savyCrimson)
                 .lineLimit(1...8)
                 .fixedSize(horizontal: false, vertical: true)
                 .submitLabel(.send)

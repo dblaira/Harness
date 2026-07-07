@@ -110,7 +110,7 @@ struct MacDelegateFormView: View {
 
                         TextEditor(text: $model.draft)
                             .font(Theme.recallBody(17))
-                            .foregroundStyle(Color.black)
+                            .foregroundStyle(Theme.savyCrimson)
                             .scrollContentBackground(.hidden)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 8)
@@ -376,7 +376,7 @@ struct MacDelegateFormView: View {
             if !parsed.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text(parsed.message)
                     .font(Theme.recallBody(17))
-                    .foregroundStyle(Color.black)
+                    .foregroundStyle(Theme.savyCrimson)
                     .textSelection(.enabled)
             }
         }
@@ -395,7 +395,7 @@ struct MacDelegateFormView: View {
             if turn.role == .assistant {
                 HarnessMarkdownText(
                     text: turn.text,
-                    textColor: Theme.macInk,
+                    textColor: Color.black,
                     bodyFont: Theme.recallBody(17),
                     h1Font: Theme.recallSerif(20),
                     h2Font: Theme.recallBody(18, weight: .semibold)
