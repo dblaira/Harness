@@ -1450,6 +1450,18 @@ struct MacChatView: View {
 
             Spacer()
 
+            Picker("View", selection: centerViewBinding) {
+                ForEach(WorkbenchCenterView.allCases) { view in
+                    Text(view.label).tag(view)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .frame(width: 182)
+            .help("Switch between Chat, Cockpit, and the Delegation Queue")
+
+            Spacer()
+
             Menu {
                 ForEach(Backend.allCases) { backend in
                     Button {
