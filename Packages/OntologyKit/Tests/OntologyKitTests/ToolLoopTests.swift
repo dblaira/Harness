@@ -706,6 +706,52 @@ private struct SingleShotBackend: ModelBackendAdapter {
     #expect(response.toolCalls.first?.input["path"]?.stringValue == "~/Documents/Main/SOUL.md")
 }
 
+@Test func codexToolRequestBodyUsesResponsesFunctionFormat() throws {
+    let turn = ToolLoopTurn(
+        assistantText: "",
+        toolCalls: [ToolCallRequest(id: "fc_1", name: "shell", input: ["command": "echo hi"])],
+        toolResults: [ToolCallResult(callId: "fc_1", result: ToolResult(toolName: "shell", output: "nope", isError: true))]
+    )
+    let body = CodexSessionClient.toolRequestBody(
+        model: "gpt-5.5",
+        system: "system prompt",
+        messages: [CodexSessionClient.Message(role: "user", text: "hi")],
+        tools: [HarnessToolCatalog.spec(named: "shell")!],
+        toolTranscript: [turn]
+    )
+    // Responses API: system rides in `instructions`; tools are FLAT functions
+    // (no nested "function" key like chat/completions).
+    #expect(body["instructions"] as? String == "system prompt")
+    let tools = try #require(body["tools"] as? [[String: Any]])
+    #expect(tools.first?["type"] as? String == "function")
+    #expect(tools.first?["name"] as? String == "shell")
+    #expect(tools.first?["parameters"] is [String: Any])
+    // Prior turn replays as function_call + function_call_output input items.
+    let input = try #require(body["input"] as? [[String: Any]])
+    #expect(input.contains { $0["type"] as? String == "function_call" && $0["call_id"] as? String == "fc_1" })
+    let output = try #require(input.first { $0["type"] as? String == "function_call_output" })
+    #expect(output["call_id"] as? String == "fc_1")
+    #expect((output["output"] as? String)?.hasPrefix("ERROR:") == true)
+}
+
+@Test func codexParsesResponsesFunctionCall() throws {
+    let fixture = """
+    {
+      "output": [
+        {"type": "function_call", "call_id": "fc_9", "name": "search_files", "arguments": "{\\"pattern\\": \\"fuseki\\", \\"path\\": \\"~/Documents/Main\\"}"},
+        {"type": "message", "content": [{"type": "output_text", "text": "looking"}]}
+      ],
+      "usage": {"total_tokens": 21}
+    }
+    """.data(using: .utf8)!
+    let response = try CodexSessionClient.parseToolResponse(data: fixture, statusCode: 200)
+    #expect(response.text == "looking")
+    #expect(response.tokenCount == 21)
+    #expect(response.toolCalls.first?.id == "fc_9")
+    #expect(response.toolCalls.first?.name == "search_files")
+    #expect(response.toolCalls.first?.input["pattern"]?.stringValue == "fuseki")
+}
+
 /// The whole point of this change: all three API backends report tool-capable
 /// when their key is present, so none of them silently falls back to a
 /// tool-less single-shot run.

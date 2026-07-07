@@ -317,9 +317,10 @@ public struct AgentRunner: Sendable {
             let envKey = ProcessInfo.processInfo.environment["XAI_API_KEY"] ?? ""
             return !key.isEmpty || !envKey.isEmpty || GrokSessionClient.sessionStatus() == .valid
         case .codex:
-            // ChatGPT is tool-capable through the OpenAI API when a key exists.
+            // ChatGPT is tool-capable via the OpenAI API key OR its `codex
+            // login` subscription session (Responses API function tools).
             let envKey = ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? ""
-            return !key.isEmpty || !envKey.isEmpty
+            return !key.isEmpty || !envKey.isEmpty || CodexSessionClient.loadSessionToken() != nil
         case .hermes:
             return false
         }
@@ -368,7 +369,23 @@ public struct AgentRunner: Sendable {
                 toolTranscript: toolTranscript
             )
         case .codex:
-            throw RunError.failed("\(backend.rawValue) has no native tool support; run it single-shot instead.")
+            let hasOpenAIKey = effectiveKey != nil
+                || !(ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? "").isEmpty
+            if hasOpenAIKey {
+                return try await OpenAIClient(apiKey: effectiveKey).send(
+                    messages: Self.openAIMessages(history: history, user: user, images: images),
+                    system: system,
+                    tools: tools,
+                    toolTranscript: toolTranscript
+                )
+            }
+            // No API key — run tools off the ChatGPT `codex login` session.
+            return try await CodexSessionClient().send(
+                messages: Self.codexMessages(history: history, user: user, images: images),
+                system: system,
+                tools: tools,
+                toolTranscript: toolTranscript
+            )
         case .hermes:
             throw RunError.failed("\(backend.rawValue) has no native tool support; run it single-shot instead.")
         }
