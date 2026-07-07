@@ -234,6 +234,40 @@ private final class ScriptedToolBackend: ToolCapableModelBackend, @unchecked Sen
     #expect(monitor.progressSnapshot().phase == .finished)
 }
 
+/// The chat card observes the @Published `pendingRequests` mirror, not the
+/// sync `pendingSnapshot()`. This proves the mirror empties after a decision —
+/// i.e. the card can dismiss. (If the live card lingered, the cause is the model
+/// re-issuing the tool call, not a stale store mirror.)
+@MainActor
+private func mirrorSettles(_ store: ToolApprovalStore, to count: Int) async -> Int {
+    for _ in 0..<300 {
+        if store.pendingRequests.count == count { return count }
+        try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+    return store.pendingRequests.count
+}
+
+@Test func approvalMirrorEmptiesAfterDecision() async throws {
+    let store = makeApprovalStore()
+    let request = ToolApprovalRequest(toolName: "write_file", summary: "~/x.txt", reason: "test")
+    let decision = Task { await store.awaitDecision(request) }
+    #expect(await mirrorSettles(store, to: 1) == 1)   // card appears
+    store.approve(id: request.id)
+    _ = await decision.value
+    #expect(await mirrorSettles(store, to: 0) == 0)   // card dismisses
+    #expect(store.pendingSnapshot().isEmpty)
+}
+
+@Test func approvalMirrorEmptiesAfterDenial() async throws {
+    let store = makeApprovalStore()
+    let request = ToolApprovalRequest(toolName: "shell", summary: "rm -rf x", reason: "test")
+    let decision = Task { await store.awaitDecision(request) }
+    #expect(await mirrorSettles(store, to: 1) == 1)
+    store.deny(id: request.id)
+    _ = await decision.value
+    #expect(await mirrorSettles(store, to: 0) == 0)
+}
+
 @Test func deniedShellFeedsDenialResultAndLoopContinues() async throws {
     let home = try makeTempDirectory("tool-loop-home")
     let store = makeApprovalStore()
@@ -303,6 +337,51 @@ private final class ScriptedToolBackend: ToolCapableModelBackend, @unchecked Sen
     #expect(monitor.progressSnapshot().iteration == 30)
     #expect(detail.traceEvents.contains { $0.stage == .toolCall && $0.message.contains("Iteration budget of 30 reached") })
 }
+
+// MARK: - (d.2) repeated-call dedupe (no duplicate approval cards)
+
+#if os(macOS)
+@Test func repeatedIdenticalToolCallIsDedupedNotRePrompted() async throws {
+    let home = try makeTempDirectory("tool-loop-home")
+    let store = makeApprovalStore()
+    let executor = makeExecutor(home: home, approvals: store)
+    let target = home.appendingPathComponent("Documents/Harness/proof.txt")
+    let writeInput: JSONValue = ["path": .string(target.path), "content": "once"]
+    // The model re-issues the identical write after it already succeeded.
+    let backend = ScriptedToolBackend(script: [
+        toolCallResponse("Writing.", [ToolCallRequest(id: "w1", name: "write_file", input: writeInput)]),
+        toolCallResponse("Writing again.", [ToolCallRequest(id: "w2", name: "write_file", input: writeInput)]),
+        BackendResponse(text: finalAnswerText, tokenCount: nil, cost: nil),
+    ])
+    let service = makeService(ledger: try RunLedgerStore.inMemory())
+
+    let runTask = Task {
+        try await service.createRun(
+            prompt: "write it",
+            ontology: OntologyLoader.load(),
+            backend: backend,
+            tools: HarnessToolCatalog.v1,
+            toolExecutor: executor
+        )
+    }
+    // Exactly ONE approval card — for the first write. The repeat never prompts.
+    let request = try await waitForPendingRequest(in: store)
+    #expect(request.toolName == "write_file")
+    store.approve(id: request.id)
+
+    let detail = try await runTask.value
+    #expect(detail.run.success)
+    #expect(store.pendingSnapshot().isEmpty)
+    // The repeat was deduped, not re-executed or re-prompted.
+    #expect(detail.traceEvents.contains { $0.stage == .toolResult && $0.message.contains("deduped") })
+    // File written exactly once, with the content.
+    #expect(try String(contentsOf: target, encoding: .utf8) == "once")
+    // The model was told it already did this, so it can stop.
+    #expect(backend.lastTranscript.contains { turn in
+        turn.toolResults.contains { $0.result.output.contains("already made this exact") }
+    })
+}
+#endif
 
 // MARK: - (e) memory tool → MemoryCandidate row
 

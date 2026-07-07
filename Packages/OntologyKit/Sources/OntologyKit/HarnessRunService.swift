@@ -337,6 +337,13 @@ public struct HarnessRunService: Sendable {
         var events: [TraceEvent] = []
         var transcript: [ToolLoopTurn] = []
         var iteration = 0
+        // Some models re-issue an identical tool call after it already
+        // succeeded (a benign re-loop). Re-running it would spawn a second
+        // approval card for the same action and could loop to the budget. So a
+        // repeat of an identical (name + input) call this run returns the prior
+        // result with a "you already did this" note — never re-executed, never
+        // re-prompted. The bouncer still gates every genuinely-new call.
+        var executedCalls: [String: ToolResult] = [:]
         monitor?.update {
             $0.iteration = 0
             $0.maxIterations = maxIterations
@@ -428,6 +435,24 @@ public struct HarnessRunService: Sendable {
                     $0.currentTool = call.name
                     $0.phase = .runningTool
                 }
+                let signature = "\(call.name)\u{1}\(call.input.jsonString)"
+                if let prior = executedCalls[signature] {
+                    // Identical call already handled this run — do not re-run or
+                    // re-prompt; hand back the prior result and tell the model to
+                    // stop repeating it.
+                    let deduped = ToolResult(
+                        toolName: call.name,
+                        output: "You already made this exact \(call.name) call this turn — do not repeat it. Its result was:\n\(prior.output)",
+                        isError: prior.isError
+                    )
+                    events.append(TraceEvent(
+                        runId: runId,
+                        stage: .toolResult,
+                        message: redactor.redact("\(call.name) deduped: repeated identical call skipped")
+                    ))
+                    results.append(ToolCallResult(callId: call.id, result: deduped))
+                    continue
+                }
                 events.append(TraceEvent(
                     runId: runId,
                     stage: .toolCall,
@@ -439,6 +464,7 @@ public struct HarnessRunService: Sendable {
                     stage: .toolResult,
                     message: redactor.redact("\(call.name) \(result.isError ? "failed" : "ok"): \(String(result.output.prefix(300)))")
                 ))
+                executedCalls[signature] = result
                 results.append(ToolCallResult(callId: call.id, result: result))
             }
             transcript.append(ToolLoopTurn(

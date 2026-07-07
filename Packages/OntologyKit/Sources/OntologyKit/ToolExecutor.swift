@@ -532,7 +532,10 @@ public final class ToolExecutor: Sendable {
                 withIntermediateDirectories: true
             )
             try content.write(to: url, atomically: true, encoding: .utf8)
-            return ToolResult(toolName: "write_file", output: "Wrote \(content.utf8.count) bytes to \(displayPath(url)).")
+            return ToolResult(
+                toolName: "write_file",
+                output: "Wrote \(content.utf8.count) bytes to \(displayPath(url)). This write is complete and the file now holds exactly that content — do not call write_file again for this path unless you are changing it."
+            )
         } catch {
             return .failure("write_file", "Write failed: \(error.localizedDescription)")
         }
