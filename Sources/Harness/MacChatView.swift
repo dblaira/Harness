@@ -6,7 +6,7 @@ struct MacChatView: View {
     let ontology: Ontology
     @StateObject private var model = MacWorkbenchModel()
     @State private var inspectorTab: WorkbenchInspectorTab = .authority
-    @SceneStorage("MacChatView.isSidebarVisible") private var isSidebarVisible = true
+    @SceneStorage("MacChatView.isSidebarVisible") private var isSidebarVisible = false
     @SceneStorage("MacChatView.isInspectorVisible") private var isInspectorVisible = false
     @SceneStorage("MacChatView.sidebarRailWidth") private var sidebarWidth = HarnessWorkbenchLayoutState.defaultSidebarWidth
     @SceneStorage("MacChatView.inspectorRailWidth") private var inspectorWidth = HarnessWorkbenchLayoutState.defaultInspectorWidth

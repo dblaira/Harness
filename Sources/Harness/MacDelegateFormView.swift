@@ -2,38 +2,67 @@
 import SwiftUI
 import OntologyKit
 
-/// Question-on-top, answer-below form layout. The answer panel owns the screen;
-/// prior turns stay collapsed so the latest response is always visible.
+/// One centered column: full session text top-to-bottom, composer stays in the
+/// middle of the viewport while you type or dictate.
 struct MacDelegateFormView: View {
     @ObservedObject var model: MacWorkbenchModel
-    @State private var showEarlierTurns = false
     @State private var showAttachments = false
+    @State private var editorHeight: CGFloat = 140
     @FocusState private var questionFocused: Bool
 
-    private var latestAssistantText: String {
-        if let turn = model.chatThread.last(where: { $0.role == .assistant }) {
-            return turn.text
-        }
-        if let detail = model.selectedDetail {
-            return HarnessTranscriptCopy.assistantAnswer(from: detail)
-        }
-        return ""
-    }
-
-    private var earlierTurns: [ConversationTurn] {
-        guard model.chatThread.count > 2 else { return [] }
-        return Array(model.chatThread.dropLast(2))
-    }
+    private let columnMaxWidth: CGFloat = 780
 
     var body: some View {
         GeometryReader { proxy in
-            let questionHeight = min(max(proxy.size.height * 0.26, 132), 240)
+            let viewportHeight = proxy.size.height
 
-            VStack(spacing: 0) {
-                questionPanel(height: questionHeight)
-                Divider().overlay(Theme.macHair)
-                answerPanel
-                statusRow
+            ScrollViewReader { scrollProxy in
+                ScrollView(.vertical, showsIndicators: true) {
+                    VStack(alignment: .leading, spacing: 28) {
+                        ForEach(model.chatThread) { turn in
+                            fullTurnBlock(turn)
+                                .id(turn.id)
+                        }
+
+                        composerBlock
+                            .id("composer")
+
+                        if model.isRunning {
+                            HStack(spacing: 10) {
+                                ProgressView().controlSize(.small)
+                                Text(model.status)
+                                    .foregroundStyle(Theme.macInk.opacity(0.55))
+                            }
+                            .id("running-status")
+                        }
+                    }
+                    .padding(.horizontal, 32)
+                    .padding(.vertical, 36)
+                    .frame(maxWidth: columnMaxWidth, alignment: .leading)
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: viewportHeight, alignment: .center)
+                }
+                .onAppear {
+                    keepComposerCentered(scrollProxy, viewportHeight: viewportHeight)
+                }
+                .onChange(of: model.draft) { _, _ in
+                    updateEditorHeight(viewportHeight: viewportHeight)
+                    keepComposerCentered(scrollProxy, viewportHeight: viewportHeight)
+                }
+                .onChange(of: model.chatThread.count) { _, _ in
+                    if let last = model.chatThread.last, last.role == .assistant {
+                        DispatchQueue.main.async {
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                scrollProxy.scrollTo(last.id, anchor: .center)
+                            }
+                        }
+                    } else {
+                        keepComposerCentered(scrollProxy, viewportHeight: viewportHeight)
+                    }
+                }
+                .onChange(of: model.isRunning) { _, _ in
+                    keepComposerCentered(scrollProxy, viewportHeight: viewportHeight)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -43,8 +72,8 @@ struct MacDelegateFormView: View {
         }
     }
 
-    private func questionPanel(height: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+    private var composerBlock: some View {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Text("YOUR QUESTION")
                     .font(.caption.weight(.bold))
@@ -64,26 +93,26 @@ struct MacDelegateFormView: View {
 
             ZStack(alignment: .topLeading) {
                 TextEditor(text: $model.draft)
-                    .font(.system(size: 15))
+                    .font(.system(size: 16))
                     .foregroundStyle(Theme.macInk)
                     .scrollContentBackground(.hidden)
-                    .padding(10)
+                    .padding(12)
                     .focused($questionFocused)
 
                 if model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text("What do you want Harness to answer?")
-                        .font(.system(size: 15))
+                    Text("Say it here — everything stays in this column, centered on your screen.")
+                        .font(.system(size: 16))
                         .foregroundStyle(Theme.macFaint)
-                        .padding(.horizontal, 15)
-                        .padding(.vertical, 18)
+                        .padding(.horizontal, 17)
+                        .padding(.vertical, 20)
                         .allowsHitTesting(false)
                 }
             }
-            .frame(height: max(height - 52, 80))
-            .background(Theme.macEntry.opacity(0.38), in: RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.macHair, lineWidth: 1))
+            .frame(height: editorHeight)
+            .background(Theme.macEntry.opacity(0.38), in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.macHair, lineWidth: 1))
 
-            HStack(spacing: 10) {
+            HStack(spacing: 12) {
                 attachmentMenu
                 Spacer()
                 if model.isRunning {
@@ -102,112 +131,59 @@ struct MacDelegateFormView: View {
                 .keyboardShortcut(.return, modifiers: .command)
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
-        .frame(height: height)
     }
 
-    private var answerPanel: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    Color.clear.frame(height: 1).id("answer-top")
+    private func fullTurnBlock(_ turn: ConversationTurn) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text(turn.role == .user ? "YOU" : "ANSWER")
+                    .font(.caption.weight(.bold))
+                    .tracking(1.4)
+                    .foregroundStyle(Theme.macInk.opacity(0.5))
+                Spacer()
+                copyButton(label: "Copy", text: turn.text)
+            }
 
-                    HStack(spacing: 8) {
-                        Text("ANSWER")
-                            .font(.caption.weight(.bold))
-                            .tracking(1.4)
-                            .foregroundStyle(Theme.macInk.opacity(0.5))
-                        Spacer()
-                        if !latestAssistantText.isEmpty {
-                            copyButton(label: "Copy answer", text: latestAssistantText)
-                        }
-                    }
-
-                    if !earlierTurns.isEmpty {
-                        DisclosureGroup(
-                            isExpanded: $showEarlierTurns,
-                            content: {
-                                VStack(alignment: .leading, spacing: 10) {
-                                    ForEach(earlierTurns) { turn in
-                                        compactTurnRow(turn)
-                                    }
-                                }
-                                .padding(.top, 6)
-                            },
-                            label: {
-                                Text("Earlier in this session (\(earlierTurns.count) messages)")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(Theme.macInk.opacity(0.62))
-                            }
-                        )
-                        .padding(12)
-                        .background(Theme.macEntry.opacity(0.2), in: RoundedRectangle(cornerRadius: 8))
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
-                    }
-
-                    if model.isRunning {
-                        HStack(spacing: 10) {
-                            ProgressView().controlSize(.small)
-                            Text(model.status)
-                                .foregroundStyle(Theme.macInk.opacity(0.55))
-                        }
-                        .padding(.vertical, 8)
-                    } else if latestAssistantText.isEmpty {
-                        Text("Your answer will appear here — full width, no scrolling to hunt for it.")
-                            .font(.body)
-                            .foregroundStyle(Theme.macInk.opacity(0.42))
-                            .padding(.vertical, 24)
-                    } else {
-                        HarnessMarkdownText(
-                            text: latestAssistantText,
-                            textColor: Theme.macInk,
-                            bodyFont: .system(size: 15),
-                            h1Font: .system(.title2, design: .serif).weight(.semibold),
-                            h2Font: .headline
-                        )
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .id("latest-answer")
-                    }
-                }
-                .padding(20)
+            if turn.role == .assistant {
+                HarnessMarkdownText(
+                    text: turn.text,
+                    textColor: Theme.macInk,
+                    bodyFont: .system(size: 16),
+                    h1Font: .system(.title2, design: .serif).weight(.semibold),
+                    h2Font: .headline
+                )
+                .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .onChange(of: latestAssistantText) { _, _ in
-                withAnimation(.easeOut(duration: 0.2)) {
-                    proxy.scrollTo("answer-top", anchor: .top)
-                }
-            }
-            .onChange(of: model.isRunning) { _, running in
-                if running {
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        proxy.scrollTo("answer-top", anchor: .top)
-                    }
-                }
+            } else {
+                Text(turn.text)
+                    .font(.system(size: 16))
+                    .foregroundStyle(Theme.macInk)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            Theme.macEntry.opacity(turn.role == .user ? 0.32 : 0.18),
+            in: RoundedRectangle(cornerRadius: 12)
+        )
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.macHair, lineWidth: 1))
     }
 
-    private var statusRow: some View {
-        HStack(spacing: 10) {
-            if let detail = model.selectedDetail {
-                statusPill("\(detail.authorityHits.count) authority", "point.3.connected.trianglepath.dotted")
-                statusPill("\(detail.memoryHits.count) memory", "archivebox")
-                statusPill(detail.run.success ? "trace saved" : "failed saved", detail.run.success ? "checkmark.seal" : "exclamationmark.triangle")
-            }
-            Spacer()
-            if let statusText = HarnessTranscriptCopy.statusCopyText(status: model.status) {
-                Text(statusText)
-                    .font(.caption)
-                    .foregroundStyle(Theme.macRed.opacity(0.85))
-                    .lineLimit(2)
+    private func updateEditorHeight(viewportHeight: CGFloat) {
+        let lineCount = max(4, model.draft.components(separatedBy: "\n").count + 1)
+        let estimated = CGFloat(lineCount) * 24 + 48
+        let cap = max(viewportHeight * 0.55, 200)
+        editorHeight = min(max(estimated, 140), cap)
+    }
+
+    private func keepComposerCentered(_ proxy: ScrollViewProxy, viewportHeight: CGFloat) {
+        DispatchQueue.main.async {
+            withAnimation(.easeOut(duration: 0.15)) {
+                proxy.scrollTo("composer", anchor: .center)
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 8)
-        .overlay(Rectangle().fill(Theme.macHair).frame(height: 1), alignment: .top)
     }
 
     private var attachmentMenu: some View {
@@ -258,28 +234,6 @@ struct MacDelegateFormView: View {
         }
     }
 
-    private func compactTurnRow(_ turn: ConversationTurn) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(turn.role == .user ? "You" : "Harness")
-                .font(.caption2.weight(.bold))
-                .foregroundStyle(Theme.macInk.opacity(0.45))
-            Text(turn.text)
-                .font(.caption)
-                .foregroundStyle(Theme.macInk.opacity(0.78))
-                .lineLimit(4)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func statusPill(_ text: String, _ icon: String) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: icon)
-            Text(text)
-        }
-        .font(.caption2)
-        .foregroundStyle(Theme.macInk.opacity(0.65))
-    }
-
     private func copyButton(label: String, text: String) -> some View {
         Button {
             HarnessClipboard.copy(text)
@@ -292,7 +246,6 @@ struct MacDelegateFormView: View {
     }
 }
 
-/// Lightweight sheet for link/GitHub attachment entry (reuses model draft helpers).
 private struct MacComposerAttachmentSheet: View {
     @ObservedObject var model: MacWorkbenchModel
     @Environment(\.dismiss) private var dismiss
