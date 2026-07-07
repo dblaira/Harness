@@ -34,12 +34,28 @@ public struct HarnessRunService: Sendable {
         prompt: String,
         ontology: Ontology,
         backend: any ModelBackendAdapter,
-        images: [ModelImageAttachment] = []
+        images: [ModelImageAttachment] = [],
+        conversationHistory: [ConversationTurn] = [],
+        soul: SoulDocument? = SoulLoader.load()
     ) async throws -> HarnessRunDetail {
         let runId = UUID().uuidString
         var trace: [TraceEvent] = [
             TraceEvent(runId: runId, stage: .createRun, message: "Created local Harness run.")
         ]
+
+        if let soul {
+            trace.append(TraceEvent(
+                runId: runId,
+                stage: .soulLoad,
+                message: "Loaded SOUL.md from \(soul.path) (\(soul.wordCount) words)."
+            ))
+        } else {
+            trace.append(TraceEvent(
+                runId: runId,
+                stage: .soulLoad,
+                message: "No SOUL.md found; identity anchor skipped."
+            ))
+        }
 
         let graphHealth = await graphHealthChecker.checkAcceptedGraph()
         trace.append(TraceEvent(runId: runId, stage: .graphHealth, message: "Graph health: \(graphHealth.detail)"))
@@ -59,6 +75,8 @@ public struct HarnessRunService: Sendable {
             ontology: ontology,
             authorityHits: authorityHits,
             memoryHits: memoryHits,
+            soul: soul,
+            conversationHistory: conversationHistory,
             images: images
         )
 
@@ -168,6 +186,7 @@ public struct AgentRunnerBackendAdapter: ModelBackendAdapter {
             backend: backend,
             system: packet.system,
             user: packet.userPrompt,
+            conversationHistory: packet.conversationHistory,
             images: packet.images,
             apiKey: apiKey
         )

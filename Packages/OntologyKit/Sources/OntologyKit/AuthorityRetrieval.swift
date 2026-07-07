@@ -212,9 +212,27 @@ public enum PromptPacketBuilder {
         ontology: Ontology,
         authorityHits: [GraphAuthorityHit],
         memoryHits: [MemoryHit],
+        soul: SoulDocument? = SoulLoader.load(),
+        conversationHistory: [ConversationTurn] = [],
         images: [ModelImageAttachment] = []
     ) -> ModelPacket {
-        var system = ClaudeClient.systemPrompt(from: ontology)
+        var system = ""
+        if let soul {
+            system += """
+            IDENTITY ANCHOR (SOUL.md — read every session; vault wins over agent defaults):
+            Source: \(soul.path)
+
+            \(soul.text)
+
+            ---
+
+            """
+        }
+        system += ClaudeClient.systemPrompt(from: ontology)
+        let cappedHistory = ConversationTurn.cappedHistory(conversationHistory)
+        if !cappedHistory.isEmpty {
+            system += "\n\nCHAT CONTINUITY: Prior turns in this thread are in the message history. Stay consistent with what you already said.\n"
+        }
         let policyDirectives = AgentPolicyCompiler.compile(
             prompt: prompt,
             ontology: ontology,
@@ -265,6 +283,9 @@ public enum PromptPacketBuilder {
         """
 
         var hashInput = prompt + "\n" + system
+        for turn in cappedHistory {
+            hashInput += "\n\(turn.role.rawValue):\(turn.text)"
+        }
         for image in images {
             hashInput += "\n\(image.title):\(image.mimeType):\(image.base64Data.count)"
         }
@@ -275,6 +296,8 @@ public enum PromptPacketBuilder {
             memoryHits: memoryHits,
             policyDirectives: policyDirectives,
             images: images,
+            conversationHistory: cappedHistory,
+            soulPath: soul?.path,
             promptPacketHash: StableHash.hex(hashInput)
         )
     }

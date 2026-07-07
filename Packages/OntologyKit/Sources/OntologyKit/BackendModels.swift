@@ -22,6 +22,7 @@ public enum MessageRole: String, Codable, Sendable, Equatable {
 
 public enum TraceStage: String, Codable, Sendable, Equatable {
     case createRun
+    case soulLoad
     case graphHealth
     case authorityRetrieval
     case supportingRetrieval
@@ -423,6 +424,8 @@ public struct ModelPacket: Codable, Sendable, Equatable {
     public let memoryHits: [MemoryHit]
     public let policyDirectives: [AgentPolicyDirective]
     public let images: [ModelImageAttachment]
+    public let conversationHistory: [ConversationTurn]
+    public let soulPath: String?
     public let promptPacketHash: String
 
     public init(
@@ -432,6 +435,8 @@ public struct ModelPacket: Codable, Sendable, Equatable {
         memoryHits: [MemoryHit],
         policyDirectives: [AgentPolicyDirective] = [],
         images: [ModelImageAttachment] = [],
+        conversationHistory: [ConversationTurn] = [],
+        soulPath: String? = nil,
         promptPacketHash: String
     ) {
         self.userPrompt = userPrompt
@@ -440,6 +445,8 @@ public struct ModelPacket: Codable, Sendable, Equatable {
         self.memoryHits = memoryHits
         self.policyDirectives = policyDirectives
         self.images = images
+        self.conversationHistory = conversationHistory
+        self.soulPath = soulPath
         self.promptPacketHash = promptPacketHash
     }
 }

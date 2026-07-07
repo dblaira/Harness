@@ -66,6 +66,7 @@ import Testing
     #expect(detail.run.modelName == "test-codex")
     #expect(detail.traceEvents.map(\.stage) == [
         .createRun,
+        .soulLoad,
         .graphHealth,
         .authorityRetrieval,
         .supportingRetrieval,

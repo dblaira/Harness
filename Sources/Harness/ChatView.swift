@@ -113,6 +113,12 @@ struct ChatView: View {
             return
         }
 
+        let history = messages.map { message in
+            ConversationTurn(
+                role: message.fromMe ? .user : .assistant,
+                text: message.text
+            )
+        }
         messages.append(ChatMessage(text: text, fromMe: true))
         draft = ""
         thinking = true
@@ -124,7 +130,8 @@ struct ChatView: View {
                 let detail = try await service.createRun(
                     prompt: text,
                     ontology: ontology,
-                    backend: AgentRunnerBackendAdapter(backend: chosen, apiKey: key)
+                    backend: AgentRunnerBackendAdapter(backend: chosen, apiKey: key),
+                    conversationHistory: history
                 )
                 let reply = detail.messages.last { $0.role == .assistant }?.text ?? detail.run.finalAnswer
                 await MainActor.run {

@@ -207,24 +207,22 @@ public struct AgentRunner: Sendable {
         return (response as? HTTPURLResponse)?.statusCode == 200
     }
 
-    /// Send a single-turn prompt (already prefixed with the ontology system prompt)
-    /// to the chosen backend and return its text reply.
+    /// Send a prompt (ontology + SOUL already in `system`) to the chosen backend.
     public func run(
         backend: Backend,
         system: String,
         user: String,
+        conversationHistory: [ConversationTurn] = [],
         images: [ModelImageAttachment] = [],
         apiKey: String? = nil
     ) async throws -> String {
-        let fullPrompt = system + "\n\n---\nUser: " + user
+        let history = ConversationTurn.cappedHistory(conversationHistory)
+        let transcriptPrompt = Self.transcriptPrompt(system: system, history: history, user: user)
         switch backend {
         case .codex:
-            // Harness already embeds ontology in `system`. Use the ChatGPT
-            // subscriber responses API (same auth as `codex login`) instead of
-            // the coding-agent CLI, which loads plugins/MCP and exceeds 90s.
             if CodexSessionClient.loadSessionToken() != nil {
                 return try await CodexSessionClient().send(
-                    messages: [CodexSessionClient.Message(role: "user", text: user, images: images)],
+                    messages: Self.codexMessages(history: history, user: user, images: images),
                     system: system
                 )
             }
@@ -232,7 +230,7 @@ public struct AgentRunner: Sendable {
             guard let bin = codexPath else { throw RunError.notFound("codex CLI") }
             return try shell(
                 bin,
-                ["exec", "--skip-git-repo-check", "--ignore-user-config", "--ephemeral", fullPrompt],
+                ["exec", "--skip-git-repo-check", "--ignore-user-config", "--ephemeral", transcriptPrompt],
                 timeout: 300
             )
             #else
@@ -242,16 +240,13 @@ public struct AgentRunner: Sendable {
             let key = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if !key.isEmpty {
                 return try await XAIClient(apiKey: key).send(
-                    messages: [XAIClient.Message(role: "user", text: user, images: images)],
+                    messages: Self.xaiMessages(history: history, user: user, images: images),
                     system: system
                 )
             }
-            // Harness already embeds ontology in `system`. Use the Grok session
-            // chat proxy (same auth as `grok login`) instead of the coding-agent
-            // CLI, which spawns grep/MCP tools and routinely exceeds 90s.
             if GrokSessionClient.loadSessionToken() != nil {
                 return try await GrokSessionClient().send(
-                    messages: [GrokSessionClient.Message(role: "user", text: user, images: images)],
+                    messages: Self.grokMessages(history: history, user: user, images: images),
                     system: system
                 )
             }
@@ -260,7 +255,7 @@ public struct AgentRunner: Sendable {
             return try shell(
                 bin,
                 [
-                    "-p", fullPrompt,
+                    "-p", transcriptPrompt,
                     "--output-format", "json",
                     "--max-turns", "1",
                     "--disable-web-search",
@@ -274,14 +269,69 @@ public struct AgentRunner: Sendable {
             #endif
         case .claude:
             let c = ClaudeClient(apiKey: apiKey)
-            return try await c.send(messages: [(role: "user", text: user)], system: system)
+            return try await c.send(
+                messages: Self.claudeMessages(history: history, user: user),
+                system: system
+            )
         case .hermes:
-            return try await runHermesLocal(system: system, user: user)
+            return try await runHermesLocal(system: system, history: history, user: user)
         }
     }
 
+    private static func transcriptPrompt(system: String, history: [ConversationTurn], user: String) -> String {
+        var transcript = system + "\n\n---\n"
+        for turn in history {
+            let speaker = turn.role == .user ? "User" : "Assistant"
+            transcript += "\(speaker): \(turn.text)\n\n"
+        }
+        transcript += "User: \(user)"
+        return transcript
+    }
+
+    private static func codexMessages(
+        history: [ConversationTurn],
+        user: String,
+        images: [ModelImageAttachment]
+    ) -> [CodexSessionClient.Message] {
+        var messages = history.map {
+            CodexSessionClient.Message(role: $0.role.rawValue, text: $0.text)
+        }
+        messages.append(CodexSessionClient.Message(role: "user", text: user, images: images))
+        return messages
+    }
+
+    private static func grokMessages(
+        history: [ConversationTurn],
+        user: String,
+        images: [ModelImageAttachment]
+    ) -> [GrokSessionClient.Message] {
+        var messages = history.map {
+            GrokSessionClient.Message(role: $0.role.rawValue, text: $0.text)
+        }
+        messages.append(GrokSessionClient.Message(role: "user", text: user, images: images))
+        return messages
+    }
+
+    private static func xaiMessages(
+        history: [ConversationTurn],
+        user: String,
+        images: [ModelImageAttachment]
+    ) -> [XAIClient.Message] {
+        var messages = history.map {
+            XAIClient.Message(role: $0.role.rawValue, text: $0.text)
+        }
+        messages.append(XAIClient.Message(role: "user", text: user, images: images))
+        return messages
+    }
+
+    private static func claudeMessages(history: [ConversationTurn], user: String) -> [(role: String, text: String)] {
+        var messages = history.map { (role: $0.role.rawValue, text: $0.text) }
+        messages.append((role: "user", text: user))
+        return messages
+    }
+
     /// Local Ollama server, no network egress, no subscription or key.
-    private func runHermesLocal(system: String, user: String) async throws -> String {
+    private func runHermesLocal(system: String, history: [ConversationTurn], user: String) async throws -> String {
         guard let url = URL(string: "http://127.0.0.1:11434/api/generate") else {
             throw RunError.notFound("Ollama endpoint")
         }
@@ -290,7 +340,7 @@ public struct AgentRunner: Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: [
             "model": "hermes3:8b",
-            "prompt": system + "\n\n---\nUser: " + user,
+            "prompt": Self.transcriptPrompt(system: system, history: history, user: user),
             "stream": false,
         ])
         let (data, response) = try await URLSession.shared.data(for: request)

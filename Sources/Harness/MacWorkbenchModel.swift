@@ -9,6 +9,7 @@ final class MacWorkbenchModel: ObservableObject {
     @Published var ontology: Ontology = .empty
     @Published var runs: [HarnessRun] = []
     @Published var selectedDetail: HarnessRunDetail?
+    @Published var chatThread: [ConversationTurn] = []
     @Published var draft = "" {
         didSet { refreshRoutePlan() }
     }
@@ -108,6 +109,7 @@ final class MacWorkbenchModel: ObservableObject {
 
     func newSession() {
         selectedDetail = nil
+        chatThread = []
         draft = ""
         composerAttachments = []
         searchText = ""
@@ -1075,6 +1077,7 @@ final class MacWorkbenchModel: ObservableObject {
         let ledger = ledger
         let ontology = ontology
 
+        let historySnapshot = chatThread
         runTask = Task.detached(priority: .userInitiated) {
             let adapter = AgentRunnerBackendAdapter(backend: selectedBackend, apiKey: key)
             do {
@@ -1083,11 +1086,15 @@ final class MacWorkbenchModel: ObservableObject {
                     prompt: prompt,
                     ontology: ontology,
                     backend: adapter,
-                    images: visionImages
+                    images: visionImages,
+                    conversationHistory: historySnapshot
                 )
                 let latestRuns = try await ledger.listRuns()
+                let answer = detail.messages.last(where: { $0.role == .assistant })?.text ?? detail.run.finalAnswer
                 await MainActor.run {
                     self.runTask = nil
+                    self.chatThread.append(ConversationTurn(role: .user, text: prompt))
+                    self.chatThread.append(ConversationTurn(role: .assistant, text: answer))
                     self.selectedDetail = detail
                     self.runs = latestRuns
                     self.status = detail.run.success ? "Trace saved" : "Backend failed; trace saved"

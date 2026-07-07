@@ -347,11 +347,18 @@ struct MacChatView: View {
         ZStack {
             MacHarnessWatermark()
                 .frame(width: 260, height: 300)
-                .opacity(model.selectedDetail == nil ? 0.18 : 0.08)
+                .opacity(model.chatThread.isEmpty && model.selectedDetail == nil ? 0.18 : 0.08)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    if let detail = model.selectedDetail {
+                    if !model.chatThread.isEmpty {
+                        if let detail = model.selectedDetail {
+                            runSummary(detail)
+                        }
+                        ForEach(model.chatThread) { turn in
+                            chatTurnBubble(turn)
+                        }
+                    } else if let detail = model.selectedDetail {
                         runSummary(detail)
                         ForEach(detail.messages) { message in
                             messageBubble(message)
@@ -1619,6 +1626,45 @@ struct MacChatView: View {
         }
         .buttonStyle(.plain)
         .help(help)
+    }
+
+    private func chatTurnBubble(_ turn: ConversationTurn) -> some View {
+        let role = turn.role
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(role == .user ? "YOU" : "ANSWER")
+                    .font(.caption2.weight(.bold))
+                    .tracking(1.2)
+                    .foregroundStyle(Theme.macInk.opacity(0.48))
+                Spacer()
+                copyTranscriptButton(
+                    label: "Copy",
+                    help: role == .assistant
+                        ? "Copy the entire answer, including all chapters"
+                        : "Copy the entire message",
+                    text: turn.text
+                )
+            }
+            if role == .assistant {
+                HarnessMarkdownText(
+                    text: turn.text,
+                    textColor: Theme.macInk,
+                    bodyFont: .body,
+                    h1Font: .system(.title2, design: .serif).weight(.semibold),
+                    h2Font: .headline
+                )
+                .textSelection(.enabled)
+            } else {
+                Text(turn.text)
+                    .font(.body)
+                    .foregroundStyle(Theme.macInk)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.macEntry.opacity(role == .user ? 0.45 : 0.25), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.macHair, lineWidth: 1))
     }
 
     private func messageBubble(_ message: HarnessMessage) -> some View {
