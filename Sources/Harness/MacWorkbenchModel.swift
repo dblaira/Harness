@@ -1010,7 +1010,7 @@ final class MacWorkbenchModel: ObservableObject {
     ) -> String {
         let environmentName: String?
         switch backend {
-        case .codex: environmentName = "OPENAI_API_KEY"
+        case .codex: environmentName = "OPENAI_API_KEY"  // env only — never keychain
         case .grok: environmentName = "XAI_API_KEY"
         case .claude: environmentName = "ANTHROPIC_API_KEY"
         case .hermes: environmentName = nil
@@ -1026,12 +1026,13 @@ final class MacWorkbenchModel: ObservableObject {
 
     nonisolated static func usesAPIKey(_ backend: Backend) -> Bool {
         switch backend {
-        case .codex, .grok, .claude:
-            // ChatGPT (OpenAI), Grok (xAI), Claude (Anthropic) all accept an
-            // API key that turns on their tool loop. Codex keeps its session
-            // fallback when no key is pasted.
+        case .grok, .claude:
             return true
-        case .hermes:
+        case .codex, .hermes:
+            // Codex runs its tool loop off the ChatGPT `codex login` session —
+            // no keychain key, so selecting it never triggers a keychain
+            // prompt. (An OpenAI API key can still be supplied via the
+            // OPENAI_API_KEY environment variable for anyone who wants it.)
             return false
         }
     }
