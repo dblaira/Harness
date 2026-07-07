@@ -71,51 +71,103 @@ struct MacDelegateFormView: View {
     }
 
     private var composerBlock: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if !model.composerAttachments.isEmpty {
-                composerAttachmentChips
-            }
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Delegate")
+                .font(Theme.savyRobotoMedium(11))
+                .foregroundStyle(Color.black.opacity(0.48))
+                .padding(.leading, 8)
 
-            HStack(alignment: .bottom, spacing: 12) {
-                TextEditor(text: $model.draft)
-                    .font(Theme.recallBody(17))
-                    .foregroundStyle(Theme.macEntryInk)
-                    .scrollContentBackground(.hidden)
-                    .padding(12)
-                    .frame(height: editorHeight)
-                    .background(Theme.macEntry, in: RoundedRectangle(cornerRadius: 10))
-                    .focused($questionFocused)
-
-                VStack(spacing: 10) {
-                    attachmentMenu
-                    sendControl
+            VStack(alignment: .leading, spacing: 0) {
+                if !model.composerAttachments.isEmpty {
+                    composerAttachmentChips
+                        .padding(.horizontal, 12)
+                        .padding(.top, 10)
+                    composerDivider
                 }
-                .padding(.bottom, 4)
+
+                HStack(alignment: .bottom, spacing: 10) {
+                    ZStack(alignment: .topLeading) {
+                        if model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Text("What do I want?")
+                                .font(Theme.recallBody(17))
+                                .foregroundStyle(Theme.macFaint)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 14)
+                                .allowsHitTesting(false)
+                        }
+
+                        TextEditor(text: $model.draft)
+                            .font(Theme.recallBody(17))
+                            .foregroundStyle(Theme.macEntryInk)
+                            .scrollContentBackground(.hidden)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .frame(height: editorHeight)
+                            .focused($questionFocused)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    VStack(spacing: 8) {
+                        attachmentMenu
+                        sendControl
+                    }
+                    .padding(.trailing, 10)
+                    .padding(.bottom, 10)
+                }
             }
+            .background(Theme.macEntry, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(Color.black.opacity(0.07), lineWidth: 1)
+            )
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 12)
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 22))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22)
+                .stroke(Color.black.opacity(0.05), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.14), radius: 14, y: 7)
+    }
+
+    private var composerDivider: some View {
+        Rectangle()
+            .fill(Color.black.opacity(0.08))
+            .frame(height: 1)
+            .padding(.leading, 12)
     }
 
     @ViewBuilder
     private var sendControl: some View {
         if model.isRunning {
             Button { model.cancelRun() } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 28))
-                    .foregroundStyle(Theme.macInk.opacity(0.45))
+                composerActionIcon("xmark", tint: Theme.macMuted)
             }
             .buttonStyle(.plain)
             .help("Cancel")
         } else {
             Button(action: model.send) {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 28))
-                    .foregroundStyle(model.canSendComposer ? Theme.macRed : Theme.macFaint)
+                composerActionIcon(
+                    "arrow.up",
+                    tint: model.canSendComposer ? Theme.macRed : Theme.macFaint
+                )
             }
             .buttonStyle(.plain)
             .disabled(!model.canSendComposer)
             .keyboardShortcut(.return, modifiers: .command)
             .help("Send")
         }
+    }
+
+    private func composerActionIcon(_ systemImage: String, tint: Color) -> some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(tint)
+            .frame(width: 30, height: 30)
+            .background(Color.white, in: Circle())
+            .overlay(Circle().stroke(Color.black.opacity(0.1), lineWidth: 1))
+            .shadow(color: .black.opacity(0.06), radius: 2, y: 1)
     }
 
     private func fullTurnBlock(_ turn: ConversationTurn) -> some View {
@@ -132,8 +184,16 @@ struct MacDelegateFormView: View {
             } else {
                 Text(turn.text)
                     .font(Theme.recallBody(17))
-                    .foregroundStyle(Theme.macInk.opacity(0.92))
+                    .foregroundStyle(Theme.macInk)
                     .textSelection(.enabled)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Theme.macEntry, in: RoundedRectangle(cornerRadius: 10))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(Color.black.opacity(0.07), lineWidth: 1)
+                    )
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -170,9 +230,7 @@ struct MacDelegateFormView: View {
                 Label("New", systemImage: "plus.bubble")
             }
         } label: {
-            Image(systemName: "plus.circle.fill")
-                .font(.system(size: 28))
-                .foregroundStyle(Theme.macInk.opacity(0.55))
+            composerActionIcon("plus", tint: Theme.macRed)
         }
         .menuStyle(.borderlessButton)
         .help("Add")
@@ -183,16 +241,22 @@ struct MacDelegateFormView: View {
             ForEach(model.composerAttachments) { attachment in
                 HStack(spacing: 4) {
                     Image(systemName: attachment.chipIcon)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.macRed)
                     Button { model.removeComposerAttachment(attachment) } label: {
                         Image(systemName: "xmark")
                             .font(.system(size: 9, weight: .bold))
                     }
                     .buttonStyle(.plain)
                 }
-                .foregroundStyle(Theme.macInk.opacity(0.6))
+                .foregroundStyle(Theme.macInk.opacity(0.72))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.white.opacity(0.7), in: Capsule())
+                .overlay(Capsule().stroke(Color.black.opacity(0.06), lineWidth: 1))
             }
         }
+        .padding(.bottom, 6)
     }
 }
 
@@ -231,7 +295,7 @@ private struct MacComposerAttachmentSheet: View {
         }
         .padding(24)
         .frame(width: 420)
-        .background(Theme.macBg)
+        .background(Color.white)
     }
 }
 #endif

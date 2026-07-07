@@ -1459,6 +1459,11 @@ struct MacChatView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(Theme.macBg)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Color.black.opacity(0.06))
+                .frame(height: 1)
+        }
     }
 
     private var workbenchTopBar: some View {
