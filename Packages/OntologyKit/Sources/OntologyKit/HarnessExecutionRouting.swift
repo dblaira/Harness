@@ -725,14 +725,14 @@ public struct HarnessRouteExecutor: Sendable {
         },
         researchDelegate: @Sendable (HarnessResearchRequest) async throws -> String = { request in
             try await AgentRunner().run(
-                backend: .codex,
+                backend: .harnessDefault,
                 system: request.adapter.systemInstruction,
                 user: request.routePrompt
             )
         },
         externalResearchDelegate: @Sendable (HarnessResearchRequest) async throws -> String = { request in
             try await AgentRunner().run(
-                backend: .codex,
+                backend: .harnessDefault,
                 system: request.adapter.systemInstruction,
                 user: request.routePrompt
             )

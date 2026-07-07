@@ -13,6 +13,7 @@ struct HarnessApp: App {
         WindowGroup("The Adam Pattern") {
             #if os(macOS)
             MacChatView(ontology: ontology)
+                .tint(Theme.savyCrimson)
                 .frame(
                     minWidth: CGFloat(HarnessWorkbenchLayoutState.transcriptMinimumWidth),
                     idealWidth: CGFloat(HarnessWorkbenchLayoutState().minimumWindowWidth),

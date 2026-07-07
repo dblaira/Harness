@@ -9,6 +9,9 @@ public enum Backend: String, CaseIterable, Identifiable, Sendable, Codable {
     case claude  = "Claude API" // direct API key (optional)
     case hermes  = "Hermes local" // local Ollama model, no subscription or key
     public var id: String { rawValue }
+
+    /// Backend Harness selects on launch and for synthesis delegates.
+    public static let harnessDefault: Backend = .grok
 }
 
 /// Backend readiness, shown with the SAVY content-status vocabulary:

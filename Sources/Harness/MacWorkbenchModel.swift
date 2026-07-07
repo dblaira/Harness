@@ -15,7 +15,7 @@ final class MacWorkbenchModel: ObservableObject {
     }
     @Published var composerAttachments: [ComposerAttachment] = []
     @Published var composerIntent = ComposerIntent()
-    @Published var backend: Backend = .codex {
+    @Published var backend: Backend = .harnessDefault {
         didSet {
             guard backend != oldValue else { return }
             loadAPIKey(for: backend)
@@ -682,6 +682,9 @@ final class MacWorkbenchModel: ObservableObject {
         let connectors = connectors
         let capabilities = capabilities
         let firecrawlKey = Self.loadFirecrawlAPIKey()
+        let selectedBackend = backend
+        let trimmedKey = Self.usesAPIKey(selectedBackend) ? apiKey.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        let routeAPIKey = trimmedKey.isEmpty ? nil : trimmedKey
         Task {
             do {
                 let result = try await HarnessRouteExecutor(
@@ -721,9 +724,10 @@ final class MacWorkbenchModel: ObservableObject {
                             break
                         }
                         return try await AgentRunner().run(
-                            backend: .codex,
+                            backend: selectedBackend,
                             system: request.adapter.systemInstruction,
-                            user: request.routePrompt
+                            user: request.routePrompt,
+                            apiKey: routeAPIKey
                         )
                     }
                 )
