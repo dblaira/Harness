@@ -7,7 +7,7 @@ struct MacChatView: View {
     @StateObject private var model = MacWorkbenchModel()
     @State private var inspectorTab: WorkbenchInspectorTab = .authority
     @SceneStorage("MacChatView.isSidebarVisible") private var isSidebarVisible = true
-    @SceneStorage("MacChatView.isInspectorVisible") private var isInspectorVisible = true
+    @SceneStorage("MacChatView.isInspectorVisible") private var isInspectorVisible = false
     @SceneStorage("MacChatView.sidebarRailWidth") private var sidebarWidth = HarnessWorkbenchLayoutState.defaultSidebarWidth
     @SceneStorage("MacChatView.inspectorRailWidth") private var inspectorWidth = HarnessWorkbenchLayoutState.defaultInspectorWidth
     @SceneStorage("MacChatView.centerView") private var centerViewRaw = WorkbenchCenterView.chat.rawValue
@@ -319,7 +319,8 @@ struct MacChatView: View {
         VStack(spacing: 0) {
             topBar
             centerViewContent
-            if centerView != .board {
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if centerView != .board && centerView != .chat {
                 delegateLabel
                 composer
             }
@@ -332,7 +333,7 @@ struct MacChatView: View {
     private var centerViewContent: some View {
         switch centerView {
         case .chat:
-            chatTranscriptView
+            MacDelegateFormView(model: model)
         case .cockpit:
             MacCockpitView { prompt in
                 model.draft = prompt
@@ -1491,7 +1492,7 @@ struct MacChatView: View {
     private var centerViewTitle: String {
         switch centerView {
         case .chat:
-            return model.selectedDetail?.run.prompt ?? "The Adam Pattern"
+            return "Delegate"
         case .cockpit:
             return "Harness Cockpit"
         case .board:
