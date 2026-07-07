@@ -2,7 +2,7 @@
 import SwiftUI
 import OntologyKit
 
-/// Notorious Recall styling: navy page, cream question form, white answer cards.
+/// Words only in the editor and in thread content. Plus to attach, arrow to send.
 struct MacDelegateFormView: View {
     @ObservedObject var model: MacWorkbenchModel
     @State private var showAttachments = false
@@ -17,9 +17,7 @@ struct MacDelegateFormView: View {
 
             ScrollViewReader { scrollProxy in
                 ScrollView(.vertical, showsIndicators: true) {
-                    VStack(alignment: .leading, spacing: 28) {
-                        recallHero
-
+                    VStack(alignment: .leading, spacing: 22) {
                         ForEach(model.chatThread) { turn in
                             fullTurnBlock(turn)
                                 .id(turn.id)
@@ -29,13 +27,11 @@ struct MacDelegateFormView: View {
                             .id("composer")
 
                         if model.isRunning {
-                            HStack(spacing: 10) {
-                                ProgressView().controlSize(.small).tint(Theme.macRed)
-                                Text(model.status)
-                                    .font(Theme.recallBody(16))
-                                    .foregroundStyle(Theme.macMuted)
-                            }
-                            .id("running-status")
+                            ProgressView()
+                                .controlSize(.small)
+                                .tint(Theme.macInk.opacity(0.5))
+                                .frame(maxWidth: .infinity)
+                                .id("running-status")
                         }
                     }
                     .padding(.horizontal, 32)
@@ -74,115 +70,78 @@ struct MacDelegateFormView: View {
         }
     }
 
-    private var recallHero: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("Harness")
-                .font(Theme.recallSerif(34))
-                .foregroundStyle(Theme.macTan)
-            Rectangle()
-                .fill(Theme.macRed)
-                .frame(height: 2)
-                .padding(.top, 10)
-        }
-        .padding(.bottom, 4)
-    }
-
     private var composerBlock: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            sectionLabel("YOUR QUESTION")
-
+        VStack(alignment: .leading, spacing: 8) {
             if !model.composerAttachments.isEmpty {
                 composerAttachmentChips
             }
 
-            ZStack(alignment: .topLeading) {
+            HStack(alignment: .bottom, spacing: 12) {
                 TextEditor(text: $model.draft)
                     .font(Theme.recallBody(17))
                     .foregroundStyle(Theme.macEntryInk)
                     .scrollContentBackground(.hidden)
-                    .padding(14)
+                    .padding(12)
+                    .frame(height: editorHeight)
+                    .background(Theme.macEntry, in: RoundedRectangle(cornerRadius: 10))
                     .focused($questionFocused)
 
-                if model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text("Say it here — cream field on navy, like Notorious Recall.")
-                        .font(Theme.recallBody(17))
-                        .foregroundStyle(Theme.macFaint)
-                        .padding(.horizontal, 19)
-                        .padding(.vertical, 22)
-                        .allowsHitTesting(false)
+                VStack(spacing: 10) {
+                    attachmentMenu
+                    sendControl
                 }
+                .padding(.bottom, 4)
             }
-            .frame(height: editorHeight)
-            .background(Theme.macEntry, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.macHair, lineWidth: 1))
+        }
+    }
 
-            HStack(spacing: 12) {
-                attachmentMenu
-                Spacer()
-                if model.isRunning {
-                    Button("Cancel") { model.cancelRun() }
-                        .buttonStyle(.plain)
-                        .font(Theme.recallBody(15, weight: .semibold))
-                        .foregroundStyle(Theme.macRed)
-                }
-                Button(action: model.send) {
-                    Label(model.isRunning ? "Running…" : "Get Answer", systemImage: "arrow.up.circle.fill")
-                        .font(Theme.recallBody(15, weight: .bold))
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(Theme.macRed)
-                .disabled(!model.canSendComposer)
-                .keyboardShortcut(.return, modifiers: .command)
+    @ViewBuilder
+    private var sendControl: some View {
+        if model.isRunning {
+            Button { model.cancelRun() } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 28))
+                    .foregroundStyle(Theme.macInk.opacity(0.45))
             }
+            .buttonStyle(.plain)
+            .help("Cancel")
+        } else {
+            Button(action: model.send) {
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.system(size: 28))
+                    .foregroundStyle(model.canSendComposer ? Theme.macRed : Theme.macInk.opacity(0.25))
+            }
+            .buttonStyle(.plain)
+            .disabled(!model.canSendComposer)
+            .keyboardShortcut(.return, modifiers: .command)
+            .help("Send")
         }
     }
 
     private func fullTurnBlock(_ turn: ConversationTurn) -> some View {
-        let isUser = turn.role == .user
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                sectionLabel(isUser ? "YOU" : "ANSWER")
-                Spacer()
-                copyButton(label: "Copy", text: turn.text)
-            }
-
+        Group {
             if turn.role == .assistant {
                 HarnessMarkdownText(
                     text: turn.text,
-                    textColor: Theme.macCardInk,
+                    textColor: Theme.macInk,
                     bodyFont: Theme.recallBody(17),
-                    h1Font: Theme.recallSerif(22),
-                    h2Font: Theme.recallBody(18, weight: .bold)
+                    h1Font: Theme.recallSerif(20),
+                    h2Font: Theme.recallBody(18, weight: .semibold)
                 )
                 .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 Text(turn.text)
                     .font(Theme.recallBody(17))
-                    .foregroundStyle(Theme.macEntryInk)
+                    .foregroundStyle(Theme.macInk.opacity(0.92))
                     .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            isUser ? Theme.macEntry : Theme.macCardBright,
-            in: RoundedRectangle(cornerRadius: 12)
-        )
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.macHair, lineWidth: 1))
-    }
-
-    private func sectionLabel(_ text: String) -> some View {
-        Text(text)
-            .font(Theme.recallLabel())
-            .tracking(2.2)
-            .foregroundStyle(Theme.macTan)
     }
 
     private func updateEditorHeight(viewportHeight: CGFloat) {
         let lineCount = max(4, model.draft.components(separatedBy: "\n").count + 1)
-        let estimated = CGFloat(lineCount) * 26 + 52
+        let estimated = CGFloat(lineCount) * 26 + 48
         let cap = max(viewportHeight * 0.55, 220)
         editorHeight = min(max(estimated, 156), cap)
     }
@@ -204,55 +163,36 @@ struct MacDelegateFormView: View {
                 Label("File", systemImage: "doc")
             }
             Button { showAttachments = true } label: {
-                Label("Link or GitHub", systemImage: "link")
+                Label("Link", systemImage: "link")
             }
             Divider()
             Button { model.newSession() } label: {
-                Label("New Session", systemImage: "plus.bubble")
+                Label("New", systemImage: "plus.bubble")
             }
         } label: {
-            Label("Attach", systemImage: "paperclip")
-                .font(Theme.recallBody(14, weight: .semibold))
-                .foregroundStyle(Theme.macTan)
+            Image(systemName: "plus.circle.fill")
+                .font(.system(size: 28))
+                .foregroundStyle(Theme.macInk.opacity(0.55))
         }
         .menuStyle(.borderlessButton)
+        .help("Add")
     }
 
     private var composerAttachmentChips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(model.composerAttachments) { attachment in
-                    HStack(spacing: 6) {
-                        Image(systemName: attachment.chipIcon)
-                            .font(.system(size: 12, weight: .semibold))
-                        Text(attachment.chipLabel)
-                            .font(Theme.recallBody(13, weight: .medium))
-                            .lineLimit(1)
-                        Button { model.removeComposerAttachment(attachment) } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 10, weight: .bold))
-                        }
-                        .buttonStyle(.plain)
+        HStack(spacing: 8) {
+            ForEach(model.composerAttachments) { attachment in
+                HStack(spacing: 4) {
+                    Image(systemName: attachment.chipIcon)
+                        .font(.system(size: 13, weight: .semibold))
+                    Button { model.removeComposerAttachment(attachment) } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 9, weight: .bold))
                     }
-                    .foregroundStyle(Theme.macEntryInk.opacity(0.85))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Theme.macEntry, in: Capsule())
-                    .overlay(Capsule().stroke(Theme.macHair, lineWidth: 1))
+                    .buttonStyle(.plain)
                 }
+                .foregroundStyle(Theme.macInk.opacity(0.6))
             }
         }
-    }
-
-    private func copyButton(label: String, text: String) -> some View {
-        Button {
-            HarnessClipboard.copy(text)
-        } label: {
-            Label(label, systemImage: "doc.on.doc")
-                .font(Theme.recallBody(13, weight: .semibold))
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(Theme.macRed)
     }
 }
 
@@ -263,10 +203,7 @@ private struct MacComposerAttachmentSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Add Link or GitHub Repo")
-                .font(Theme.recallSerif(22))
-                .foregroundStyle(Theme.macBarInk)
-            TextField("URL or owner/repo", text: $linkInput, axis: .vertical)
+            TextField("", text: $linkInput, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(Theme.recallBody(16))
                 .foregroundStyle(Theme.macEntryInk)
@@ -275,19 +212,26 @@ private struct MacComposerAttachmentSheet: View {
                 .background(Theme.macEntry, in: RoundedRectangle(cornerRadius: 10))
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }
-                Button("Add") {
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title2)
+                }
+                .buttonStyle(.plain)
+                Button {
                     model.addComposerLink(linkInput)
                     linkInput = ""
                     dismiss()
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.title2)
                 }
-                .tint(Theme.macRed)
+                .buttonStyle(.plain)
                 .disabled(linkInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .padding(24)
-        .frame(width: 460)
-        .background(Theme.macBarBg)
+        .frame(width: 420)
+        .background(Theme.macBg)
     }
 }
 #endif

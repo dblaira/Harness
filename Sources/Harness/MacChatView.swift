@@ -1394,7 +1394,74 @@ struct MacChatView: View {
         priority.formatted(.number.precision(.fractionLength(1)))
     }
 
+    @ViewBuilder
     private var topBar: some View {
+        if centerView == .chat {
+            chatTopBar
+        } else {
+            workbenchTopBar
+        }
+    }
+
+    private var chatTopBar: some View {
+        HStack(spacing: 10) {
+            chatToolbarIcon(
+                isSidebarVisible ? "sidebar.left" : "sidebar.left",
+                help: isSidebarVisible ? "Hide sidebar" : "Show sidebar"
+            ) {
+                isSidebarVisible.toggle()
+            }
+
+            Spacer()
+
+            Menu {
+                ForEach(Backend.allCases) { backend in
+                    Button {
+                        model.backend = backend
+                    } label: {
+                        if model.backend == backend {
+                            Label(backend.rawValue, systemImage: "checkmark")
+                        } else {
+                            Text(backend.rawValue)
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: "cpu")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.macInk.opacity(0.55))
+            }
+            .menuStyle(.borderlessButton)
+            .help(model.backend.rawValue)
+
+            backendStatusDot
+
+            if model.backend == .codex {
+                chatToolbarIcon("key.viewfinder", help: "Authorize") {
+                    model.authorizeCodexAccount()
+                }
+            } else if model.backend != .hermes {
+                chatToolbarIcon(
+                    model.hasSavedAPIKey ? "key.fill" : "key",
+                    help: "API key"
+                ) {
+                    model.saveAPIKey()
+                }
+            }
+
+            chatToolbarIcon(
+                isInspectorVisible ? "sidebar.right" : "sidebar.right",
+                help: isInspectorVisible ? "Hide inspector" : "Show inspector"
+            ) {
+                isInspectorVisible.toggle()
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Theme.macBg)
+    }
+
+    private var workbenchTopBar: some View {
         HStack(spacing: 8) {
             toolbarIconButton(
                 isSidebarVisible ? "rectangle.leftthird.inset.filled" : "rectangle",
@@ -1490,6 +1557,34 @@ struct MacChatView: View {
         .overlay(alignment: .bottom) {
             Rectangle().fill(Theme.macRed).frame(height: 2)
         }
+    }
+
+    private var backendStatusDot: some View {
+        let readiness = model.backendReadiness[model.backend] ?? .checking
+        return Group {
+            switch readiness {
+            case .live:
+                Circle().fill(Theme.statusLive).frame(width: 8, height: 8)
+            case .pending:
+                Circle().fill(Theme.statusPending).frame(width: 8, height: 8)
+            case .failed:
+                Circle().fill(Theme.macRed).frame(width: 8, height: 8)
+            case .checking:
+                Circle().fill(Theme.macInk.opacity(0.25)).frame(width: 8, height: 8)
+            }
+        }
+        .help(readiness.actionNeeded ?? readiness.statusWord)
+    }
+
+    private func chatToolbarIcon(_ systemImage: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Theme.macInk.opacity(0.5))
+                .frame(width: 28, height: 24)
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 
     private var centerViewTitle: String {
