@@ -761,16 +761,16 @@ private struct CircleIconButton: View {
 }
 
 private extension Theme {
-    static let iosBackground = Color(hex: 0x081421)
-    static let iosPanel = Color(hex: 0x1E2023)
-    static let iosControl = Color(hex: 0x191B1E)
-    static let iosControlActive = Color(hex: 0x303236)
-    static let iosBubble = Color(hex: 0x182637)
-    static let iosText = Color(hex: 0xF6F0E5)
-    static let iosSand = Color(hex: 0xC9B79A)
-    static let iosMuted = Color(hex: 0x9C9A96)
-    static let iosHair = Color.white.opacity(0.08)
-    static let iosComposerStroke = Color.white.opacity(0.12)
+    static let iosBackground = Theme.recallPage
+    static let iosPanel = Theme.recallNearBlack
+    static let iosControl = Theme.recallNearBlack
+    static let iosControlActive = Theme.recallDarkRed
+    static let iosBubble = Theme.recallCard
+    static let iosText = Theme.macEntryInk
+    static let iosSand = Theme.recallTan
+    static let iosMuted = Color.black.opacity(0.45)
+    static let iosHair = Theme.recallTan.opacity(0.45)
+    static let iosComposerStroke = Theme.recallTan.opacity(0.55)
 }
 
 #Preview {

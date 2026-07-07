@@ -135,16 +135,16 @@ struct MacChatView: View {
 
             TextField("Search sessions...", text: $model.searchText)
                 .textFieldStyle(.plain)
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.macInk)
-                .padding(8)
-                .background(Theme.macEntry.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+                .font(Theme.recallBody(14))
+                .foregroundStyle(Theme.macEntryInk)
+                .padding(10)
+                .background(Theme.macEntry, in: RoundedRectangle(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
 
             Text("SESSIONS")
-                .font(.system(size: 9).weight(.bold))
-                .tracking(1.8)
-                .foregroundStyle(Theme.macInk.opacity(0.55))
+                .font(Theme.recallLabel(12))
+                .tracking(2.0)
+                .foregroundStyle(Theme.macTan)
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 4) {
@@ -212,9 +212,9 @@ struct MacChatView: View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(model.toolGroups) { group in
                 Text(group.title.uppercased())
-                    .font(.system(size: 8).weight(.bold))
-                    .tracking(1.4)
-                    .foregroundStyle(Theme.macInk.opacity(0.42))
+                    .font(Theme.recallLabel(11))
+                    .tracking(1.8)
+                    .foregroundStyle(Theme.macTan.opacity(0.85))
                     .padding(.top, group.id == model.toolGroups.first?.id ? 0 : 6)
 
                 ForEach(group.tools) { tool in
@@ -301,18 +301,18 @@ struct MacChatView: View {
         let selected = model.selectedDetail?.run.id == run.id
         return VStack(alignment: .leading, spacing: 3) {
             Text(run.prompt)
-                .font(.system(size: 12).weight(.medium))
+                .font(Theme.recallBody(14, weight: .semibold))
                 .lineLimit(1)
             Text("\(run.backend) - \(run.createdAt.formatted(date: .abbreviated, time: .shortened))")
-                .font(.caption2)
+                .font(Theme.recallBody(12))
                 .lineLimit(1)
-                .foregroundStyle(Theme.macInk.opacity(0.45))
+                .foregroundStyle(selected ? Theme.macEntryInk.opacity(0.55) : Theme.macMuted)
         }
-        .foregroundStyle(selected ? Theme.macInk : Theme.macRed.opacity(0.9))
-        .padding(.vertical, 6)
+        .foregroundStyle(selected ? Theme.macEntryInk : Theme.macInk)
+        .padding(.vertical, 7)
         .padding(.horizontal, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(selected ? Theme.macEntry.opacity(0.45) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+        .background(selected ? Theme.macEntry : Color.clear, in: RoundedRectangle(cornerRadius: 8))
     }
 
     private var transcript: some View {
@@ -1405,8 +1405,8 @@ struct MacChatView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(centerViewTitle)
-                    .font(.system(size: 14).weight(.semibold))
-                    .foregroundStyle(Theme.macInk)
+                    .font(Theme.recallSerif(20))
+                    .foregroundStyle(Theme.macBarInk)
                     .lineLimit(1)
             }
 
@@ -1441,10 +1441,10 @@ struct MacChatView: View {
                     Text("ChatGPT account")
                         .font(.system(size: 12, weight: .semibold))
                 }
-                .foregroundStyle(Theme.macInk.opacity(0.72))
+                .foregroundStyle(Theme.macBarInk.opacity(0.82))
                 .padding(.horizontal, 10)
                 .frame(width: 150, height: 30)
-                .background(Theme.macEntry.opacity(0.28), in: RoundedRectangle(cornerRadius: 8))
+                .background(Theme.macEntry.opacity(0.65), in: RoundedRectangle(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
                 .help("Codex uses your ChatGPT authorization, not an OpenAI API key")
 
@@ -1454,11 +1454,11 @@ struct MacChatView: View {
             } else if model.backend != .hermes {
                 SecureField(macAPIKeyLabel(for: model.backend), text: $model.apiKey)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.macInk)
+                    .font(Theme.recallBody(13))
+                    .foregroundStyle(Theme.macEntryInk)
                     .padding(7)
                     .frame(width: 150)
-                    .background(Theme.macEntry.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+                    .background(Theme.macEntry, in: RoundedRectangle(cornerRadius: 8))
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
                     .onSubmit { model.saveAPIKey() }
 
@@ -1486,7 +1486,10 @@ struct MacChatView: View {
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
-        .overlay(Rectangle().fill(Theme.macHair).frame(height: 1), alignment: .bottom)
+        .background(Theme.macBarBg)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Theme.macRed).frame(height: 2)
+        }
     }
 
     private var centerViewTitle: String {
@@ -1551,10 +1554,10 @@ struct MacChatView: View {
     private func toolbarIconButton(_ systemImage: String, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 12).weight(.semibold))
-                .foregroundStyle(Theme.macInk.opacity(0.68))
+                .font(.system(size: 13).weight(.semibold))
+                .foregroundStyle(Theme.macBarInk.opacity(0.78))
                 .frame(width: 28, height: 24)
-                .background(Theme.macEntry.opacity(0.26), in: RoundedRectangle(cornerRadius: 7))
+                .background(Theme.macEntry.opacity(0.45), in: RoundedRectangle(cornerRadius: 7))
                 .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.macHair, lineWidth: 1))
         }
         .buttonStyle(.plain)
@@ -3159,20 +3162,20 @@ private struct OutlinedHarnessTitle: View {
         ZStack {
             ForEach(Array(outlineOffsets.enumerated()), id: \.offset) { _, offset in
                 titleText
-                    .foregroundStyle(Theme.macInk.opacity(0.34))
+                    .foregroundStyle(Theme.macRed.opacity(0.45))
                     .offset(x: offset.width, y: offset.height)
             }
 
             titleText
-                .foregroundStyle(Theme.macBg)
+                .foregroundStyle(Theme.macTan)
         }
         .accessibilityLabel(text)
     }
 
     private var titleText: some View {
         Text(text)
-            .font(.custom("PlayfairDisplay-Regular", size: 24).weight(.black))
-            .tracking(0)
+            .font(Theme.recallSerif(26))
+            .tracking(0.5)
     }
 }
 #endif
