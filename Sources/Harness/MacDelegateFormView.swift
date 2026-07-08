@@ -8,6 +8,7 @@ struct MacDelegateFormView: View {
     /// The bouncer's pending queue (same instance as `model.toolApprovals`),
     /// observed here so approval cards appear the moment the loop suspends.
     @ObservedObject var approvals: ToolApprovalStore
+    @StateObject private var voiceDictation = VoiceDictationController()
     @State private var showAttachments = false
     @State private var editorHeight: CGFloat = 108
     @FocusState private var questionFocused: Bool
@@ -174,6 +175,12 @@ struct MacDelegateFormView: View {
 
                     HStack(spacing: 8) {
                         attachmentMenu
+                        VoiceDictationButton(
+                            controller: voiceDictation,
+                            field: .intent,
+                            currentText: { model.draft },
+                            onAppend: { model.draft = $0 }
+                        )
                         Spacer(minLength: 0)
                         sendControl
                     }
@@ -190,8 +197,16 @@ struct MacDelegateFormView: View {
                 // conn-004 "Delegation is three sentences": Intent (above)
                 // is the message itself; these two carry through
                 // ComposerIntent.composedPrompt verbatim, same as Intent.
-                composerSentenceField(text: $model.preferredApproach, placeholder: "When I am...I like to")
-                composerSentenceField(text: $model.doneCondition, placeholder: "Done looks like...")
+                composerSentenceField(
+                    text: $model.preferredApproach,
+                    placeholder: "When I am...I like to",
+                    voiceField: .preferredApproach
+                )
+                composerSentenceField(
+                    text: $model.doneCondition,
+                    placeholder: "Done looks like...",
+                    voiceField: .doneCondition
+                )
             }
             .padding(.vertical, 1)
             .padding(.horizontal, 6)
@@ -203,12 +218,21 @@ struct MacDelegateFormView: View {
         }
     }
 
-    private func composerSentenceField(text: Binding<String>, placeholder: String) -> some View {
-        TextField(placeholder, text: text, axis: .vertical)
-            .font(Theme.recallBody(14))
-            .foregroundStyle(Theme.savyCrimson)
-            .textFieldStyle(.plain)
-            .lineLimit(1...3)
+    private func composerSentenceField(text: Binding<String>, placeholder: String, voiceField: ComposerVoiceField) -> some View {
+        HStack(spacing: 6) {
+            TextField(placeholder, text: text, axis: .vertical)
+                .font(Theme.recallBody(14))
+                .foregroundStyle(Theme.savyCrimson)
+                .textFieldStyle(.plain)
+                .lineLimit(1...3)
+
+            VoiceDictationButton(
+                controller: voiceDictation,
+                field: voiceField,
+                currentText: { text.wrappedValue },
+                onAppend: { text.wrappedValue = $0 }
+            )
+        }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .background(Color.white, in: RoundedRectangle(cornerRadius: 8))
