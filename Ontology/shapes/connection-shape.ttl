@@ -68,6 +68,58 @@ understood:ConnectionShape
     sh:message "evidence note must be text" ;
   ] .
 
+understood:StepEvidenceRatingShape
+  a sh:NodeShape ;
+  sh:targetClass understood:StepEvidenceRating ;
+  sh:property [
+    sh:path understood:forStep ;
+    sh:minCount 1 ;
+    sh:maxCount 1 ;
+    sh:nodeKind sh:IRI ;
+    sh:in (
+      <http://nousresearch.com/adam-pattern#Step1>
+      <http://nousresearch.com/adam-pattern#Step2>
+      <http://nousresearch.com/adam-pattern#Step3>
+      <http://nousresearch.com/adam-pattern#Step4>
+      <http://nousresearch.com/adam-pattern#Step5>
+      <http://nousresearch.com/adam-pattern#Step6>
+      <http://nousresearch.com/adam-pattern#Step7>
+      <http://nousresearch.com/adam-pattern#Step8>
+    ) ;
+    sh:message "unknown or missing pattern step" ;
+  ] ;
+  sh:property [
+    sh:path understood:forBuild ;
+    sh:minCount 1 ;
+    sh:maxCount 1 ;
+    sh:datatype xsd:string ;
+    sh:message "missing build id" ;
+  ] ;
+  sh:property [
+    sh:path understood:rating ;
+    sh:minCount 1 ;
+    sh:maxCount 1 ;
+    sh:datatype xsd:integer ;
+    sh:minInclusive 1 ;
+    sh:maxInclusive 10 ;
+    sh:message "rating must be an integer between 1 and 10" ;
+  ] ;
+  sh:property [
+    sh:path understood:evidenceNote ;
+    sh:minCount 1 ;
+    sh:maxCount 1 ;
+    sh:datatype xsd:string ;
+    sh:minLength 1 ;
+    sh:message "a rating requires an evidence note — if I can't say, I can't play" ;
+  ] ;
+  sh:property [
+    sh:path understood:ratedAt ;
+    sh:minCount 1 ;
+    sh:maxCount 1 ;
+    sh:datatype xsd:dateTime ;
+    sh:message "ratedAt must be a date-time" ;
+  ] .
+
 understood:UnpromptedSignalShape
   a sh:NodeShape ;
   sh:targetClass understood:UnpromptedSignal ;

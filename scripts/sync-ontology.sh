@@ -8,27 +8,35 @@ CANONICAL_DIR="${ONTOLOGY_ACCEPTED_DIR:-$HOME/Library/Mobile Documents/com~apple
 RESOURCE_DIR="$REPO_ROOT/Packages/OntologyKit/Sources/OntologyKit/Resources"
 HEADER="# GENERATED COPY — edit canonical version in Ontology/accepted/ instead."
 
+# The canonical folder lives in iCloud and is absent on fresh machines and
+# builder-agent environments. The committed copies in Resources/ are valid;
+# a missing canonical folder must never fail the build (WO-B / recovery WO-6a).
 if [[ ! -d "$CANONICAL_DIR" ]]; then
-  echo "Missing canonical ontology folder: $CANONICAL_DIR" >&2
-  exit 1
+  echo "warning: canonical ontology folder not found ($CANONICAL_DIR); keeping committed copies in Resources/" >&2
+  exit 0
+fi
+
+# Collect sources BEFORE touching Resources so an empty canonical folder
+# also keeps the committed copies instead of deleting them.
+source_files=()
+while IFS= read -r -d '' source_file; do
+  source_files+=("$source_file")
+done < <(find "$CANONICAL_DIR" -maxdepth 1 -type f -name "*.ttl" -print0 | sort -z)
+
+if [[ "${#source_files[@]}" -eq 0 ]]; then
+  echo "warning: no .ttl files in canonical ontology folder ($CANONICAL_DIR); keeping committed copies in Resources/" >&2
+  exit 0
 fi
 
 mkdir -p "$RESOURCE_DIR"
 find "$RESOURCE_DIR" -maxdepth 1 -type f -name "*.ttl" -delete
 
-found=0
-while IFS= read -r -d '' source_file; do
-  found=1
+for source_file in "${source_files[@]}"; do
   destination_file="$RESOURCE_DIR/$(basename "$source_file")"
   {
     printf '%s\n\n' "$HEADER"
     cat "$source_file"
   } > "$destination_file"
-done < <(find "$CANONICAL_DIR" -maxdepth 1 -type f -name "*.ttl" -print0 | sort -z)
+done
 
-if [[ "$found" -eq 0 ]]; then
-  echo "No .ttl files found in canonical ontology folder: $CANONICAL_DIR" >&2
-  exit 1
-fi
-
-echo "Synced ontology copies from $CANONICAL_DIR"
+echo "Synced ${#source_files[@]} ontology copies from $CANONICAL_DIR"
