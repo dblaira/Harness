@@ -343,6 +343,81 @@ struct SavyTagChip: View {
     }
 }
 
+// MARK: - v6 ink (WO-H: PLAN-blueprint-cockpit-v1.md)
+
+/// The Blueprint cockpit's Benday-dot halftone ground, for the Step
+/// Rail's tan band. A fixed offset-row dot grid, rasterized once via
+/// `.drawingGroup()` so resizing/scrolling doesn't repaint per-dot.
+/// Motion-free — texture, not animation.
+struct SavyBendayGround: View {
+    var dotColor: Color = Theme.macInk
+    var dotOpacity: Double = 0.06
+    var spacing: CGFloat = 9
+    var dotDiameter: CGFloat = 2
+
+    var body: some View {
+        Canvas { context, size in
+            let columns = Int(size.width / spacing) + 2
+            let rows = Int(size.height / spacing) + 2
+            let shading = GraphicsContext.Shading.color(dotColor.opacity(dotOpacity))
+            for row in 0..<rows {
+                let rowOffset = row.isMultiple(of: 2) ? 0 : spacing / 2
+                for column in 0..<columns {
+                    let x = CGFloat(column) * spacing + rowOffset - dotDiameter / 2
+                    let y = CGFloat(row) * spacing - dotDiameter / 2
+                    let dot = Path(ellipseIn: CGRect(x: x, y: y, width: dotDiameter, height: dotDiameter))
+                    context.fill(dot, with: shading)
+                }
+            }
+        }
+        .drawingGroup()
+        .allowsHitTesting(false)
+    }
+}
+
+/// The ONE breathing dot the v6 mockup allows — a live pulse, never
+/// decoration sprinkled across the screen. `TimelineView` keeps time
+/// without a `Timer`; freezes to a still dot when Reduce Motion is on.
+struct SavyBreathingDot: View {
+    var color: Color = Theme.savyGreen
+    var diameter: CGFloat = 7
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.animation(paused: reduceMotion)) { timeline in
+            let phase = reduceMotion ? 0.5 : Self.breathingPhase(at: timeline.date)
+            Circle()
+                .fill(color)
+                .frame(width: diameter, height: diameter)
+                .opacity(0.55 + 0.45 * phase)
+                .scaleEffect(0.85 + 0.3 * phase)
+        }
+    }
+
+    private static func breathingPhase(at date: Date) -> Double {
+        let period = 2.4
+        let t = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period
+        return (sin(t * 2 * .pi) + 1) / 2
+    }
+}
+
+/// The ledger's tilt lives in this background trapezoid only — WO-M's
+/// row content must stay un-tilted and legible. Never
+/// `rotation3DEffect` on a data table; lean the card, not the numbers.
+struct SavyLedgerTiltBackground: Shape {
+    var skew: CGFloat = 12
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX + skew, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX - skew, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.closeSubpath()
+        return path
+    }
+}
+
 // MARK: - Previews
 
 #Preview("Hero headers") {
@@ -402,6 +477,27 @@ struct SavyTagChip: View {
     HStack(spacing: 6) {
         SavyTagChip(tag: "Leverage")
         SavyTagChip(tag: "Health", onRemove: {})
+    }
+    .padding(24)
+    .background(Theme.savyPaper)
+}
+
+#Preview("v6 ink") {
+    VStack(spacing: 20) {
+        ZStack {
+            Theme.macTan.opacity(0.35)
+            SavyBendayGround()
+        }
+        .frame(height: 80)
+
+        HStack(spacing: 8) {
+            SavyBreathingDot()
+            Text("live").font(.caption.weight(.bold))
+        }
+
+        SavyLedgerTiltBackground()
+            .fill(Theme.recallNearBlack)
+            .frame(height: 60)
     }
     .padding(24)
     .background(Theme.savyPaper)
