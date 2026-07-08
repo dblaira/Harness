@@ -384,6 +384,8 @@ struct MacChatView: View {
             }
         case .board:
             delegationQueueView
+        case .blueprint:
+            MacBlueprintView()
         }
     }
 
@@ -1457,8 +1459,8 @@ struct MacChatView: View {
             }
             .labelsHidden()
             .pickerStyle(.segmented)
-            .frame(width: 182)
-            .help("Switch between Chat, Cockpit, and the Delegation Queue")
+            .frame(width: 240)
+            .help("Switch between Chat, Cockpit, the Delegation Queue, and Blueprint")
 
             Spacer()
 
@@ -1543,7 +1545,7 @@ struct MacChatView: View {
             }
             .labelsHidden()
             .pickerStyle(.segmented)
-            .frame(width: 182)
+            .frame(width: 240)
 
             Picker("Backend", selection: $model.backend) {
                 ForEach(Backend.allCases) { backend in
@@ -1653,6 +1655,8 @@ struct MacChatView: View {
             return "Harness Cockpit"
         case .board:
             return "Delegation Queue"
+        case .blueprint:
+            return "Blueprint"
         }
     }
 
@@ -3236,6 +3240,7 @@ enum WorkbenchCenterView: String, CaseIterable, Identifiable, Hashable {
     case chat
     case cockpit
     case board
+    case blueprint
 
     var id: String { rawValue }
 
@@ -3247,6 +3252,8 @@ enum WorkbenchCenterView: String, CaseIterable, Identifiable, Hashable {
             return "Cockpit"
         case .board:
             return "Delegation"
+        case .blueprint:
+            return "Blueprint"
         }
     }
 }

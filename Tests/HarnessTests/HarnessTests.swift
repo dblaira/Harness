@@ -130,9 +130,10 @@ import OntologyKit
 }
 
 @Test func workbenchCenterViewsIncludeDelegationQueue() {
-    #expect(WorkbenchCenterView.allCases.map(\.rawValue) == ["chat", "cockpit", "board"])
+    #expect(WorkbenchCenterView.allCases.map(\.rawValue) == ["chat", "cockpit", "board", "blueprint"])
     #expect(WorkbenchCenterView.cockpit.label == "Cockpit")
     #expect(WorkbenchCenterView.board.label == "Delegation")
+    #expect(WorkbenchCenterView.blueprint.label == "Blueprint")
 }
 
 @Test func delegationQueueActionRecordsShareBatchForMultiSelect() {
