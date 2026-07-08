@@ -16,6 +16,10 @@ struct MacChatView: View {
     @State private var inspectorDragStartWidth: Double?
     @State private var isInspectorDetailPresented = false
     @State private var selectedOpportunityIDs = Set<String>()
+    /// WO-L: the UP NEXT card's row, locked once shown -- "never
+    /// reordered while visible" even if a higher-priority row scouts in
+    /// underneath it. Advances only when the locked row is gone.
+    @State private var upNextRowID: String?
     @State private var delegationEntryKind: MacSuiteEntryKind = .action
     @State private var isDelegationEntryFormPresented = false
     @State private var showingLinkSheet = false
@@ -42,6 +46,7 @@ struct MacChatView: View {
         .onAppear {
             normalizePanelWidths()
             model.updateOntology(ontology)
+            refreshUpNextLock()
         }
         .sheet(isPresented: $isInspectorDetailPresented) {
             expandedInspectorSheet
@@ -72,7 +77,20 @@ struct MacChatView: View {
         .onChange(of: model.searchText) { _, _ in Task { await model.searchSessions() } }
         .onChange(of: model.opportunityBoardRows.map(\.id)) { _, ids in
             selectedOpportunityIDs.formIntersection(Set(ids))
+            refreshUpNextLock()
         }
+    }
+
+    private func refreshUpNextLock() {
+        if let upNextRowID, model.opportunityBoardRows.contains(where: { $0.id == upNextRowID }) {
+            return
+        }
+        upNextRowID = opportunityBoardProjection.rows.first?.id
+    }
+
+    private var upNextRow: OpportunityBoardRow? {
+        guard let upNextRowID else { return nil }
+        return model.opportunityBoardRows.first { $0.id == upNextRowID }
     }
 
     private var currentLayout: HarnessWorkbenchLayoutState {
@@ -889,6 +907,10 @@ struct MacChatView: View {
 
     private func delegationQueueListSurface(showAgent: Bool) -> some View {
         VStack(alignment: .leading, spacing: 6) {
+            if let row = upNextRow {
+                upNextCard(row)
+            }
+
             HStack(spacing: 12) {
                 Picker("Queue View", selection: opportunityBoardViewModeBinding) {
                     ForEach(OpportunityBoardViewMode.allCases) { mode in
@@ -1406,6 +1428,13 @@ struct MacChatView: View {
 
     private func pursueSelectedOpportunity() {
         guard selectedOpportunityRows.count == 1, let row = selectedOpportunityRows.first else { return }
+        pursue(row)
+    }
+
+    /// Shared by the multi-select verb bar and the UP NEXT card -- Pursue
+    /// primes the composer the same way regardless of which surface it
+    /// was pressed from.
+    private func pursue(_ row: OpportunityBoardRow) {
         let card = row.card
         model.recordOpportunityBoardAction(.pursue, rows: [row])
         model.draft = """
@@ -1415,6 +1444,71 @@ struct MacChatView: View {
         Agent: \(card.scoutID ?? "unknown")
         """
         centerViewRaw = WorkbenchCenterView.chat.rawValue
+    }
+
+    /// WO-L: the one decision visible by default -- the top-priority row,
+    /// locked in place (see refreshUpNextLock/upNextRowID) with the same
+    /// Pass/Hold/Bookmark/Pursue verbs as the multi-select bar, scoped to
+    /// just this row. The case-against dissent, when the scout wrote one,
+    /// renders as SavyDarkCard -- the one surface that is explicitly not
+    /// Adam's words.
+    private func upNextCard(_ row: OpportunityBoardRow) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text("UP NEXT")
+                    .font(.system(size: 11, weight: .heavy))
+                    .tracking(1.8)
+                    .foregroundStyle(Theme.savyCrimson)
+                Spacer()
+                Text("priority \(formatPriority(row.card.priority))")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.savyTertiaryText)
+            }
+
+            Text(opportunityTitle(row))
+                .font(Theme.savyDisplaySerif(21))
+                .foregroundStyle(.black)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let description = row.card.envelope.description?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !description.isEmpty {
+                Text(description)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.savySecondaryText)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 8) {
+                opportunityActionButton("Pass", systemImage: "hand.raised", disabled: false) {
+                    model.recordOpportunityBoardAction(.pass, rows: [row])
+                }
+                opportunityActionButton("Hold", systemImage: "pause.circle", disabled: false) {
+                    model.recordOpportunityBoardAction(.hold, rows: [row])
+                }
+                opportunityActionButton("Bookmark", systemImage: "bookmark", disabled: false) {
+                    model.recordOpportunityBoardAction(.bookmark, rows: [row])
+                }
+                opportunityActionButton("Pursue", systemImage: "arrow.up.right.circle", disabled: false) {
+                    pursue(row)
+                }
+            }
+
+            if let caseAgainst = row.card.caseAgainst?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !caseAgainst.isEmpty {
+                SavyDarkCard(
+                    badge: "CASE AGAINST — AGENT DISSENT",
+                    badgeIcon: "exclamationmark.bubble",
+                    title: caseAgainst
+                )
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.savyCrimson.opacity(0.3), lineWidth: 1))
+        .shadow(color: .black.opacity(0.08), radius: 10, y: 4)
+        .padding(.bottom, 4)
     }
 
     private func opportunityTitle(_ row: OpportunityBoardRow) -> String {

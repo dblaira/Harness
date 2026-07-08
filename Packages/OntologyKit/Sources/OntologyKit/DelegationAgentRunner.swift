@@ -108,6 +108,9 @@ public struct DelegationAgentTriage: Sendable, Equatable {
     public let dollarOrder: String?
     public let attention: Int?
     public let rationale: String?
+    /// WO-L: the dissent -- "an agent argues why this is still Step 1."
+    /// Agent speech by design, unlike title/description above.
+    public let caseAgainst: String?
 
     public init(
         title: String? = nil,
@@ -118,7 +121,8 @@ public struct DelegationAgentTriage: Sendable, Equatable {
         effort: OpportunityEffort? = nil,
         dollarOrder: String? = nil,
         attention: Int? = nil,
-        rationale: String? = nil
+        rationale: String? = nil,
+        caseAgainst: String? = nil
     ) {
         self.title = title
         self.description = description
@@ -129,6 +133,7 @@ public struct DelegationAgentTriage: Sendable, Equatable {
         self.dollarOrder = dollarOrder
         self.attention = attention
         self.rationale = rationale
+        self.caseAgainst = caseAgainst
     }
 }
 
@@ -477,6 +482,10 @@ public struct DelegationAgentRunner: Sendable {
         The description must be copied word-for-word from the source title, description, or excerpt. \
         Do not paraphrase, summarize, or add your own words: "When you use your own words or add \
         words to it, it loses all its meaning."
+        Also write case_against: one or two sentences arguing why this might still be Step 1 \
+        (Context) or Step 2 (Circle) of the Adam Pattern -- more observation needed -- rather than \
+        ready to execute. This is the one field that is explicitly YOUR words, not Adam's; argue \
+        the skeptical case honestly, don't just restate the rationale in reverse.
         """
     }
 
@@ -506,7 +515,8 @@ public struct DelegationAgentRunner: Sendable {
           "effort": "in|above|below",
           "dollar_order": "unknown|10K|100K|1M",
           "attention": 1,
-          "rationale": "why this belongs in the Queue, citing R-IDs"
+          "rationale": "why this belongs in the Queue, citing R-IDs",
+          "case_against": "one or two sentences arguing why this is still Step 1 or Step 2, not ready to execute"
         }
         """
     }
@@ -526,7 +536,8 @@ public struct DelegationAgentRunner: Sendable {
             effort: string(object["effort"]).flatMap(parseEffort),
             dollarOrder: string(object["dollar_order"] ?? object["dollarOrder"]),
             attention: int(object["attention"]),
-            rationale: string(object["rationale"])
+            rationale: string(object["rationale"]),
+            caseAgainst: string(object["case_against"] ?? object["caseAgainst"])
         )
     }
 
@@ -564,6 +575,11 @@ public struct DelegationAgentRunner: Sendable {
         let excerpt = result.markdown?.trimmingCharacters(in: .whitespacesAndNewlines)
         let excerptBlock = excerpt.map { "\n## Firecrawl excerpt\n\(String($0.prefix(900)))\n" } ?? ""
         let triageBlock = triage?.rationale.map { "\n## LLM triage\n\($0)\n" } ?? ""
+        // WO-L: the one frontmatter field that's explicitly agent speech,
+        // never Adam's words -- the UP NEXT card renders it as SavyDarkCard.
+        let caseAgainstLine = triage?.caseAgainst?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? "case_against: \"\(yaml(triage!.caseAgainst!))\"\n"
+            : ""
 
         return """
         ---
@@ -585,7 +601,7 @@ public struct DelegationAgentRunner: Sendable {
         times_seen: 1
         sources: 1
         scout_id: agent-firecrawl-v1
-        ---
+        \(caseAgainstLine)---
         ## Why this is in Harness
         Firecrawl found this source while running the manual agent path for the Delegation Queue.
 

@@ -66,6 +66,10 @@ public struct OpportunityCard: Codable, Sendable, Equatable {
     public var sources: Int
     public var scoutID: String?
     public var body: String
+    /// WO-L: the agent's dissent -- "an agent argues why this is still
+    /// Step 1; Adam rates the dispute, not the pitch." Agent speech,
+    /// never Adam's words -- always render it as SavyDarkCard.
+    public var caseAgainst: String?
 
     public init(
         envelope: OpportunityCardEnvelope,
@@ -82,7 +86,8 @@ public struct OpportunityCard: Codable, Sendable, Equatable {
         timesSeen: Int = 1,
         sources: Int = 0,
         scoutID: String? = nil,
-        body: String = ""
+        body: String = "",
+        caseAgainst: String? = nil
     ) {
         self.envelope = envelope
         self.oppID = oppID
@@ -99,6 +104,7 @@ public struct OpportunityCard: Codable, Sendable, Equatable {
         self.sources = sources
         self.scoutID = scoutID
         self.body = body
+        self.caseAgainst = caseAgainst
     }
 
     public var priority: Double {
@@ -245,7 +251,8 @@ public struct OpportunityCardParser: Sendable {
             timesSeen: parseInt(firstValue(in: frontmatter, keys: ["times_seen", "times-seen", "timesSeen"])) ?? 1,
             sources: parseInt(firstValue(in: frontmatter, keys: ["sources"])) ?? 0,
             scoutID: firstValue(in: frontmatter, keys: ["scout_id", "scout-id", "scoutID", "scout"]),
-            body: body.trimmingCharacters(in: .whitespacesAndNewlines)
+            body: body.trimmingCharacters(in: .whitespacesAndNewlines),
+            caseAgainst: firstValue(in: frontmatter, keys: ["case_against", "case-against", "caseAgainst"])
         )
     }
 

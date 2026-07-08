@@ -77,6 +77,41 @@ import Testing
     #expect(delegation.envelope.trustNote == "Self-declared trust_level accepted ignored; connector ceiling is supporting.")
 }
 
+@Test func delegationCaseAgainstParsesWhenPresentAndIsNilWhenAbsent() throws {
+    let withDissent = """
+    ---
+    type: delegation
+    title: Has dissent
+    resource: https://example.com/has-dissent
+    fit: 0.7
+    rules_hit: [R-01]
+    app: Understood
+    effort: in
+    sources: 1
+    case_against: "Still Step 1 -- only one source seen so far, no pattern confirmed yet."
+    ---
+    Body text.
+    """
+    let withDissentParsed = try #require(try OpportunityCardParser().parse(markdown: withDissent, source: "a.md").opportunity)
+    #expect(withDissentParsed.caseAgainst == "Still Step 1 -- only one source seen so far, no pattern confirmed yet.")
+
+    let withoutDissent = """
+    ---
+    type: delegation
+    title: No dissent field
+    resource: https://example.com/no-dissent
+    fit: 0.7
+    rules_hit: [R-01]
+    app: Understood
+    effort: in
+    sources: 1
+    ---
+    Body text.
+    """
+    let withoutDissentParsed = try #require(try OpportunityCardParser().parse(markdown: withoutDissent, source: "b.md").opportunity)
+    #expect(withoutDissentParsed.caseAgainst == nil)
+}
+
 @Test func malformedDelegationIsBlockedWithPlainEnglishReasons() throws {
     let markdown = """
     ---
