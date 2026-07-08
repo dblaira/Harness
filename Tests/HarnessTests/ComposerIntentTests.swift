@@ -35,3 +35,17 @@ import Testing
     #expect(prompt.contains("Lift: Leverage"))
     #expect(prompt.contains("Ship the fix"))
 }
+
+@Test func composerIntentPromptIncludesScheduleAndTagSignals() {
+    var intent = ComposerIntent()
+    intent.startDeferEnabled = true
+    intent.repeatRule = "Weekly"
+    intent.endEnabled = true
+    intent.tags = ["Delegate", "handoff"]
+
+    let block = intent.promptBlock()
+    #expect(block?.contains("Start / defer:") == true)
+    #expect(block?.contains("Repeat: Weekly") == true)
+    #expect(block?.contains("End:") == true)
+    #expect(block?.contains("Tags: Delegate, handoff") == true)
+}

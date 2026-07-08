@@ -27,4 +27,16 @@ enum MacSuiteFormCopy {
     static let effortChoices = ["-", "5m", "15m", "30m", "1h", "2h+"]
     static let energyChoices = ["-", "Low", "Med", "High"]
     static let repeatChoices = ["Never", "Daily", "Weekdays", "Weekly", "Monthly", "Yearly"]
+
+    /// Recent tags surfaced in the SAVY Reminder Organize picker.
+    static let recentTagChoices = [
+        "Business Op",
+        "Clear_Sign",
+        "Delegate",
+        "trust_myself",
+        "understanding",
+        "delegation",
+        "agents",
+        "handoff"
+    ]
 }

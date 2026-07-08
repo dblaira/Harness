@@ -11,8 +11,14 @@ struct ComposerIntent: Equatable, Sendable {
     var isFlagged = false
     var dueEnabled = false
     var dueDate = Date()
+    var startDeferEnabled = false
+    var startDeferDate = Date()
+    var repeatRule = "Never"
     var nudgeEnabled = false
     var nudgeTime = Date()
+    var endEnabled = false
+    var endTime = Date()
+    var tags: [String] = []
 
     var hasActiveSignals: Bool {
         pattern != "None"
@@ -22,7 +28,11 @@ struct ComposerIntent: Equatable, Sendable {
             || lift != "None"
             || isFlagged
             || dueEnabled
+            || startDeferEnabled
+            || repeatRule != "Never"
             || nudgeEnabled
+            || endEnabled
+            || !tags.isEmpty
     }
 
     func promptBlock() -> String? {
@@ -34,7 +44,11 @@ struct ComposerIntent: Equatable, Sendable {
         if lift != "None" { lines.append("Lift: \(lift)") }
         if isFlagged { lines.append("Flagged: yes") }
         if dueEnabled { lines.append("Due: \(Self.shortDate(dueDate))") }
+        if startDeferEnabled { lines.append("Start / defer: \(Self.shortDate(startDeferDate))") }
+        if repeatRule != "Never" { lines.append("Repeat: \(repeatRule)") }
         if nudgeEnabled { lines.append("Nudge: \(Self.shortTime(nudgeTime))") }
+        if endEnabled { lines.append("End: \(Self.shortTime(endTime))") }
+        if !tags.isEmpty { lines.append("Tags: \(tags.joined(separator: ", "))") }
         guard !lines.isEmpty else { return nil }
         return """
         \(DelegationContext.header)

@@ -9,7 +9,7 @@ struct MacDelegateFormView: View {
     /// observed here so approval cards appear the moment the loop suspends.
     @ObservedObject var approvals: ToolApprovalStore
     @State private var showAttachments = false
-    @State private var editorHeight: CGFloat = 156
+    @State private var editorHeight: CGFloat = 108
     @FocusState private var questionFocused: Bool
 
     init(model: MacWorkbenchModel) {
@@ -23,86 +23,87 @@ struct MacDelegateFormView: View {
         GeometryReader { proxy in
             let viewportHeight = proxy.size.height
 
-            ScrollViewReader { scrollProxy in
-                ScrollView(.vertical, showsIndicators: true) {
-                    VStack(alignment: .leading, spacing: 22) {
-                        ForEach(model.chatThread) { turn in
-                            fullTurnBlock(turn)
-                                .id(turn.id)
-                        }
+            VStack(spacing: 0) {
+                ScrollViewReader { scrollProxy in
+                    ScrollView(.vertical, showsIndicators: true) {
+                        VStack(alignment: .leading, spacing: 22) {
+                            ForEach(model.chatThread) { turn in
+                                fullTurnBlock(turn)
+                                    .id(turn.id)
+                            }
 
-                        ForEach(approvals.pendingRequests) { request in
-                            MacToolApprovalCard(
-                                request: request,
-                                onApprove: { always in
-                                    model.approveToolRequest(request, always: always)
-                                },
-                                onDeny: {
-                                    model.denyToolRequest(request)
+                            ForEach(approvals.pendingRequests) { request in
+                                MacToolApprovalCard(
+                                    request: request,
+                                    onApprove: { always in
+                                        model.approveToolRequest(request, always: always)
+                                    },
+                                    onDeny: {
+                                        model.denyToolRequest(request)
+                                    }
+                                )
+                                .id("approval-\(request.id)")
+                            }
+
+                            if model.isRunning {
+                                Group {
+                                    if let monitor = model.activeToolLoop {
+                                        MacToolLoopStatusRow(
+                                            monitor: monitor,
+                                            fallbackStatus: model.status,
+                                            onCancel: model.cancelRun
+                                        )
+                                    } else {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                            .tint(Theme.savyCrimson)
+                                            .frame(maxWidth: .infinity)
+                                    }
                                 }
-                            )
-                            .id("approval-\(request.id)")
+                                .id("running-status")
+                            }
                         }
-
-                        composerBlock
-                            .id("composer")
-
+                        .padding(.horizontal, 32)
+                        .padding(.top, 28)
+                        .padding(.bottom, 16)
+                        .frame(maxWidth: columnMaxWidth, alignment: .leading)
+                        .frame(maxWidth: .infinity)
+                    }
+                    .onAppear {
+                        scrollToLatestTurn(scrollProxy)
+                    }
+                    .onChange(of: model.draft) { _, _ in
+                        updateEditorHeight(viewportHeight: viewportHeight)
+                    }
+                    .tint(Theme.savyCrimson)
+                    .onChange(of: model.chatThread.count) { _, _ in
+                        scrollToLatestTurn(scrollProxy)
+                    }
+                    .onChange(of: model.isRunning) { _, _ in
                         if model.isRunning {
-                            Group {
-                                if let monitor = model.activeToolLoop {
-                                    MacToolLoopStatusRow(
-                                        monitor: monitor,
-                                        fallbackStatus: model.status,
-                                        onCancel: model.cancelRun
-                                    )
-                                } else {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                        .tint(Theme.savyCrimson)
-                                        .frame(maxWidth: .infinity)
+                            DispatchQueue.main.async {
+                                withAnimation(.easeOut(duration: 0.2)) {
+                                    scrollProxy.scrollTo("running-status", anchor: .bottom)
                                 }
                             }
-                            .id("running-status")
                         }
                     }
-                    .padding(.horizontal, 32)
-                    .padding(.vertical, 28)
-                    .frame(maxWidth: columnMaxWidth, alignment: .leading)
-                    .frame(maxWidth: .infinity)
-                    .frame(minHeight: viewportHeight, alignment: .center)
-                }
-                .onAppear {
-                    keepComposerCentered(scrollProxy, viewportHeight: viewportHeight)
-                }
-                .onChange(of: model.draft) { _, _ in
-                    updateEditorHeight(viewportHeight: viewportHeight)
-                    keepComposerCentered(scrollProxy, viewportHeight: viewportHeight)
-                }
-                .tint(Theme.savyCrimson)
-                .onChange(of: model.chatThread.count) { _, _ in
-                    if let last = model.chatThread.last, last.role == .assistant {
+                    .onChange(of: approvals.pendingRequests.count) { old, new in
+                        guard new > old, let newest = approvals.pendingRequests.last else { return }
                         DispatchQueue.main.async {
                             withAnimation(.easeOut(duration: 0.2)) {
-                                scrollProxy.scrollTo(last.id, anchor: .center)
+                                scrollProxy.scrollTo("approval-\(newest.id)", anchor: .bottom)
                             }
                         }
-                    } else {
-                        keepComposerCentered(scrollProxy, viewportHeight: viewportHeight)
                     }
                 }
-                .onChange(of: model.isRunning) { _, _ in
-                    keepComposerCentered(scrollProxy, viewportHeight: viewportHeight)
-                }
-                .onChange(of: approvals.pendingRequests.count) { old, new in
-                    // Scroll to the request that was just added (the newest is
-                    // appended last), not whichever happens to be first.
-                    guard new > old, let newest = approvals.pendingRequests.last else { return }
-                    DispatchQueue.main.async {
-                        withAnimation(.easeOut(duration: 0.2)) {
-                            scrollProxy.scrollTo("approval-\(newest.id)", anchor: .center)
-                        }
-                    }
-                }
+
+                composerBlock
+                    .frame(maxWidth: columnMaxWidth, alignment: .leading)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 32)
+                    .padding(.bottom, 16)
+                    .padding(.top, 8)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -141,14 +142,14 @@ struct MacDelegateFormView: View {
             MacSuiteFormRows.sectionLabel("Delegate")
 
             VStack(alignment: .leading, spacing: 0) {
-                if !model.composerAttachments.isEmpty {
-                    composerAttachmentChips
-                        .padding(.horizontal, 12)
-                        .padding(.top, 10)
-                    composerDivider
-                }
+                VStack(alignment: .leading, spacing: 0) {
+                    if !model.composerAttachments.isEmpty {
+                        composerAttachmentChips
+                            .padding(.horizontal, 12)
+                            .padding(.top, 10)
+                        composerDivider
+                    }
 
-                HStack(alignment: .bottom, spacing: 10) {
                     ZStack(alignment: .topLeading) {
                         if model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             Text("What do I want?")
@@ -164,24 +165,26 @@ struct MacDelegateFormView: View {
                             .foregroundStyle(Theme.savyCrimson)
                             .scrollContentBackground(.hidden)
                             .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
+                            .padding(.top, 8)
+                            .padding(.bottom, 40)
                             .frame(height: editorHeight)
                             .focused($questionFocused)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.white, in: RoundedRectangle(cornerRadius: 8))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color.black.opacity(0.12), lineWidth: 1)
-                    )
+                    .frame(maxWidth: .infinity, minHeight: editorHeight, alignment: .topLeading)
 
-                    VStack(spacing: 8) {
+                    HStack(spacing: 8) {
                         attachmentMenu
+                        Spacer(minLength: 0)
                         sendControl
                     }
-                    .padding(.trailing, 10)
+                    .padding(.horizontal, 10)
                     .padding(.bottom, 10)
                 }
+                .background(Color.white, in: RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.black.opacity(0.12), lineWidth: 1)
+                )
                 .padding(10)
             }
             .padding(.vertical, 1)
@@ -196,129 +199,142 @@ struct MacDelegateFormView: View {
 
     private var composerIntentSections: some View {
         HStack(alignment: .top, spacing: 6) {
-            VStack(alignment: .leading, spacing: 6) {
-                MacSuiteFormRows.composerIntentCard("Pattern") {
-                    MacSuiteFormRows.menuRow(
-                        title: "Pattern",
-                        icon: "list.number",
-                        value: model.composerIntent.pattern,
-                        options: MacSuiteFormCopy.patternChoices
-                    ) { option in
-                        model.mutateComposerIntent { $0.pattern = option }
-                    }
-                }
-
-                MacSuiteFormRows.composerIntentCard("Choose") {
-                    MacSuiteFormRows.menuRow(
-                        title: "Priority",
-                        icon: "exclamationmark.3",
-                        value: model.composerIntent.priority,
-                        options: MacSuiteFormCopy.priorityChoices
-                    ) { option in
-                        model.mutateComposerIntent { $0.priority = option }
-                    }
-                    MacSuiteFormRows.divider()
-                    MacSuiteFormRows.menuRow(
-                        title: "Effort",
-                        icon: "timer",
-                        value: model.composerIntent.effort,
-                        options: MacSuiteFormCopy.effortChoices
-                    ) { option in
-                        model.mutateComposerIntent { $0.effort = option }
-                    }
-                    MacSuiteFormRows.divider()
-                    MacSuiteFormRows.menuRow(
-                        title: "Energy",
-                        icon: "bolt",
-                        value: model.composerIntent.energy,
-                        options: MacSuiteFormCopy.energyChoices
-                    ) { option in
-                        model.mutateComposerIntent { $0.energy = option }
-                    }
+            MacSuiteFormRows.composerIntentCard("Pattern") {
+                MacSuiteFormRows.menuRow(
+                    title: "Pattern",
+                    icon: "list.number",
+                    value: model.composerIntent.pattern,
+                    options: MacSuiteFormCopy.patternChoices
+                ) { option in
+                    model.mutateComposerIntent { $0.pattern = option }
                 }
             }
+            .frame(maxWidth: .infinity)
 
-            VStack(alignment: .leading, spacing: 6) {
-                MacSuiteFormRows.composerIntentCard("Schedule") {
-                    composerScheduleRow(
-                        title: "Due",
-                        icon: "calendar",
-                        detail: Self.formatDueDate(model.composerIntent.dueDate),
-                        isOn: Binding(
-                            get: { model.composerIntent.dueEnabled },
-                            set: { enabled in model.mutateComposerIntent { $0.dueEnabled = enabled } }
-                        ),
-                        date: Binding(
-                            get: { model.composerIntent.dueDate },
-                            set: { date in model.mutateComposerIntent { $0.dueDate = date } }
-                        ),
-                        components: .date
-                    )
-                    MacSuiteFormRows.divider()
-                    composerScheduleRow(
-                        title: "Nudge",
-                        icon: "bell",
-                        detail: Self.formatNudgeTime(model.composerIntent.nudgeTime),
-                        isOn: Binding(
-                            get: { model.composerIntent.nudgeEnabled },
-                            set: { enabled in model.mutateComposerIntent { $0.nudgeEnabled = enabled } }
-                        ),
-                        date: Binding(
-                            get: { model.composerIntent.nudgeTime },
-                            set: { date in model.mutateComposerIntent { $0.nudgeTime = date } }
-                        ),
-                        components: .hourAndMinute
-                    )
+            MacSuiteFormRows.composerIntentCard("Choose") {
+                MacSuiteFormRows.menuRow(
+                    title: "Priority",
+                    icon: "exclamationmark.3",
+                    value: model.composerIntent.priority,
+                    options: MacSuiteFormCopy.priorityChoices
+                ) { option in
+                    model.mutateComposerIntent { $0.priority = option }
                 }
-
-                MacSuiteFormRows.composerIntentCard("Organize") {
-                    MacSuiteFormRows.menuRow(
-                        title: "Lift",
-                        icon: "sparkles",
-                        value: model.composerIntent.lift,
-                        options: MacSuiteFormCopy.liftChoices
-                    ) { option in
-                        model.mutateComposerIntent { $0.lift = option }
-                    }
-                    MacSuiteFormRows.divider()
-                    composerFlagRow
+                MacSuiteFormRows.divider()
+                MacSuiteFormRows.menuRow(
+                    title: "Effort",
+                    icon: "timer",
+                    value: model.composerIntent.effort,
+                    options: MacSuiteFormCopy.effortChoices
+                ) { option in
+                    model.mutateComposerIntent { $0.effort = option }
+                }
+                MacSuiteFormRows.divider()
+                MacSuiteFormRows.menuRow(
+                    title: "Energy",
+                    icon: "bolt",
+                    value: model.composerIntent.energy,
+                    options: MacSuiteFormCopy.energyChoices
+                ) { option in
+                    model.mutateComposerIntent { $0.energy = option }
                 }
             }
+            .frame(maxWidth: .infinity)
+
+            MacSuiteFormRows.composerIntentCard("Schedule") {
+                MacSuiteFormRows.scheduleRow(
+                    title: "Due",
+                    icon: "calendar",
+                    detail: Self.formatDueDate(model.composerIntent.dueDate),
+                    isOn: Binding(
+                        get: { model.composerIntent.dueEnabled },
+                        set: { enabled in model.mutateComposerIntent { $0.dueEnabled = enabled } }
+                    ),
+                    date: Binding(
+                        get: { model.composerIntent.dueDate },
+                        set: { date in model.mutateComposerIntent { $0.dueDate = date } }
+                    ),
+                    components: .date
+                )
+                MacSuiteFormRows.divider()
+                MacSuiteFormRows.scheduleRow(
+                    title: "Start / defer",
+                    icon: "calendar.badge.clock",
+                    detail: Self.formatDueDate(model.composerIntent.startDeferDate),
+                    isOn: Binding(
+                        get: { model.composerIntent.startDeferEnabled },
+                        set: { enabled in model.mutateComposerIntent { $0.startDeferEnabled = enabled } }
+                    ),
+                    date: Binding(
+                        get: { model.composerIntent.startDeferDate },
+                        set: { date in model.mutateComposerIntent { $0.startDeferDate = date } }
+                    ),
+                    components: .date
+                )
+                MacSuiteFormRows.divider()
+                MacSuiteFormRows.menuRow(
+                    title: "Repeat",
+                    icon: "repeat",
+                    value: model.composerIntent.repeatRule,
+                    options: MacSuiteFormCopy.repeatChoices
+                ) { option in
+                    model.mutateComposerIntent { $0.repeatRule = option }
+                }
+                MacSuiteFormRows.divider()
+                MacSuiteFormRows.scheduleRow(
+                    title: "Nudge",
+                    icon: "bell",
+                    detail: Self.formatNudgeTime(model.composerIntent.nudgeTime),
+                    isOn: Binding(
+                        get: { model.composerIntent.nudgeEnabled },
+                        set: { enabled in model.mutateComposerIntent { $0.nudgeEnabled = enabled } }
+                    ),
+                    date: Binding(
+                        get: { model.composerIntent.nudgeTime },
+                        set: { date in model.mutateComposerIntent { $0.nudgeTime = date } }
+                    ),
+                    components: .hourAndMinute
+                )
+                MacSuiteFormRows.divider()
+                MacSuiteFormRows.scheduleRow(
+                    title: "End",
+                    icon: "clock.badge.checkmark",
+                    detail: Self.formatNudgeTime(model.composerIntent.endTime),
+                    isOn: Binding(
+                        get: { model.composerIntent.endEnabled },
+                        set: { enabled in model.mutateComposerIntent { $0.endEnabled = enabled } }
+                    ),
+                    date: Binding(
+                        get: { model.composerIntent.endTime },
+                        set: { date in model.mutateComposerIntent { $0.endTime = date } }
+                    ),
+                    components: .hourAndMinute
+                )
+            }
+            .frame(maxWidth: .infinity)
+
+            MacSuiteFormRows.composerIntentCard("Organize") {
+                MacSuiteFormRows.menuRow(
+                    title: "Lift",
+                    icon: "sparkles",
+                    value: model.composerIntent.lift,
+                    options: MacSuiteFormCopy.liftChoices
+                ) { option in
+                    model.mutateComposerIntent { $0.lift = option }
+                }
+                MacSuiteFormRows.divider()
+                composerFlagRow
+                MacSuiteFormRows.divider()
+                composerTagsRow
+                if !model.composerIntent.tags.isEmpty {
+                    composerTagChips
+                }
+                MacSuiteFormRows.divider()
+                composerRecentTagsMenu
+            }
+            .frame(maxWidth: .infinity)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func composerScheduleRow(
-        title: String,
-        icon: String,
-        detail: String,
-        isOn: Binding<Bool>,
-        date: Binding<Date>,
-        components: DatePickerComponents
-    ) -> some View {
-        HStack(spacing: 6) {
-            MacSuiteFormRows.intentIcon(icon)
-            VStack(alignment: .leading, spacing: 0) {
-                Text(title)
-                    .font(Theme.savyRobotoMedium(9))
-                    .foregroundStyle(Color.black)
-                if isOn.wrappedValue {
-                    DatePicker("", selection: date, displayedComponents: components)
-                        .labelsHidden()
-                        .datePickerStyle(.compact)
-                        .font(Theme.savyRobotoMedium(8))
-                        .foregroundStyle(Theme.savyTertiaryText)
-                        .tint(Theme.savyCrimson)
-                } else {
-                    Text(detail)
-                        .font(Theme.savyRobotoMedium(8))
-                        .foregroundStyle(Theme.savyTertiaryText)
-                }
-            }
-            Spacer(minLength: 4)
-            MacSuiteFormRows.switchToggle(isOn: isOn)
-        }
-        .frame(minHeight: 19)
     }
 
     private var composerFlagRow: some View {
@@ -336,6 +352,68 @@ struct MacDelegateFormView: View {
             )
         }
         .frame(minHeight: 18)
+    }
+
+    private var composerTagsRow: some View {
+        HStack(spacing: 6) {
+            MacSuiteFormRows.intentIcon("tag")
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Tags")
+                    .font(Theme.savyRobotoMedium(9))
+                    .foregroundStyle(Color.black)
+                Text(composerTagsDetail)
+                    .font(Theme.savyRobotoMedium(8))
+                    .foregroundStyle(
+                        model.composerIntent.tags.isEmpty ? Theme.savyTertiaryText : Color.black.opacity(0.62)
+                    )
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 4)
+            Text("Add")
+                .font(Theme.savyRobotoMedium(9))
+                .foregroundStyle(Theme.savyCrimson.opacity(model.composerIntent.tags.isEmpty ? 0.55 : 1))
+        }
+        .frame(minHeight: 19)
+    }
+
+    private var composerRecentTagsMenu: some View {
+        let availableTags = MacSuiteFormCopy.recentTagChoices.filter {
+            !model.composerIntent.tags.contains($0)
+        }
+        return SavyFormPicker(
+            title: "Add a recent tag",
+            icon: "clock.arrow.circlepath",
+            value: "",
+            options: availableTags.isEmpty ? MacSuiteFormCopy.recentTagChoices : availableTags,
+            emphasizedTitle: true
+        ) { option in
+            model.mutateComposerIntent { intent in
+                guard !intent.tags.contains(option) else { return }
+                intent.tags.append(option)
+            }
+        }
+        .disabled(availableTags.isEmpty)
+        .opacity(availableTags.isEmpty ? 0.55 : 1)
+    }
+
+    private var composerTagsDetail: String {
+        model.composerIntent.tags.isEmpty ? "Add a tag" : model.composerIntent.tags.joined(separator: ", ")
+    }
+
+    private var composerTagChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(model.composerIntent.tags, id: \.self) { tag in
+                    SavyTagChip(tag: tag) {
+                        model.mutateComposerIntent { intent in
+                            intent.tags.removeAll { $0 == tag }
+                        }
+                    }
+                }
+            }
+            .padding(.leading, 22)
+            .padding(.vertical, 2)
+        }
     }
 
     private var composerDivider: some View {
@@ -434,14 +512,7 @@ struct MacDelegateFormView: View {
     private func fullTurnBlock(_ turn: ConversationTurn) -> some View {
         Group {
             if turn.role == .assistant {
-                HarnessMarkdownText(
-                    text: turn.text,
-                    textColor: Color.black,
-                    bodyFont: Theme.recallBody(17),
-                    h1Font: Theme.recallSerif(20),
-                    h2Font: Theme.recallBody(18, weight: .semibold)
-                )
-                .textSelection(.enabled)
+                assistantTurnBlock(turn.text)
             } else {
                 userTurnBlock(turn.text)
             }
@@ -449,17 +520,114 @@ struct MacDelegateFormView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func updateEditorHeight(viewportHeight: CGFloat) {
-        let lineCount = max(4, model.draft.components(separatedBy: "\n").count + 1)
-        let estimated = CGFloat(lineCount) * 26 + 48
-        let cap = max(viewportHeight * 0.55, 220)
-        editorHeight = min(max(estimated, 156), cap)
+    @ViewBuilder
+    private func assistantTurnBlock(_ text: String) -> some View {
+        let parsed = TranscriptAssistantTurn.parse(text)
+        VStack(alignment: .leading, spacing: 8) {
+            if parsed.isBackendFailure {
+                backendFailureCard(parsed.displayBody)
+            } else {
+                HarnessMarkdownText(
+                    text: parsed.displayBody,
+                    textColor: Color.black,
+                    bodyFont: Theme.recallBody(17),
+                    h1Font: Theme.recallSerif(20),
+                    h2Font: Theme.recallBody(18, weight: .semibold)
+                )
+                .textSelection(.enabled)
+            }
+
+            if parsed.showsMetadataFooter {
+                transcriptMetadataFooter(rule: parsed.rule, patternStep: parsed.patternStep)
+            }
+        }
     }
 
-    private func keepComposerCentered(_ proxy: ScrollViewProxy, viewportHeight: CGFloat) {
+    private func backendFailureCard(_ message: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Theme.savyCrimson)
+                    .padding(.top, 2)
+
+                Text(message)
+                    .font(Theme.recallBody(16, weight: .semibold))
+                    .foregroundStyle(Color.black)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if TranscriptAssistantTurn.suggestsReauthorization(message) {
+                Button {
+                    switch model.backend {
+                    case .codex: model.authorizeCodexAccount()
+                    case .grok: model.authorizeGrokAccount()
+                    default: break
+                    }
+                } label: {
+                    Label("Re-authorize \(model.backend.rawValue)", systemImage: "key.viewfinder")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.savyCrimson)
+                .help("Open Terminal to refresh backend authorization")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(Theme.savyCrimson)
+                .frame(width: 4)
+                .padding(.vertical, 8)
+                .padding(.leading, 4)
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Theme.savyCrimson.opacity(0.28), lineWidth: 1)
+        )
+    }
+
+    private func transcriptMetadataFooter(rule: String?, patternStep: String?) -> some View {
+        HStack(spacing: 8) {
+            if let rule {
+                metadataChip(label: "RULE", value: rule)
+            }
+            if let patternStep {
+                metadataChip(label: "STEP", value: patternStep)
+            }
+        }
+    }
+
+    private func metadataChip(label: String, value: String) -> some View {
+        HStack(spacing: 4) {
+            Text(label)
+                .font(.system(size: 9, weight: .heavy))
+                .tracking(1.1)
+            Text(value)
+                .font(Theme.savyRobotoMedium(9))
+        }
+        .foregroundStyle(Theme.savyTertiaryText)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Theme.savyPaperAccent, in: Capsule())
+    }
+
+    private func updateEditorHeight(viewportHeight: CGFloat) {
+        let lineCount = max(3, model.draft.components(separatedBy: "\n").count + 1)
+        let estimated = CGFloat(lineCount) * 24 + 52
+        let cap = max(viewportHeight * 0.28, 140)
+        editorHeight = min(max(estimated, 108), cap)
+    }
+
+    private func scrollToLatestTurn(_ proxy: ScrollViewProxy) {
+        guard let last = model.chatThread.last else { return }
         DispatchQueue.main.async {
-            withAnimation(.easeOut(duration: 0.15)) {
-                proxy.scrollTo("composer", anchor: .center)
+            withAnimation(.easeOut(duration: 0.2)) {
+                proxy.scrollTo(last.id, anchor: .bottom)
             }
         }
     }
