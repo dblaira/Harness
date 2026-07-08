@@ -33,7 +33,10 @@ struct MacBlueprintView: View {
                     placeholderNote("The three fields (Intent/PreferredApproach/DoneCondition) are live in the Chat composer (WO-J) — embedding them here is still open.")
                 }
                 blueprintSection(title: "Organize", icon: "square.stack.3d.up") {
-                    placeholderNote("Slide Deck / Mind Map / Audio land in WO-O.")
+                    VStack(alignment: .leading, spacing: 8) {
+                        mindMapTree
+                        placeholderNote("Slide Deck / Audio are still open — read-only Mind Map tree only, per the plan (\"navigation takeover only after it survives daily use\").")
+                    }
                 }
                 blueprintSection(title: "Ledger", icon: "chart.bar") {
                     fleetLedger
@@ -184,6 +187,67 @@ struct MacBlueprintView: View {
         formatter.dateStyle = .medium
         return formatter
     }()
+
+    // MARK: - Mind Map, read-only (WO-O)
+
+    /// Read-only tree first -- "navigation takeover only after it
+    /// survives daily use" (the plan's own words). Extends the
+    /// treeColumn pattern (MacCockpitView.swift) with the one status
+    /// distinction the data model actually has today: is this row the
+    /// same top-priority row the UP NEXT card shows (warm), or not
+    /// (cool, receded to 45% ink -- same treatment WO-H's locked Step
+    /// Rail cells use, no new color invented outside the vocabulary).
+    private var mindMapTree: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if mindMapGroups.isEmpty {
+                placeholderNote("No delegation items yet — the tree fills in as the queue does.")
+            } else {
+                ForEach(mindMapGroups) { group in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "square.grid.2x2")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(Theme.macInk.opacity(0.4))
+                            Text(group.app.rawValue)
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(Theme.macInk.opacity(0.6))
+                        }
+                        ForEach(group.rows) { row in
+                            mindMapNode(row)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var mindMapGroups: [OpportunityBoardAppGroup] {
+        OpportunityBoardProjection(rows: model.opportunityBoardRows).groupsByApp()
+    }
+
+    /// The same top-priority row the UP NEXT card starts locked onto
+    /// (MacChatView.upNextRowID) -- computed independently here since
+    /// this view has no access to that screen's local @State. Matches
+    /// in the common case; can diverge only if UP NEXT stays locked
+    /// onto a row that's since fallen out of the top spot.
+    private var mindMapWarmRowID: String? {
+        OpportunityBoardProjection(rows: model.opportunityBoardRows).rows.first?.id
+    }
+
+    private func mindMapNode(_ row: OpportunityBoardRow) -> some View {
+        let isWarm = row.id == mindMapWarmRowID
+        let title = row.card.envelope.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return HStack(spacing: 5) {
+            Circle()
+                .fill(isWarm ? Theme.macRed : Theme.macInk.opacity(0.3))
+                .frame(width: 5, height: 5)
+            Text(title?.isEmpty == false ? title! : row.id)
+                .font(.system(size: 10, weight: isWarm ? .semibold : .regular))
+                .foregroundStyle(isWarm ? Theme.macInk : Theme.macInk.opacity(0.45))
+                .lineLimit(1)
+        }
+        .padding(.leading, 14)
+    }
 
     // MARK: - Sources pool (WO-N)
 
