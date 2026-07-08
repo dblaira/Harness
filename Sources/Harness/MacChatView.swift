@@ -5,6 +5,7 @@ import OntologyKit
 struct MacChatView: View {
     let ontology: Ontology
     @StateObject private var model = MacWorkbenchModel()
+    @EnvironmentObject private var audioBriefPlayer: AudioBriefPlayer
     @State private var inspectorTab: WorkbenchInspectorTab = .authority
     @State private var isSidebarVisible = false
     @State private var isInspectorVisible = false
@@ -1874,6 +1875,7 @@ struct MacChatView: View {
             statusPill(detail.run.success ? "trace saved" : "failed saved", detail.run.success ? "checkmark.seal" : "exclamationmark.triangle")
             Spacer()
             if !HarnessTranscriptCopy.assistantAnswer(from: detail).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                playBriefButton(HarnessTranscriptCopy.assistantAnswer(from: detail))
                 copyTranscriptButton(
                     label: "Copy answer",
                     help: "Copy the entire Harness answer to the clipboard",
@@ -1923,6 +1925,31 @@ struct MacChatView: View {
         }
         .buttonStyle(.plain)
         .help(help)
+    }
+
+    /// WO-P: audio over the SAME text the "Copy answer" button copies --
+    /// no separate brief-generation step, no new wording.
+    private func playBriefButton(_ text: String) -> some View {
+        Button {
+            if audioBriefPlayer.isSpeaking {
+                audioBriefPlayer.stop()
+            } else {
+                audioBriefPlayer.speak(text)
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: audioBriefPlayer.isSpeaking ? "stop.fill" : "speaker.wave.2")
+                Text(audioBriefPlayer.isSpeaking ? "Stop" : "Play brief")
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(Theme.macInk.opacity(0.72))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Theme.macEntry.opacity(0.35), in: Capsule())
+            .overlay(Capsule().stroke(Theme.macHair, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .help("Speak this run's answer aloud")
     }
 
     private func chatTurnBubble(_ turn: ConversationTurn) -> some View {

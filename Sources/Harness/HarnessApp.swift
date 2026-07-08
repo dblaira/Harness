@@ -12,6 +12,11 @@ struct HarnessApp: App {
     /// alongside the ontology load; injected so RoutinesView (inside the
     /// cockpit) observes it.
     @StateObject private var routineScheduler: RoutineScheduler
+    #if os(macOS)
+    /// WO-P: audio briefs over existing text, injected at the same seam
+    /// as routineScheduler so any screen can play one the same way.
+    @StateObject private var audioBriefPlayer = AudioBriefPlayer()
+    #endif
 
     init() {
         Self.registerFonts()
@@ -32,6 +37,7 @@ struct HarnessApp: App {
                     idealHeight: 780
                 )
                 .environmentObject(routineScheduler)
+                .environmentObject(audioBriefPlayer)
                 .task(loadOntologyIfNeeded)
             #else
             ChatView(ontology: ontology)
