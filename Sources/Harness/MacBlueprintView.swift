@@ -28,13 +28,13 @@ struct MacBlueprintView: View {
                     placeholderNote("Unlabeled capture pool lands in WO-N.")
                 }
                 blueprintSection(title: "Delegate", icon: "text.cursor") {
-                    placeholderNote("Three-field composer lands in WO-J.")
+                    placeholderNote("The three fields (Intent/PreferredApproach/DoneCondition) are live in the Chat composer (WO-J) — embedding them here is still open.")
                 }
                 blueprintSection(title: "Organize", icon: "square.stack.3d.up") {
                     placeholderNote("Slide Deck / Mind Map / Audio land in WO-O.")
                 }
                 blueprintSection(title: "Ledger", icon: "chart.bar") {
-                    placeholderNote("Fleet ledger lands in WO-M.")
+                    fleetLedger
                 }
             }
             .padding(22)
@@ -44,6 +44,7 @@ struct MacBlueprintView: View {
         .background(Theme.macBg)
         .task { await model.refreshPatternGate() }
         .task { model.refreshFascinationCards() }
+        .task { await model.refreshFleetLedger() }
     }
 
     private var header: some View {
@@ -180,6 +181,52 @@ struct MacBlueprintView: View {
         formatter.dateStyle = .medium
         return formatter
     }()
+
+    // MARK: - Fleet ledger (WO-M, flat v1)
+
+    private var fleetLedger: some View {
+        HStack(spacing: 0) {
+            ledgerFigure(
+                label: "spend today",
+                value: "\(model.delegationAgentDailySpend)/\(model.delegationAgentDailyCreditLimit)",
+                help: "Firecrawl credits used today vs the daily Kill Switch cap"
+            )
+            ledgerDivider
+            ledgerFigure(
+                label: "runs",
+                value: "\(model.runs.count)",
+                help: "Runs in the GRDB ledger (most recent \(model.runs.count))"
+            )
+            ledgerDivider
+            ledgerFigure(
+                label: "shipped this week",
+                value: "\(model.fleetLedgerShippedThisWeek)",
+                help: "Pursue actions recorded in the last 7 days — v1 stand-in for a dedicated shipped event"
+            )
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func ledgerFigure(label: String, value: String, help: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value)
+                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .foregroundStyle(Theme.macInk)
+            Text(label)
+                .font(.caption2.weight(.semibold))
+                .textCase(.uppercase)
+                .foregroundStyle(Theme.macInk.opacity(0.46))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .help(help)
+    }
+
+    private var ledgerDivider: some View {
+        Rectangle()
+            .fill(Theme.macHair)
+            .frame(width: 1)
+            .padding(.vertical, 4)
+    }
 
     private var observationalSteps: [PatternStep] {
         model.ontology.pattern.filter { $0.zone == .observational }

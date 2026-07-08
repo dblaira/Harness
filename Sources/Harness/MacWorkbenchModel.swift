@@ -114,6 +114,7 @@ final class MacWorkbenchModel: ObservableObject {
             refreshConnectors()
             await refreshPatternGate()
             refreshFascinationCards()
+            await refreshFleetLedger()
         }
     }
 
@@ -447,11 +448,34 @@ final class MacWorkbenchModel: ObservableObject {
                 await MainActor.run {
                     self?.status = "\(action.label) recorded for \(records.count) delegation item\(records.count == 1 ? "" : "s")."
                 }
+                if action == .pursue {
+                    await self?.refreshFleetLedger()
+                }
             } catch {
                 await MainActor.run {
                     self?.status = "\(action.label) failed: \(error.localizedDescription)"
                 }
             }
+        }
+    }
+
+    // MARK: - Fleet ledger (WO-M)
+
+    /// WO-M: "shipped this week" seeded from Pursue ledger actions --
+    /// a v1 approximation (Pursue means "started," not "shipped"; there
+    /// is no dedicated shipped event yet) named explicitly as a stand-in
+    /// by the plan, not a claim of literal completion.
+    @Published private(set) var fleetLedgerShippedThisWeek = 0
+    @Published private(set) var delegationAgentDailySpend = MacWorkbenchModel.delegationAgentCreditsUsedToday()
+
+    func refreshFleetLedger() async {
+        delegationAgentDailySpend = Self.delegationAgentCreditsUsedToday()
+        do {
+            let records = try await ledger.listOpportunityBoardActions(limit: 500)
+            let weekAgo = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? .distantPast
+            fleetLedgerShippedThisWeek = records.filter { $0.action == .pursue && $0.createdAt >= weekAgo }.count
+        } catch {
+            fleetLedgerShippedThisWeek = 0
         }
     }
 
@@ -519,6 +543,7 @@ final class MacWorkbenchModel: ObservableObject {
                     self?.status = result.detail.run.finalAnswer
                 }
                 await self?.refreshRuns()
+                await self?.refreshFleetLedger()
             } catch {
                 await MainActor.run {
                     self?.isRunning = false

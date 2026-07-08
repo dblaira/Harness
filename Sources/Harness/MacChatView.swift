@@ -1579,6 +1579,7 @@ struct MacChatView: View {
             .help(model.backend.rawValue)
 
             backendStatusDot
+            killSwitchReadout
 
             if model.backend == .codex {
                 chatToolbarIcon("key.viewfinder", help: "Authorize") {
@@ -1654,6 +1655,8 @@ struct MacChatView: View {
                 .frame(minWidth: 68, maxWidth: 180, alignment: .leading)
                 .layoutPriority(2)
 
+            killSwitchReadout
+
             if model.backend == .codex {
                 subscriptionAccountBadge(
                     label: "ChatGPT account",
@@ -1728,6 +1731,30 @@ struct MacChatView: View {
             }
         }
         .help(readiness.actionNeeded ?? readiness.statusWord)
+    }
+
+    /// WO-M: "Kill Switch readout also joins the top bar" -- lives in
+    /// both chatTopBar and workbenchTopBar since the design brief calls
+    /// for it "permanently in the bar above," regardless of which
+    /// center view is showing. Real tracked units (credits), not an
+    /// invented dollar figure -- the app doesn't measure spend in
+    /// dollars anywhere today.
+    private var killSwitchReadout: some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(model.delegationAgentWatchlistEnabled ? Theme.savyGreen : Theme.macRed.opacity(0.6))
+                .frame(width: 6, height: 6)
+            Text("\(model.delegationAgentDailySpend)/\(model.delegationAgentDailyCreditLimit)")
+                .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                .foregroundStyle(Theme.macInk.opacity(0.6))
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Theme.macEntry.opacity(0.28), in: Capsule())
+        .help(
+            "Kill Switch: \(model.delegationAgentDailySpend) of \(model.delegationAgentDailyCreditLimit) Firecrawl credits used today"
+                + (model.delegationAgentWatchlistEnabled ? "" : " — watchlist disabled")
+        )
     }
 
     private func chatToolbarIcon(_ systemImage: String, help: String, action: @escaping () -> Void) -> some View {
