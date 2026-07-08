@@ -1402,14 +1402,28 @@ final class MacWorkbenchModel: ObservableObject {
         }
     }
 
+    nonisolated private static func evidenceIngestScriptURL() -> URL? {
+        let fileManager = FileManager.default
+        var roots: [URL] = []
+        let environment = ProcessInfo.processInfo.environment
+        if let repoRoot = environment["HARNESS_REPO_ROOT"], !repoRoot.isEmpty {
+            roots.append(URL(fileURLWithPath: repoRoot, isDirectory: true))
+        }
+        roots.append(fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Developer/GitHub/Harness"))
+        if let user = environment["USER"], !user.isEmpty {
+            roots.append(URL(fileURLWithPath: "/Users/\(user)/Developer/GitHub/Harness", isDirectory: true))
+        }
+        return roots
+            .map { $0.appendingPathComponent("scripts/ingest_evidence.py") }
+            .first { fileManager.fileExists(atPath: $0.path) }
+    }
+
     nonisolated private static func runEvidenceIngest() throws -> String {
-        let scriptURL = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Developer/GitHub/Harness/scripts/ingest_evidence.py")
-        guard FileManager.default.fileExists(atPath: scriptURL.path) else {
+        guard let scriptURL = evidenceIngestScriptURL() else {
             throw NSError(
                 domain: "HarnessEvidenceIngest",
                 code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "scripts/ingest_evidence.py was not found."]
+                userInfo: [NSLocalizedDescriptionKey: "scripts/ingest_evidence.py was not found. Set HARNESS_REPO_ROOT to the repo checkout."]
             )
         }
 
@@ -1424,16 +1438,29 @@ final class MacWorkbenchModel: ObservableObject {
         process.standardError = errorPipe
 
         try process.run()
-        process.waitUntilExit()
 
-        let output = String(
-            data: outputPipe.fileHandleForReading.readDataToEndOfFile(),
-            encoding: .utf8
-        ) ?? ""
-        let error = String(
-            data: errorPipe.fileHandleForReading.readDataToEndOfFile(),
-            encoding: .utf8
-        ) ?? ""
+        // Drain both pipes while the process runs; reading after
+        // waitUntilExit() deadlocks once a pipe fills (the WO-1 class).
+        let outputHandle = outputPipe.fileHandleForReading
+        let errorHandle = errorPipe.fileHandleForReading
+        var outputData = Data()
+        var errorData = Data()
+        let drainGroup = DispatchGroup()
+        drainGroup.enter()
+        DispatchQueue.global(qos: .utility).async {
+            outputData = outputHandle.readDataToEndOfFile()
+            drainGroup.leave()
+        }
+        drainGroup.enter()
+        DispatchQueue.global(qos: .utility).async {
+            errorData = errorHandle.readDataToEndOfFile()
+            drainGroup.leave()
+        }
+        process.waitUntilExit()
+        drainGroup.wait()
+
+        let output = String(data: outputData, encoding: .utf8) ?? ""
+        let error = String(data: errorData, encoding: .utf8) ?? ""
 
         guard process.terminationStatus == 0 else {
             let message = error.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

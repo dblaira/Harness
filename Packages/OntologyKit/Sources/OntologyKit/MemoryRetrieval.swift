@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(os)
+import os
+#endif
 
 public protocol SupportingMemoryRetrieving: Sendable {
     func retrieve(prompt: String, limit: Int) async throws -> [MemoryHit]
@@ -11,6 +14,12 @@ public struct DirectoryMemoryRetriever: SupportingMemoryRetrieving {
     public let maxFiles: Int
     public let excludedPathComponents: Set<String>
     public let preferredPathComponents: Set<String>
+
+    /// Files larger than this are never read on the send path.
+    public static let maxFileBytes = 262_144
+    /// The whole scan (enumeration + reads + scoring) stops at this
+    /// wall-clock budget so a cold vault can never stall a send (WO-A).
+    public static let scanTimeBudget: TimeInterval = 1.5
 
     public init() {
         self.init(sources: LocalMemorySourceRegistry.defaultSources())
@@ -58,15 +67,25 @@ public struct DirectoryMemoryRetriever: SupportingMemoryRetrieving {
         let queryTokens = OntologyAuthorityRetriever.tokens(prompt)
         guard !queryTokens.isEmpty else { return [] }
 
+        let scanStart = Date()
+        let deadline = scanStart.addingTimeInterval(Self.scanTimeBudget)
         var hits: [(MemoryHit, Double)] = []
         let files = Self.files(
             in: sources,
             allowedExtensions: allowedExtensions,
             excludedPathComponents: excludedPathComponents,
-            maxFiles: maxFiles
+            maxFiles: maxFiles,
+            deadline: deadline
         )
 
+        var scannedCount = 0
+        var budgetExhausted = false
         for (file, source) in files {
+            if Date() > deadline {
+                budgetExhausted = true
+                break
+            }
+            scannedCount += 1
             guard let text = try? String(contentsOf: file, encoding: .utf8) else { continue }
             let classification = Self.classify(
                 file: file,
@@ -98,6 +117,15 @@ public struct DirectoryMemoryRetriever: SupportingMemoryRetrieving {
                 score
             ))
         }
+
+        #if canImport(os)
+        let duration = Date().timeIntervalSince(scanStart)
+        Logger(subsystem: "app.understood.harness", category: "memory-retrieval")
+            .info("supporting-memory scan: \(scannedCount) files in \(String(format: "%.3f", duration))s (candidates \(files.count), budget exhausted: \(budgetExhausted))")
+        #else
+        _ = scannedCount
+        _ = budgetExhausted
+        #endif
 
         return hits
             .sorted { lhs, rhs in
@@ -157,31 +185,52 @@ public struct DirectoryMemoryRetriever: SupportingMemoryRetrieving {
         in sources: [LocalMemorySource],
         allowedExtensions: Set<String>,
         excludedPathComponents: Set<String>,
-        maxFiles: Int
+        maxFiles: Int,
+        deadline: Date = .distantFuture
     ) -> [(URL, LocalMemorySource)] {
+        let resourceKeys: Set<URLResourceKey> = [
+            .isRegularFileKey,
+            .fileSizeKey,
+            .ubiquitousItemDownloadingStatusKey
+        ]
         var files: [(URL, LocalMemorySource)] = []
         for source in sources {
-            guard files.count < maxFiles else { break }
+            guard files.count < maxFiles, Date() <= deadline else { break }
             let root = source.root
             let sourceExtensions = source.allowedExtensions ?? allowedExtensions
             guard FileManager.default.fileExists(atPath: root.path) else { continue }
             guard let enumerator = FileManager.default.enumerator(
                 at: root,
-                includingPropertiesForKeys: [.isRegularFileKey],
+                includingPropertiesForKeys: Array(resourceKeys),
                 options: [.skipsHiddenFiles, .skipsPackageDescendants]
             ) else { continue }
 
             for case let file as URL in enumerator {
-                guard files.count < maxFiles else { break }
+                guard files.count < maxFiles, Date() <= deadline else { break }
                 if shouldSkip(file: file, excludedPathComponents: excludedPathComponents) {
                     enumerator.skipDescendants()
                     continue
                 }
                 guard sourceExtensions.contains(file.pathExtension.lowercased()) else { continue }
+                guard isReadableWithinLimits(file, resourceKeys: resourceKeys) else { continue }
                 files.append((file, source))
             }
         }
         return files
+    }
+
+    /// Reading a not-yet-downloaded iCloud file blocks until iCloud
+    /// fetches it; oversize files waste the scan budget. Both are
+    /// skipped on the send path (WO-A).
+    private static func isReadableWithinLimits(_ file: URL, resourceKeys: Set<URLResourceKey>) -> Bool {
+        guard let values = try? file.resourceValues(forKeys: resourceKeys) else { return true }
+        if let status = values.ubiquitousItemDownloadingStatus, status == .notDownloaded {
+            return false
+        }
+        if let size = values.fileSize, size > maxFileBytes {
+            return false
+        }
+        return true
     }
 
     private static func shouldSkip(file: URL, excludedPathComponents: Set<String>) -> Bool {
