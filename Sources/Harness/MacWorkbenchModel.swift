@@ -37,6 +37,10 @@ final class MacWorkbenchModel: ObservableObject {
     @Published var showApprovalToast = false
     @Published var selectedTool: WorkbenchTool?
     @Published var reviewQueueCandidates: [MemoryCandidate] = []
+    /// The Step Rail's gate state. Starts locked before the first check
+    /// ever completes -- never assume open. See PatternGateChecker
+    /// (fails CLOSED; CLAUDE.md hard rule 1).
+    @Published private(set) var patternGateState = PatternGateState.locked(detail: "Not yet checked.")
     @Published var opportunityBoardRows: [OpportunityBoardRow] = []
     @Published var opportunityBoardLoadIssue: String?
     @Published var connectors: [HarnessConnector] = HarnessConnectorRegistry.defaultConnectors()
@@ -67,6 +71,12 @@ final class MacWorkbenchModel: ObservableObject {
     private var runTask: Task<Void, Never>?
     private var approvalToastTask: Task<Void, Never>?
 
+    private let patternEvidenceStore = PatternEvidenceStore()
+    private let patternGateChecker = PatternGateChecker()
+    /// One ongoing build for v1 -- no build picker exists yet (cut from
+    /// v1 scope). Stable across launches so ratings accumulate.
+    let patternBuildId = MacWorkbenchModel.loadOrCreatePatternBuildId()
+
     init() {
         let store: RunLedgerStore
         do {
@@ -88,6 +98,7 @@ final class MacWorkbenchModel: ObservableObject {
             await refreshReviewQueue()
             refreshOpportunityBoard()
             refreshConnectors()
+            await refreshPatternGate()
         }
     }
 
@@ -1195,6 +1206,33 @@ final class MacWorkbenchModel: ObservableObject {
         }
     }
 
+    /// Re-reads the gate. Fuseki unreachable AND no local accepted graph
+    /// -> stays locked; this is the only path callers should trust for
+    /// "is execution unlocked" (never infer it from ratings directly).
+    func refreshPatternGate() async {
+        patternGateState = await patternGateChecker.checkGate(buildId: patternBuildId)
+    }
+
+    func submitPatternRating(step: Int, rating: Int, evidenceNote: String) {
+        let store = patternEvidenceStore
+        let buildId = patternBuildId
+        Task {
+            do {
+                try await store.record(
+                    StepEvidenceRating(buildId: buildId, step: step, rating: rating, evidenceNote: evidenceNote)
+                )
+                await MainActor.run {
+                    self.status = "Step \(step) rated \(rating)."
+                }
+            } catch {
+                await MainActor.run {
+                    self.status = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                }
+            }
+            await refreshPatternGate()
+        }
+    }
+
     func markCandidate(_ candidate: MemoryCandidate, as status: CandidateState) {
         guard [.suggested, .candidate, .rejected].contains(status) else {
             self.status = "Candidate review cannot accept graph authority."
@@ -1505,6 +1543,18 @@ final class MacWorkbenchModel: ObservableObject {
             return environmentKey
         }
         return APIKeyStore.loadFirecrawlKey()
+    }
+
+    private static let patternBuildIdKey = "Harness.patternBuildId"
+
+    private static func loadOrCreatePatternBuildId() -> String {
+        let defaults = UserDefaults.standard
+        if let existing = defaults.string(forKey: patternBuildIdKey), !existing.isEmpty {
+            return existing
+        }
+        let created = UUID().uuidString
+        defaults.set(created, forKey: patternBuildIdKey)
+        return created
     }
 
     private static let delegationAgentWatchlistEnabledKey = "Harness.DelegationAgent.watchlistEnabled"

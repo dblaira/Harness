@@ -385,7 +385,7 @@ struct MacChatView: View {
         case .board:
             delegationQueueView
         case .blueprint:
-            MacBlueprintView()
+            MacBlueprintView(model: model)
         }
     }
 
