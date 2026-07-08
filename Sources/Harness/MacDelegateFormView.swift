@@ -186,6 +186,12 @@ struct MacDelegateFormView: View {
                         .stroke(Color.black.opacity(0.12), lineWidth: 1)
                 )
                 .padding(10)
+
+                // conn-004 "Delegation is three sentences": Intent (above)
+                // is the message itself; these two carry through
+                // ComposerIntent.composedPrompt verbatim, same as Intent.
+                composerSentenceField(text: $model.preferredApproach, placeholder: "When I am...I like to")
+                composerSentenceField(text: $model.doneCondition, placeholder: "Done looks like...")
             }
             .padding(.vertical, 1)
             .padding(.horizontal, 6)
@@ -195,6 +201,23 @@ struct MacDelegateFormView: View {
                     .stroke(Color.black.opacity(0.08), lineWidth: 1)
             )
         }
+    }
+
+    private func composerSentenceField(text: Binding<String>, placeholder: String) -> some View {
+        TextField(placeholder, text: text, axis: .vertical)
+            .font(Theme.recallBody(14))
+            .foregroundStyle(Theme.savyCrimson)
+            .textFieldStyle(.plain)
+            .lineLimit(1...3)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(Color.white, in: RoundedRectangle(cornerRadius: 8))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.black.opacity(0.12), lineWidth: 1)
+            )
+            .padding(.horizontal, 10)
+            .padding(.bottom, 10)
     }
 
     private var composerIntentSections: some View {

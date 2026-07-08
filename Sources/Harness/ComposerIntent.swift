@@ -36,6 +36,15 @@ struct ComposerIntent: Equatable, Sendable {
     }
 
     func promptBlock() -> String? {
+        let lines = contextLines()
+        guard !lines.isEmpty else { return nil }
+        return """
+        \(DelegationContext.header)
+        \(lines.joined(separator: "\n"))
+        """
+    }
+
+    private func contextLines() -> [String] {
         var lines: [String] = []
         if priority != "None" { lines.append("Priority: \(priority)") }
         if effort != "-" { lines.append("Effort: \(effort)") }
@@ -49,22 +58,41 @@ struct ComposerIntent: Equatable, Sendable {
         if nudgeEnabled { lines.append("Nudge: \(Self.shortTime(nudgeTime))") }
         if endEnabled { lines.append("End: \(Self.shortTime(endTime))") }
         if !tags.isEmpty { lines.append("Tags: \(tags.joined(separator: ", "))") }
-        guard !lines.isEmpty else { return nil }
-        return """
-        \(DelegationContext.header)
-        \(lines.joined(separator: "\n"))
-        """
+        return lines
     }
 
+    /// WO-J: conn-004 "Delegation is three sentences" -- Intent is
+    /// `userText` itself (the message body); PreferredApproach and
+    /// DoneCondition join the DELEGATION CONTEXT block verbatim,
+    /// alongside the existing signal lines. Matches AgentPolicy's
+    /// "preserve Intent, PreferredApproach, and DoneCondition"
+    /// directive (delegation-three-parts).
     static func composedPrompt(
         userText: String,
         attachments: [ComposerAttachment],
-        intent: ComposerIntent
+        intent: ComposerIntent,
+        preferredApproach: String = "",
+        doneCondition: String = ""
     ) -> String {
         let base = ComposerAttachment.composedPrompt(userText: userText, attachments: attachments)
-        guard let context = intent.promptBlock() else { return base }
+        let lines = Self.delegationLines(preferredApproach: preferredApproach, doneCondition: doneCondition)
+            + intent.contextLines()
+        guard !lines.isEmpty else { return base }
+        let context = """
+        \(DelegationContext.header)
+        \(lines.joined(separator: "\n"))
+        """
         guard !base.isEmpty else { return context }
         return context + DelegationContext.messageSeparator + base
+    }
+
+    private static func delegationLines(preferredApproach: String, doneCondition: String) -> [String] {
+        var lines: [String] = []
+        let trimmedApproach = preferredApproach.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedDone = doneCondition.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedApproach.isEmpty { lines.append("PreferredApproach: \(trimmedApproach)") }
+        if !trimmedDone.isEmpty { lines.append("DoneCondition: \(trimmedDone)") }
+        return lines
     }
 
     private static let shortDateFormatter: DateFormatter = {

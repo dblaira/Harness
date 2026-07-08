@@ -13,6 +13,16 @@ final class MacWorkbenchModel: ObservableObject {
     @Published var draft = "" {
         didSet { refreshRoutePlan() }
     }
+    /// WO-J field 2 ("When I am...I like to") -- conn-004 "Delegation is
+    /// three sentences." Free text like `draft`, not a ComposerIntent
+    /// signal (those are menu/toggle choices, this is Adam's own sentence).
+    @Published var preferredApproach = "" {
+        didSet { refreshRoutePlan() }
+    }
+    /// WO-J field 3 ("Done looks like...").
+    @Published var doneCondition = "" {
+        didSet { refreshRoutePlan() }
+    }
     @Published var composerAttachments: [ComposerAttachment] = []
     @Published var composerIntent = ComposerIntent()
     @Published var backend: Backend = .harnessDefault {
@@ -144,6 +154,8 @@ final class MacWorkbenchModel: ObservableObject {
         currentSessionId = nil
         sessionSearchHits = []
         draft = ""
+        preferredApproach = ""
+        doneCondition = ""
         composerAttachments = []
         composerIntent = ComposerIntent()
         searchText = ""
@@ -742,7 +754,9 @@ final class MacWorkbenchModel: ObservableObject {
         ComposerIntent.composedPrompt(
             userText: draft,
             attachments: composerAttachments,
-            intent: composerIntent
+            intent: composerIntent,
+            preferredApproach: preferredApproach,
+            doneCondition: doneCondition
         )
     }
 
@@ -1415,6 +1429,8 @@ final class MacWorkbenchModel: ObservableObject {
         refreshRoutePlan()
         let plannedRoute = routePlan
         draft = ""
+        preferredApproach = ""
+        doneCondition = ""
         composerAttachments = []
         routePlan = plannedRoute
         isRunning = true
