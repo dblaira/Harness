@@ -43,6 +43,10 @@ final class MacWorkbenchModel: ObservableObject {
     @Published private(set) var patternGateState = PatternGateState.locked(detail: "Not yet checked.")
     @Published var opportunityBoardRows: [OpportunityBoardRow] = []
     @Published var opportunityBoardLoadIssue: String?
+    /// WO-I: cards of "concepts currently holding my fascination"
+    /// (Adam, design-brief-ios-workbench.md) -- his words or verbatim
+    /// quoted sources only, sourced from watched .md files.
+    @Published var fascinationCards: [FascinationCard] = []
     @Published var connectors: [HarnessConnector] = HarnessConnectorRegistry.defaultConnectors()
     @Published var capabilities: [HarnessCapability] = HarnessCapabilityRegistry.defaultCapabilities()
     @Published var routePlan = HarnessExecutionRoutePlan(prompt: "", steps: [])
@@ -99,6 +103,7 @@ final class MacWorkbenchModel: ObservableObject {
             refreshOpportunityBoard()
             refreshConnectors()
             await refreshPatternGate()
+            refreshFascinationCards()
         }
     }
 
@@ -336,6 +341,88 @@ final class MacWorkbenchModel: ObservableObject {
 
         return OpportunityBoardDeduper().deduplicate(cards)
     }
+
+    // MARK: - FASCINATION carousel (WO-I)
+
+    func refreshFascinationCards() {
+        do {
+            fascinationCards = try Self.loadFascinationCards(from: Self.defaultFascinationsDirectory())
+        } catch {
+            fascinationCards = []
+        }
+    }
+
+    nonisolated static func defaultFascinationsDirectory() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Documents", isDirectory: true)
+            .appendingPathComponent("Harness", isDirectory: true)
+            .appendingPathComponent("Fascinations", isDirectory: true)
+    }
+
+    /// Same watched-folder pattern as loadOpportunityBoardRows, kept as
+    /// its own small parser rather than reusing OpportunityCardParser --
+    /// a fascination card is just a verbatim quote + attribution + date,
+    /// not the delegation-linked OpportunitySourceCard schema (WO-N).
+    nonisolated static func loadFascinationCards(
+        from directory: URL,
+        fileManager: FileManager = .default
+    ) throws -> [FascinationCard] {
+        guard fileManager.fileExists(atPath: directory.path) else { return [] }
+        guard let enumerator = fileManager.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else { return [] }
+
+        var cards: [FascinationCard] = []
+        for case let file as URL in enumerator {
+            guard file.pathExtension.lowercased() == "md" else { continue }
+            guard (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+            let markdown = try String(contentsOf: file, encoding: .utf8)
+            let (frontmatter, body) = Self.splitFrontmatter(markdown)
+            let quote = body.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !quote.isEmpty else { continue }
+
+            let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date()
+            let date = frontmatter["date"].flatMap(Self.fascinationDateFormatter.date(from:)) ?? modified
+            let attribution = frontmatter["attribution"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            cards.append(FascinationCard(
+                id: file.path,
+                quote: quote,
+                attribution: (attribution?.isEmpty == false ? attribution! : nil) ?? "ADAM",
+                date: date
+            ))
+        }
+        return cards.sorted { $0.date > $1.date }
+    }
+
+    /// Frontmatter is optional -- a card with none is still valid, its
+    /// whole body is the quote and it's attributed to ADAM by default
+    /// (recognition-only capture, no required fields to fill in first).
+    nonisolated private static func splitFrontmatter(_ markdown: String) -> (frontmatter: [String: String], body: String) {
+        let lines = markdown.components(separatedBy: "\n")
+        guard lines.first?.trimmingCharacters(in: .whitespaces) == "---",
+              let closingIndex = lines.dropFirst().firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "---" })
+        else {
+            return ([:], markdown)
+        }
+        var frontmatter: [String: String] = [:]
+        for line in lines[1..<closingIndex] {
+            guard let colonIndex = line.firstIndex(of: ":") else { continue }
+            let key = line[line.startIndex..<colonIndex].trimmingCharacters(in: .whitespaces).lowercased()
+            let value = line[line.index(after: colonIndex)...].trimmingCharacters(in: .whitespaces)
+            frontmatter[key] = value
+        }
+        let body = lines[(closingIndex + 1)...].joined(separator: "\n")
+        return (frontmatter, body)
+    }
+
+    nonisolated private static let fascinationDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        return formatter
+    }()
 
     func recordOpportunityBoardAction(_ action: OpportunityBoardAction, rows: [OpportunityBoardRow]) {
         let records = Self.opportunityBoardActionRecords(action: action, rows: rows)
@@ -1638,6 +1725,18 @@ struct NotebookLMSourceFile: Identifiable, Equatable {
         guard base.count > 36 else { return base }
         return String(base.prefix(33)) + "..."
     }
+}
+
+/// WO-I: one card of "concepts currently holding my fascination"
+/// (Adam, verbatim). `quote` is the .md file's body, untouched --
+/// content obeys the note rule, his words or verbatim quoted sources
+/// only. `attribution` defaults to "ADAM" for his own captured
+/// observations; an external source (a book, a paper) names itself.
+struct FascinationCard: Identifiable, Equatable {
+    let id: String
+    let quote: String
+    let attribution: String
+    let date: Date
 }
 
 enum WorkbenchInspectorTab: String, CaseIterable, Identifiable {

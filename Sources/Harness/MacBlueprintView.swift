@@ -2,16 +2,19 @@
 import SwiftUI
 import OntologyKit
 
-/// Shell for the v6-mockup cockpit screen (WO-F/WO-G/WO-H). Five regions
-/// per docs/design-brief-ios-workbench.md: Step Rail, Sources pool,
-/// Delegate composer, Organize, Ledger strip. The Step Rail is live,
-/// bound to PatternGateChecker (fail-closed), and carries the v6 ink
-/// (Benday tan band, crimson contours, cornerRadius 0, one breathing
-/// dot). The other four regions stay plain scaffolding until their own
-/// work orders — the ink is not yet a whole-screen retrofit. No local
-/// copy of the v6 mockup artifact exists in this repo to diff against
+/// Shell for the v6-mockup cockpit screen (WO-F/WO-G/WO-H/WO-I). Five
+/// regions per docs/design-brief-ios-workbench.md: Step Rail, Sources
+/// pool, Delegate composer, Organize, Ledger strip -- plus the
+/// FASCINATION carousel, added later directly under the Step Rail
+/// (Adam, verbatim: "I could envision another layer below the Adam
+/// Pattern boxes... a carousel feature may be the answer to how it's
+/// presented"). The Step Rail is live, bound to PatternGateChecker
+/// (fail-closed), and carries the v6 ink (Benday tan band, crimson
+/// contours, cornerRadius 0, one breathing dot). The four original
+/// placeholder regions stay plain scaffolding until their own work
+/// orders — the ink is not yet a whole-screen retrofit. No local copy
+/// of the v6 mockup artifact exists in this repo to diff against
 /// pixel-for-pixel; this is a mechanical read of the written spec.
-/// The FASCINATION carousel (WO-I) lands next.
 struct MacBlueprintView: View {
     @ObservedObject var model: MacWorkbenchModel
 
@@ -20,6 +23,7 @@ struct MacBlueprintView: View {
             VStack(alignment: .leading, spacing: 18) {
                 header
                 stepRailSection
+                fascinationCarousel
                 blueprintSection(title: "Sources", icon: "tray") {
                     placeholderNote("Unlabeled capture pool lands in WO-N.")
                 }
@@ -39,6 +43,7 @@ struct MacBlueprintView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.macBg)
         .task { await model.refreshPatternGate() }
+        .task { model.refreshFascinationCards() }
     }
 
     private var header: some View {
@@ -109,6 +114,72 @@ struct MacBlueprintView: View {
         .clipShape(Rectangle())
         .overlay(Rectangle().stroke(Theme.macRed, lineWidth: 2.5))
     }
+
+    // MARK: - FASCINATION carousel (WO-I)
+
+    private var fascinationCarousel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "quote.opening")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.macRed.opacity(0.9))
+                    .frame(width: 16)
+                Text("Fascinations")
+                    .font(.system(size: 13).weight(.bold))
+                    .foregroundStyle(Theme.macInk.opacity(0.78))
+                Spacer()
+                Button {
+                    model.refreshFascinationCards()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.caption2)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.macInk.opacity(0.5))
+                .help("Re-scan ~/Documents/Harness/Fascinations")
+            }
+
+            if model.fascinationCards.isEmpty {
+                placeholderNote("Drop a quote .md file in ~/Documents/Harness/Fascinations — its body becomes the card, verbatim.")
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: 18) {
+                        ForEach(Array(model.fascinationCards.enumerated()), id: \.element.id) { index, card in
+                            SavyQuoteCard(quote: card.quote, attribution: attributionLine(for: card))
+                                .frame(width: 260)
+                                .rotationEffect(.degrees(fascinationTilt(for: index)))
+                        }
+                    }
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 4)
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.macEntry.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
+    }
+
+    /// WO-I calls for +/-2-4 degree tilts, cycling for an organic,
+    /// hand-placed feel rather than one repeated angle.
+    private func fascinationTilt(for index: Int) -> Double {
+        let magnitude = 2.0 + Double(index % 3)
+        return index.isMultiple(of: 2) ? magnitude : -magnitude
+    }
+
+    /// "his own captured observations dated and attributed to ADAM" —
+    /// an external source (a book, a paper) just names itself.
+    private func attributionLine(for card: FascinationCard) -> String {
+        guard card.attribution == "ADAM" else { return card.attribution }
+        return "ADAM · \(Self.fascinationDisplayDateFormatter.string(from: card.date))"
+    }
+
+    private static let fascinationDisplayDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        return formatter
+    }()
 
     private var observationalSteps: [PatternStep] {
         model.ontology.pattern.filter { $0.zone == .observational }
