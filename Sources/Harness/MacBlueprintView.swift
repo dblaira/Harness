@@ -1,6 +1,8 @@
 #if os(macOS)
+import AppKit
 import SwiftUI
 import OntologyKit
+import UniformTypeIdentifiers
 
 /// Shell for the v6-mockup cockpit screen (WO-F/WO-G/WO-H/WO-I). Five
 /// regions per docs/design-brief-ios-workbench.md: Step Rail, Sources
@@ -25,7 +27,7 @@ struct MacBlueprintView: View {
                 stepRailSection
                 fascinationCarousel
                 blueprintSection(title: "Sources", icon: "tray") {
-                    placeholderNote("Unlabeled capture pool lands in WO-N.")
+                    sourcesPool
                 }
                 blueprintSection(title: "Delegate", icon: "text.cursor") {
                     placeholderNote("The three fields (Intent/PreferredApproach/DoneCondition) are live in the Chat composer (WO-J) — embedding them here is still open.")
@@ -45,6 +47,7 @@ struct MacBlueprintView: View {
         .task { await model.refreshPatternGate() }
         .task { model.refreshFascinationCards() }
         .task { await model.refreshFleetLedger() }
+        .task { model.refreshSourcePool() }
     }
 
     private var header: some View {
@@ -181,6 +184,91 @@ struct MacBlueprintView: View {
         formatter.dateStyle = .medium
         return formatter
     }()
+
+    // MARK: - Sources pool (WO-N)
+
+    /// Unlabeled by design -- no title field, no folder picker.
+    /// "Capture-from-anywhere" for v1 is the watched Delegations folder
+    /// (a Shortcut can share into it from iPhone) plus this in-app
+    /// drop/paste; a real Share Extension is v2, per the plan.
+    private var sourcesPool: some View {
+        Group {
+            if model.sourcePoolCards.isEmpty {
+                placeholderNote("Paste a link or drop a file here — recognition-only, no names, no folders.")
+                    .frame(maxWidth: .infinity, minHeight: 60, alignment: .center)
+            } else {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 84, maximum: 84), spacing: 8)], spacing: 8) {
+                    ForEach(model.sourcePoolCards, id: \.contentHash) { card in
+                        sourcePoolCell(card)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding(10)
+        .background(Theme.macEntry.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Theme.macHair, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+        )
+        .dropDestination(for: URL.self) { items, _ in
+            guard !items.isEmpty else { return false }
+            for url in items {
+                if url.isFileURL {
+                    model.captureSourcePoolFile(url)
+                } else {
+                    model.captureSourcePoolLink(url)
+                }
+            }
+            return true
+        }
+        .onPasteCommand(of: [.url, .plainText]) { providers in
+            for provider in providers {
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url else { return }
+                    DispatchQueue.main.async {
+                        model.captureSourcePoolLink(url)
+                    }
+                }
+            }
+        }
+    }
+
+    private func sourcePoolCell(_ card: OpportunitySourceCard) -> some View {
+        Group {
+            if let thumbnail = poolThumbnail(for: card) {
+                Image(nsImage: thumbnail)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                VStack(spacing: 4) {
+                    Image(systemName: "link")
+                        .font(.system(size: 15, weight: .semibold))
+                    Text(poolResourceLabel(card))
+                        .font(.system(size: 8, weight: .medium))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(Theme.macInk.opacity(0.5))
+            }
+        }
+        .frame(width: 84, height: 84)
+        .background(Theme.macCardBright, in: RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.macHair, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .help(card.envelope.resource ?? "")
+    }
+
+    private func poolThumbnail(for card: OpportunitySourceCard) -> NSImage? {
+        guard let resource = card.envelope.resource, let url = URL(string: resource), url.isFileURL else { return nil }
+        let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "heic", "tiff", "bmp"]
+        guard imageExtensions.contains(url.pathExtension.lowercased()) else { return nil }
+        return NSImage(contentsOf: url)
+    }
+
+    private func poolResourceLabel(_ card: OpportunitySourceCard) -> String {
+        guard let resource = card.envelope.resource, let url = URL(string: resource) else { return "source" }
+        return url.host ?? url.lastPathComponent
+    }
 
     // MARK: - Fleet ledger (WO-M, flat v1)
 

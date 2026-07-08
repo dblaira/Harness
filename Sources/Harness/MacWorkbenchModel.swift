@@ -1,5 +1,6 @@
 #if os(macOS)
 import AppKit
+import CryptoKit
 import Foundation
 import OntologyKit
 import UniformTypeIdentifiers
@@ -53,6 +54,9 @@ final class MacWorkbenchModel: ObservableObject {
     @Published private(set) var patternGateState = PatternGateState.locked(detail: "Not yet checked.")
     @Published var opportunityBoardRows: [OpportunityBoardRow] = []
     @Published var opportunityBoardLoadIssue: String?
+    /// WO-N: the unlabeled pool -- .sourceCard rows the delegation board
+    /// deliberately excludes (see loadOpportunityBoardRows).
+    @Published var sourcePoolCards: [OpportunitySourceCard] = []
     /// WO-I: cards of "concepts currently holding my fascination"
     /// (Adam, design-brief-ios-workbench.md) -- his words or verbatim
     /// quoted sources only, sourced from watched .md files.
@@ -111,6 +115,7 @@ final class MacWorkbenchModel: ObservableObject {
             await refreshSessions()
             await refreshReviewQueue()
             refreshOpportunityBoard()
+            refreshSourcePool()
             refreshConnectors()
             await refreshPatternGate()
             refreshFascinationCards()
@@ -353,6 +358,101 @@ final class MacWorkbenchModel: ObservableObject {
         }
 
         return OpportunityBoardDeduper().deduplicate(cards)
+    }
+
+    // MARK: - Sources pool (WO-N)
+
+    func refreshSourcePool() {
+        do {
+            sourcePoolCards = try Self.loadSourcePoolCards(from: Self.defaultOpportunityBoardDirectory())
+        } catch {
+            sourcePoolCards = []
+        }
+    }
+
+    /// WO-N: "Stop discarding .sourceCard rows" -- loadOpportunityBoardRows
+    /// above deliberately keeps ONLY .opportunity (source files must not
+    /// become delegation items, per its own test). This is the mirror:
+    /// same watched folder, same parser, keeps ONLY .sourceCard.
+    nonisolated static func loadSourcePoolCards(
+        from directory: URL,
+        fileManager: FileManager = .default
+    ) throws -> [OpportunitySourceCard] {
+        guard fileManager.fileExists(atPath: directory.path) else { return [] }
+        guard let enumerator = fileManager.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else { return [] }
+
+        let parser = OpportunityCardParser()
+        let validator = OpportunityCardValidator()
+        var cards: [OpportunitySourceCard] = []
+
+        for case let file as URL in enumerator {
+            guard file.pathExtension.lowercased() == "md" else { continue }
+            guard (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+            let markdown = try String(contentsOf: file, encoding: .utf8)
+            guard case let .sourceCard(card) = try? parser.parse(markdown: markdown, source: file.path),
+                  validator.validate(card).passed
+            else { continue }
+            cards.append(card)
+        }
+
+        return cards
+    }
+
+    /// Paste or drop a link into the pool -- writes a new source_card
+    /// .md file into the same watched Delegations folder the scout
+    /// already writes to, so it appears through the normal load path.
+    /// No title, no folder picker: recognition-only capture.
+    func captureSourcePoolLink(_ url: URL) {
+        writeSourcePoolCard(resource: url.absoluteString, retrievedBy: "adam-paste")
+    }
+
+    /// Drop a local file (an image dragged from Finder, etc.) -- copies
+    /// it into a pool-assets folder next to the watched Delegations
+    /// folder so the capture survives even if the original moves, then
+    /// writes the source_card pointing at the copy.
+    func captureSourcePoolFile(_ localURL: URL) {
+        let assetsDirectory = Self.defaultOpportunityBoardDirectory().appendingPathComponent("pool-assets", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: assetsDirectory, withIntermediateDirectories: true)
+            let ext = localURL.pathExtension.isEmpty ? "bin" : localURL.pathExtension
+            let destination = assetsDirectory.appendingPathComponent("\(UUID().uuidString).\(ext)")
+            try FileManager.default.copyItem(at: localURL, to: destination)
+            writeSourcePoolCard(resource: destination.absoluteString, retrievedBy: "adam-drop")
+        } catch {
+            status = "Couldn't capture dropped file: \(error.localizedDescription)"
+        }
+    }
+
+    private func writeSourcePoolCard(resource: String, retrievedBy: String) {
+        let directory = Self.defaultOpportunityBoardDirectory()
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let contentHash = Self.sha256Hex(resource)
+            let markdown = """
+            ---
+            type: source_card
+            resource: \(resource)
+            retrieved_by: \(retrievedBy)
+            content_hash: \(contentHash)
+            ---
+
+            """
+            let destination = directory.appendingPathComponent("pool-\(contentHash.prefix(12)).md")
+            try markdown.write(to: destination, atomically: true, encoding: .utf8)
+            refreshSourcePool()
+            status = "Captured into the sources pool."
+        } catch {
+            status = "Couldn't capture into the sources pool: \(error.localizedDescription)"
+        }
+    }
+
+    nonisolated private static func sha256Hex(_ text: String) -> String {
+        let digest = SHA256.hash(data: Data(text.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
     }
 
     // MARK: - FASCINATION carousel (WO-I)
