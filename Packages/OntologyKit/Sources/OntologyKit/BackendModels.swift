@@ -257,13 +257,27 @@ public struct EvalResult: Identifiable, Codable, Sendable, Equatable {
     public let checkName: String
     public let passed: Bool
     public let detail: String
+    /// CLAUDE.md hard rule 3: "A verification Pass is invalid without an
+    /// on-disk artifact path." nil for checks that have no artifact
+    /// (most existing checks); WO-Q's build-and-screenshot spike is the
+    /// first to populate it, and its own `passed` is gated on this path
+    /// actually existing on disk -- never on a shell exit code alone.
+    public let artifactPath: String?
 
-    public init(id: String = UUID().uuidString, runId: String, checkName: String, passed: Bool, detail: String) {
+    public init(
+        id: String = UUID().uuidString,
+        runId: String,
+        checkName: String,
+        passed: Bool,
+        detail: String,
+        artifactPath: String? = nil
+    ) {
         self.id = id
         self.runId = runId
         self.checkName = checkName
         self.passed = passed
         self.detail = detail
+        self.artifactPath = artifactPath
     }
 }
 

@@ -39,6 +39,10 @@ final class MacWorkbenchModel: ObservableObject {
     @Published var firecrawlAPIKey = ""
     @Published var hasFirecrawlAPIKey = false
     @Published var isRunning = false
+    /// WO-Q: a separate flag from isRunning -- a build-and-screenshot
+    /// run is not a chat send, and "one builder, no parallelism" only
+    /// needs to block a second build, not the whole app.
+    @Published private(set) var isCapturingBuildScreenshot = false
     @Published var status = "Ledger ready"
     @Published var searchText = ""
     @Published var chatSessions: [ChatSession] = []
@@ -94,6 +98,7 @@ final class MacWorkbenchModel: ObservableObject {
     /// One ongoing build for v1 -- no build picker exists yet (cut from
     /// v1 scope). Stable across launches so ratings accumulate.
     let patternBuildId = MacWorkbenchModel.loadOrCreatePatternBuildId()
+    private let buildScreenshotService = BuildScreenshotService()
 
     init() {
         let store: RunLedgerStore
@@ -1408,6 +1413,39 @@ final class MacWorkbenchModel: ObservableObject {
                 status = "Evidence capture failed: \(error.localizedDescription)"
             }
         }
+    }
+
+    // MARK: - Build-and-screenshot spike (WO-Q)
+
+    /// "One builder, one screen, no parallelism" -- this guard is that
+    /// rule, not just a spinner.
+    func captureBuildScreenshot() {
+        guard !isCapturingBuildScreenshot else { return }
+        isCapturingBuildScreenshot = true
+        status = "Building and capturing a simulator screenshot — this can take a few minutes."
+        let service = buildScreenshotService
+        let outputDirectory = Self.defaultBuildEvidenceDirectory()
+        let ledger = ledger
+        Task { [weak self] in
+            let detail = await Task.detached(priority: .userInitiated) {
+                service.run(outputDirectory: outputDirectory)
+            }.value
+            try? await ledger.save(detail)
+            await MainActor.run {
+                guard let self else { return }
+                self.isCapturingBuildScreenshot = false
+                self.selectedDetail = detail
+                self.status = detail.evalResults.first?.detail ?? detail.run.finalAnswer
+            }
+            await self?.refreshRuns()
+        }
+    }
+
+    nonisolated static func defaultBuildEvidenceDirectory() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Documents", isDirectory: true)
+            .appendingPathComponent("Harness", isDirectory: true)
+            .appendingPathComponent("BuildEvidence", isDirectory: true)
     }
 
     func decideReviewQueueCandidate(_ candidate: MemoryCandidate, decision: ReviewQueueDecision) {

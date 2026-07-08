@@ -2954,7 +2954,9 @@ struct MacChatView: View {
     }
 
     private var tracePanel: some View {
-        Group {
+        VStack(alignment: .leading, spacing: 10) {
+            buildScreenshotButton
+
             if let detail = model.selectedDetail {
                 ForEach(detail.traceEvents) { event in
                     inspectorBlock(
@@ -2965,17 +2967,74 @@ struct MacChatView: View {
                     )
                 }
                 ForEach(detail.evalResults) { result in
-                    inspectorBlock(
-                        title: result.checkName,
-                        subtitle: result.passed ? "passed" : "needs review",
-                        body: result.detail,
-                        status: result.passed ? "passed" : "review"
-                    )
+                    inspectorEvalResultBlock(result)
                 }
             } else {
                 emptyInspectorText("Run trace and eval checks appear here.")
             }
         }
+    }
+
+    /// WO-Q: "One builder, one screen, no parallelism" -- disabled while
+    /// a build is already running, not just visually pending.
+    private var buildScreenshotButton: some View {
+        Button {
+            model.captureBuildScreenshot()
+        } label: {
+            Label(
+                model.isCapturingBuildScreenshot ? "Building…" : "Build & Screenshot",
+                systemImage: model.isCapturingBuildScreenshot ? "hourglass" : "camera.viewfinder"
+            )
+            .font(.caption.weight(.semibold))
+            .labelStyle(.titleAndIcon)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(Theme.macEntry.opacity(0.28), in: RoundedRectangle(cornerRadius: 7))
+            .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.macHair, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .disabled(model.isCapturingBuildScreenshot)
+        .help("xcodebuild build + a real iOS Simulator screenshot, attached as this run's evidence artifact")
+    }
+
+    /// The evidence card the plan's acceptance test names: a real
+    /// simulator PNG, not just pass/fail text. inspectorBlock (used for
+    /// every other eval check) is text-only, so this is a separate
+    /// image-capable variant rather than adding an unused image param
+    /// to every existing caller.
+    private func inspectorEvalResultBlock(_ result: EvalResult) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(result.checkName)
+                    .font(.system(size: 12).weight(.semibold))
+                    .foregroundStyle(Theme.macInk)
+                    .lineLimit(2)
+                Spacer(minLength: 8)
+                statusBadge(result.passed ? "passed" : "needs review")
+            }
+            if let artifactPath = result.artifactPath, let nsImage = NSImage(contentsOfFile: artifactPath) {
+                Image(nsImage: nsImage)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxHeight: 180)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.macHair, lineWidth: 1))
+                Text(artifactPath)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(Theme.macInk.opacity(0.46))
+                    .textSelection(.enabled)
+                    .lineLimit(1)
+            }
+            Text(result.detail)
+                .font(.caption)
+                .foregroundStyle(Theme.macInk.opacity(0.72))
+                .textSelection(.enabled)
+                .lineLimit(8)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.macEntry.opacity(0.24), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
     }
 
     private var candidatePanel: some View {
