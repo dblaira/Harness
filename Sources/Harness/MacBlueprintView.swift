@@ -20,45 +20,60 @@ import UniformTypeIdentifiers
 struct MacBlueprintView: View {
     @ObservedObject var model: MacWorkbenchModel
 
+    /// The mockup's one real click-interaction (its `#rail .cell` ->
+    /// `#loop .stage` script): tapping a Step Rail cell jumps to and
+    /// highlights its matching detail card in `loopSection` below. Adam,
+    /// after we shipped a static rail: "it actually had interactivity to
+    /// it" — this was the missing piece.
+    @State private var highlightedStepID: Int?
+
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                header
-                stepRailSection
-                fascinationCarousel
-                blueprintSection(title: "Sources", icon: "tray") {
-                    sourcesPool
-                }
-                blueprintSection(title: "Delegate", icon: "text.cursor") {
-                    placeholderNote("The three fields (Intent/PreferredApproach/DoneCondition) are live in the Chat composer (WO-J) — embedding them here is still open.")
-                }
-                blueprintSection(title: "Organize", icon: "square.stack.3d.up") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        mindMapTree
-                        placeholderNote("Slide Deck / Audio are still open — read-only Mind Map tree only, per the plan (\"navigation takeover only after it survives daily use\").")
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    header
+                    stepRail(jumpTo: { stepID in
+                        highlightedStepID = stepID
+                        withAnimation(.easeInOut(duration: 0.4)) {
+                            proxy.scrollTo(stepID, anchor: .top)
+                        }
+                    })
+                    loopSection
+                    fascinationCarousel
+                    blueprintSection(title: "Sources", icon: "tray") {
+                        sourcesPool
+                    }
+                    blueprintSection(title: "Delegate", icon: "text.cursor") {
+                        placeholderNote("The three fields (Intent/PreferredApproach/DoneCondition) are live in the Chat composer (WO-J) — embedding them here is still open.")
+                    }
+                    blueprintSection(title: "Organize", icon: "square.stack.3d.up") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            mindMapTree
+                            placeholderNote("Slide Deck / Audio are still open — read-only Mind Map tree only, per the plan (\"navigation takeover only after it survives daily use\").")
+                        }
+                    }
+                    blueprintSection(title: "Ledger", icon: "chart.bar") {
+                        fleetLedger
                     }
                 }
-                blueprintSection(title: "Ledger", icon: "chart.bar") {
-                    fleetLedger
+                .padding(22)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background {
+                ZStack {
+                    Theme.macBg
+                    // Mockup: `.canvas{background-image:radial-gradient(rgba(8,23,45,.09)...)}`
+                    // -- a faint navy dot field across the whole canvas, not
+                    // just the Step Rail band.
+                    SavyBendayGround(dotColor: Theme.savyDeepNavy, dotOpacity: 0.09, spacing: 10, dotDiameter: 2.2)
                 }
             }
-            .padding(22)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .task { await model.refreshPatternGate() }
+            .task { model.refreshFascinationCards() }
+            .task { await model.refreshFleetLedger() }
+            .task { model.refreshSourcePool() }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background {
-            ZStack {
-                Theme.macBg
-                // Mockup: `.canvas{background-image:radial-gradient(rgba(8,23,45,.09)...)}`
-                // -- a faint navy dot field across the whole canvas, not
-                // just the Step Rail band.
-                SavyBendayGround(dotColor: Theme.savyDeepNavy, dotOpacity: 0.09, spacing: 10, dotDiameter: 2.2)
-            }
-        }
-        .task { await model.refreshPatternGate() }
-        .task { model.refreshFascinationCards() }
-        .task { await model.refreshFleetLedger() }
-        .task { model.refreshSourcePool() }
     }
 
     private var header: some View {
@@ -85,7 +100,7 @@ struct MacBlueprintView: View {
     /// tan band)"), crimson 2.5pt contour, cornerRadius 0 — the v6
     /// mechanical pass. The other four regions keep the plain scaffold
     /// treatment until their own work orders reach them.
-    private var stepRailSection: some View {
+    private func stepRail(jumpTo: @escaping (Int) -> Void) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Image(systemName: "list.number")
@@ -96,6 +111,9 @@ struct MacBlueprintView: View {
                     .font(.system(size: 13).weight(.bold))
                     .foregroundStyle(Theme.macInk.opacity(0.78))
                 Spacer()
+                Text("tap a step to jump to it below")
+                    .font(.caption2)
+                    .foregroundStyle(Theme.macInk.opacity(0.4))
             }
 
             gateStatusLine
@@ -109,12 +127,19 @@ struct MacBlueprintView: View {
                             model.submitPatternRating(step: step.id, rating: rating, evidenceNote: note)
                         }
                     )
+                    // Only jump once the cell is display-only (rated) --
+                    // a tap gesture over the live Stepper/TextField/Button
+                    // form would steal taps meant for those controls.
+                    .onTapGesture {
+                        if model.patternGateState.ratings[step.id] != nil { jumpTo(step.id) }
+                    }
                 }
             }
 
             HStack(alignment: .top, spacing: 8) {
                 ForEach(executionSteps) { step in
                     PatternExecutionCell(step: step, unlocked: model.patternGateState.executionUnlocked)
+                        .onTapGesture { jumpTo(step.id) }
                 }
             }
         }
@@ -128,6 +153,47 @@ struct MacBlueprintView: View {
         }
         .clipShape(Rectangle())
         .overlay(Rectangle().stroke(Theme.macRed, lineWidth: 2.5))
+    }
+
+    // MARK: - The loop (jump target for Step Rail taps)
+
+    /// Mockup's `#loop .stage` cards -- the mockup's own copy, ported
+    /// verbatim from the approved v6 artifact, not written fresh here.
+    /// Two rows of four, same 1/2/3/4 + 5/6/7/8 split as the rail above.
+    private var loopSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.macRed.opacity(0.9))
+                    .frame(width: 16)
+                Text("The loop")
+                    .font(.system(size: 13).weight(.bold))
+                    .foregroundStyle(Theme.macInk.opacity(0.78))
+                Spacer()
+            }
+            Text("SPEAK SENTENCES · RATE FOUR NUMBERS · PRESS CONTINUE — THAT IS THE WHOLE JOB")
+                .font(.system(size: 10).weight(.bold))
+                .tracking(0.6)
+                .foregroundStyle(Theme.macInk.opacity(0.4))
+
+            HStack(alignment: .top, spacing: 8) {
+                ForEach(observationalSteps) { step in
+                    LoopStepDetailCard(step: step, detail: LoopStepCopy.detail(for: step.id), highlighted: highlightedStepID == step.id)
+                        .id(step.id)
+                }
+            }
+            HStack(alignment: .top, spacing: 8) {
+                ForEach(executionSteps) { step in
+                    LoopStepDetailCard(step: step, detail: LoopStepCopy.detail(for: step.id), highlighted: highlightedStepID == step.id)
+                        .id(step.id)
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.macEntry.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
     }
 
     // MARK: - FASCINATION carousel (WO-I)
@@ -579,6 +645,96 @@ private struct PatternExecutionCell: View {
         }
         .overlay(Rectangle().stroke(Theme.macRed, lineWidth: 4))
         .rotationEffect(.degrees(tiltDegrees))
+    }
+}
+
+/// "YOU SEE" / "YOU DO" copy per step, ported verbatim from the approved
+/// v6 mockup's `#loop .stage` cards -- not written fresh for this build.
+private enum LoopStepCopy {
+    struct Detail {
+        let youSee: String
+        let youDo: String
+    }
+
+    static func detail(for stepID: Int) -> Detail {
+        table[stepID] ?? Detail(youSee: "", youDo: "")
+    }
+
+    private static let table: [Int: Detail] = [
+        1: Detail(
+            youSee: "one Context slide + audio brief — what already exists: your repos, your apps, the graph, the market",
+            youDo: "rate the evidence 1–10 — beside it, the case-against card argues why this is still Step 1. You rate the dispute, not the pitch."
+        ),
+        2: Detail(
+            youSee: "a landscape Mind Map + audio walkthrough — competitors, App Store, prior art, sources quoted verbatim",
+            youDo: "rate the evidence 1–10"
+        ),
+        3: Detail(
+            youSee: "one slide per gap: the gap / what closes it / recommended default",
+            youDo: "rate the evidence 1–10"
+        ),
+        4: Detail(
+            youSee: "your spoken sentences split into numbered Done conditions — each one becomes a test. If a sentence is ambiguous, agents build BOTH artifacts. Never a paraphrase.",
+            youDo: "rate the cell — all four at 7+ unlocks the build. \"If I can't say, I can't play.\""
+        ),
+        5: Detail(
+            youSee: "one slide per screen: real render + your sentence beneath + numbers in cells (evals, advisors, breaker kills)",
+            youDo: "Continue / Change (speak it) / Retry — or \"Hold it in my hand\" to run it live. Architectural forks are never asked: the reversible option is built and a Hold is logged with its return condition."
+        ),
+        6: Detail(
+            youSee: "one card of numbers: spend caps, crash threshold, eval floor",
+            youDo: "Save. The caps live in the top bar from then on."
+        ),
+        7: Detail(
+            youSee: "the install card — the icon on YOUR phone doing what your sentence said. Every un-passed sentence blocks the ship; nothing uploads to TestFlight without your Pursue.",
+            youDo: "Pursue to ship. Then listen: unprompted third-party words arrive as quote cards, verbatim, with who and when."
+        ),
+        8: Detail(
+            youSee: "one \"what compounds\" slide + an Add button that turns this whole build into a named routine — a repeat order on the menu",
+            youDo: "accept or pass per candidate. Crashes, deletions, and store outcomes feed the next Context on what WORKED, not on what was easy to approve."
+        )
+    ]
+}
+
+/// A jump target for `stepRail`'s tap gesture -- `highlighted` mirrors
+/// the mockup's `.hl` class toggle (thicker crimson ring + warm fill)
+/// for the card a rail tap just scrolled to.
+private struct LoopStepDetailCard: View {
+    let step: PatternStep
+    let detail: LoopStepCopy.Detail
+    let highlighted: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("STEP \(step.id) · \(step.zone == .observational ? "OBSERVE" : "EXECUTE")")
+                .font(.system(size: 10).weight(.bold))
+                .tracking(0.4)
+                .foregroundStyle(Theme.macRed)
+            Text(step.title)
+                .font(.system(size: 14).weight(.bold))
+                .foregroundStyle(Theme.macInk)
+
+            Text("YOU SEE")
+                .font(.system(size: 9).weight(.bold))
+                .foregroundStyle(Theme.macInk.opacity(0.4))
+            Text(detail.youSee)
+                .font(.caption2)
+                .foregroundStyle(Theme.macInk.opacity(0.75))
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("YOU DO")
+                .font(.system(size: 9).weight(.bold))
+                .foregroundStyle(Theme.macInk.opacity(0.4))
+            Text(detail.youDo)
+                .font(.caption2)
+                .foregroundStyle(Theme.macInk.opacity(0.75))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, minHeight: 160, alignment: .topLeading)
+        .background(highlighted ? Theme.macWarmCream : Theme.macCardBright, in: Rectangle())
+        .overlay(Rectangle().stroke(Theme.macRed, lineWidth: highlighted ? 5 : 1.5))
+        .animation(.easeInOut(duration: 0.3), value: highlighted)
     }
 }
 #endif
