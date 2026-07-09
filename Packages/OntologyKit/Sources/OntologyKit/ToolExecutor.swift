@@ -108,7 +108,7 @@ public final class ToolExecutor: Sendable {
         public var outputCap: Int
 
         public init(
-            homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+            homeDirectory: URL = URL(fileURLWithPath: NSHomeDirectory()),
             shellTimeout: TimeInterval = 120,
             maxShellTimeout: TimeInterval = 600,
             outputCap: Int = 40_000

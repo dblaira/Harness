@@ -20,7 +20,7 @@ public enum SoulLoader {
     public static let maxCharacters = 32_000
 
     public static func load(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        homeDirectory: URL = URL(fileURLWithPath: NSHomeDirectory()),
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> SoulDocument? {
         for candidate in candidateURLs(homeDirectory: homeDirectory, environment: environment) {

@@ -53,7 +53,7 @@ public struct MemorySnapshot: Codable, Sendable, Equatable {
     /// Reads every candidate file whole. Missing or empty files are skipped
     /// gracefully — a machine without the vault still gets a valid snapshot.
     public static func capture(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        homeDirectory: URL = URL(fileURLWithPath: NSHomeDirectory()),
         fileManager: FileManager = .default
     ) -> MemorySnapshot {
         let entries = candidateURLs(homeDirectory: homeDirectory, fileManager: fileManager)

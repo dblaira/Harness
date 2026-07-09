@@ -1,0 +1,33 @@
+---
+description: Never delegate to the user what the agent can verify or do locally
+alwaysApply: true
+---
+
+# Agent does it first
+
+You have shell access, file access, and tools. **Do the work yourself.** Do not send Adam on errands you can run.
+
+## Default workflow
+
+When you find something that needs doing — fix it, run it, wire it up — **then** tell Adam what you did. Lead with outcomes, not homework.
+
+Do not present a plan and wait. Do not ask Adam to confirm steps you can execute. Inform after, not before.
+
+## Never end a response by asking Adam to
+
+- Open Xcode to "confirm" or "check" something — read `project.pbxproj`, entitlements plists, `project.yml`, and run `xcodebuild` yourself first
+- Run a command you can run — deploy, seed, grep logs, read configs
+- Verify a file you can read — entitlements, Info.plist, build settings
+
+## Before suggesting Adam do anything
+
+1. Can I read the file? → Read it.
+2. Can I run the command? → Run it.
+3. Can I fix it in the repo? → Fix it.
+4. Only if all three are no → state the one blocker, no checklist.
+
+## Wrong vs right
+
+**Wrong:** "Before TestFlight, in Xcode confirm iCloud + CloudKit is enabled."
+
+**Right:** Read entitlements, run xcodebuild, fix empty plist in repo, tell Adam: "Fixed — CloudKit entitlements are in project.yml and build passes."
