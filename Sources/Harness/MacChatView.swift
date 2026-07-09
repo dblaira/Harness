@@ -1673,72 +1673,13 @@ struct MacChatView: View {
                 isSidebarVisible.toggle()
             }
 
-            // No page title -- Adam: "I know what page I'm on. I don't
-            // need double reminders." The switcher pill already says it.
-            // (Pills live in an overlay so they sit page-centered --
-            // memo 21: "Move them to the center so they're centered in
-            // the page.")
+            // Adam: "Everything on the screen should make sense to me
+            // so I don't know why those things are even fucking there."
+            // The Delegation bar holds exactly three things: sidebar
+            // toggle, the centered pills, inspector toggle. Backend,
+            // accounts, caps, and Run agent live behind the toggle and
+            // on the Chat page -- "I can get to that from the back."
             Spacer()
-
-            Picker("Backend", selection: $model.backend) {
-                ForEach(Backend.allCases) { backend in
-                    Text(backend.rawValue).tag(backend)
-                }
-            }
-            .labelsHidden()
-            .frame(width: 116)
-            .tint(Theme.macRed)
-
-            backendStatusBand
-                .frame(minWidth: 68, maxWidth: 180, alignment: .leading)
-                .layoutPriority(2)
-
-            killSwitchReadout
-            runAgentButton
-
-            if model.backend == .codex {
-                subscriptionAccountBadge(
-                    label: "ChatGPT account",
-                    help: "Codex uses your ChatGPT authorization, not an OpenAI API key"
-                )
-
-                toolbarIconButton("key.viewfinder", help: "Authorize Codex with ChatGPT") {
-                    model.authorizeCodexAccount()
-                }
-            } else if model.backend == .grok, !model.hasSavedAPIKey {
-                subscriptionAccountBadge(
-                    label: "Grok account",
-                    help: "Grok uses your xAI subscription authorization, not an API key"
-                )
-
-                toolbarIconButton("key.viewfinder", help: "Authorize Grok with xAI") {
-                    model.authorizeGrokAccount()
-                }
-            } else if model.backend != .hermes {
-                SecureField(macAPIKeyLabel(for: model.backend), text: $model.apiKey)
-                    .textFieldStyle(.plain)
-                    .font(Theme.recallBody(13))
-                    .foregroundStyle(Theme.macEntryInk)
-                    .padding(7)
-                    .frame(width: 150)
-                    .background(Theme.macEntry, in: RoundedRectangle(cornerRadius: 8))
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
-                    .onSubmit { model.saveAPIKey() }
-
-                if model.hasSavedAPIKey {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.green)
-                        .help("\(macAPIKeyLabel(for: model.backend)) saved in Keychain")
-                    toolbarIconButton("xmark.circle", help: "Remove saved \(macAPIKeyLabel(for: model.backend))") {
-                        model.deleteAPIKey()
-                    }
-                } else {
-                    toolbarIconButton("square.and.arrow.down", help: "Save \(macAPIKeyLabel(for: model.backend)) in Keychain") {
-                        model.saveAPIKey()
-                    }
-                }
-            }
 
             toolbarIconButton(
                 isInspectorVisible ? "rectangle.rightthird.inset.filled" : "rectangle",

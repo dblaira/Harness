@@ -102,48 +102,14 @@ struct MacBlueprintView: View {
 
     /// .railbar -- HARNESS wordmark, breathing dot + current step,
     /// kill-switch spend readout in tan tabular figures.
+    /// A bare navy band -- Adam: "that navy strip can stay there" but
+    /// the step readout, the dot, and "Kill Switch 0 of 50 today" all
+    /// go ("I don't know what those are for. I don't care what they
+    /// are for ... remove that"). The gate still refreshes on appear.
     private var railbar: some View {
-        // No wordmark -- Adam: "What the fuck do I need to know that
-        // this is harness? I know what app I opened up."
-        HStack(spacing: 14) {
-            HStack(spacing: 6) {
-                if model.patternGateState.executionUnlocked {
-                    SavyBreathingDot(color: Theme.savyGreen, diameter: 8)
-                } else {
-                    Circle().fill(Theme.macRed).frame(width: 8, height: 8)
-                }
-                Text(currentStepReadout)
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(Theme.savyCard.opacity(0.92))
-            }
-
-            Spacer()
-
-            Text("Kill Switch  \(model.delegationAgentDailySpend) of \(model.delegationAgentDailyCreditLimit) today")
-                .font(.system(size: 12.5).monospacedDigit())
-                .foregroundStyle(Theme.macTan)
-                .help("Firecrawl credits used today vs the daily Kill Switch cap")
-
-            Button {
-                Task { await model.refreshPatternGate() }
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .font(.caption2)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Theme.savyCard.opacity(0.6))
-            .help(model.patternGateState.detail)
-        }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 16)
-        .background(Theme.savyDeepNavy)
-    }
-
-    private var currentStepReadout: String {
-        if let step = currentStep {
-            return "Step \(step.id) — \(step.title)"
-        }
-        return model.patternGateState.executionUnlocked ? "unlocked" : "locked"
+        Rectangle()
+            .fill(Theme.savyDeepNavy)
+            .frame(height: 28)
     }
 
     /// The "cur" cell: first unrated observational step; once all four
@@ -879,9 +845,11 @@ struct MacBlueprintView: View {
                     }
                 }
             } label: {
+                // Uniform with the rest of the strip -- same red as the
+                // icons, nothing shouting.
                 Text("\(model.backend.rawValue) · \(model.backend.defaultModelName)")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Theme.savyCard.opacity(0.38))
+                    .foregroundStyle(Theme.macRed)
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
