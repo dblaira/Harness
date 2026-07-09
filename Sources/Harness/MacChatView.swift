@@ -11,7 +11,9 @@ struct MacChatView: View {
     @State private var isInspectorVisible = false
     @SceneStorage("MacChatView.sidebarRailWidth") private var sidebarWidth = HarnessWorkbenchLayoutState.defaultSidebarWidth
     @SceneStorage("MacChatView.inspectorRailWidth") private var inspectorWidth = HarnessWorkbenchLayoutState.defaultInspectorWidth
-    @SceneStorage("MacChatView.centerView") private var centerViewRaw = WorkbenchCenterView.chat.rawValue
+    // Key bumped to .v2 with the two-page cutover so every machine
+    // opens on Delegation (the homepage) instead of a stale stored tab.
+    @SceneStorage("MacChatView.centerView.v2") private var centerViewRaw = WorkbenchCenterView.delegation.rawValue
     @AppStorage("MacChatView.opportunityBoardViewMode") private var opportunityBoardViewModeRaw = OpportunityBoardViewMode.all.rawValue
     @State private var sidebarDragStartWidth: Double?
     @State private var inspectorDragStartWidth: Double?
@@ -109,7 +111,7 @@ struct MacChatView: View {
     }
 
     private var centerView: WorkbenchCenterView {
-        WorkbenchCenterView(rawValue: centerViewRaw) ?? .chat
+        WorkbenchCenterView(rawValue: centerViewRaw) ?? .delegation
     }
 
     private var centerViewBinding: Binding<WorkbenchCenterView> {
@@ -382,13 +384,6 @@ struct MacChatView: View {
             topBar
             centerViewContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // Chat carries its own composer on the canvas (the three
-            // bound fields) -- stacking the chat bar under it would both
-            // duplicate the surface and shrink the one-screen cockpit.
-            if centerView == .cockpit {
-                delegateLabel
-                composer
-            }
         }
         .frame(minWidth: CGFloat(HarnessWorkbenchLayoutState.transcriptMinimumWidth), maxWidth: .infinity)
         .background(Theme.macBg)
@@ -397,19 +392,14 @@ struct MacChatView: View {
     @ViewBuilder
     private var centerViewContent: some View {
         switch centerView {
-        case .chat:
-            // Adam, verbatim: "This is my version of the chat page. This
-            // is a personalized chat page." The cockpit canvas IS Chat --
-            // the homepage -- not a separate room (the old Blueprint tab
-            // is gone; every surviving view keeps its same name).
+        case .delegation:
+            // The homepage: "an orchestration layout so I can understand
+            // what's important to me at a glance improve upon that and
+            // then delegate task to agents" (Adam, verbatim).
             MacBlueprintView(model: model)
-        case .cockpit:
-            MacCockpitView { prompt in
-                model.draft = prompt
-                centerViewRaw = WorkbenchCenterView.chat.rawValue
-            }
-        case .board:
-            delegationQueueView
+        case .chat:
+            // "just open chat box" -- Adam's own research space.
+            MacDelegateFormView(model: model)
         }
     }
 
@@ -1449,7 +1439,8 @@ struct MacChatView: View {
         Rules: \(card.rulesHit.joined(separator: ", "))
         Agent: \(card.scoutID ?? "unknown")
         """
-        centerViewRaw = WorkbenchCenterView.chat.rawValue
+        // The composer lives on the Delegation canvas now.
+        centerViewRaw = WorkbenchCenterView.delegation.rawValue
     }
 
     /// WO-L: the one decision visible by default -- the top-priority row,
@@ -1637,6 +1628,7 @@ struct MacChatView: View {
 
             backendStatusDot
             killSwitchReadout
+            runAgentButton
 
             if model.backend == .codex {
                 chatToolbarIcon("key.viewfinder", help: "Authorize") {
@@ -1706,6 +1698,7 @@ struct MacChatView: View {
                 .layoutPriority(2)
 
             killSwitchReadout
+            runAgentButton
 
             if model.backend == .codex {
                 subscriptionAccountBadge(
@@ -1789,22 +1782,71 @@ struct MacChatView: View {
     /// center view is showing. Real tracked units (credits), not an
     /// invented dollar figure -- the app doesn't measure spend in
     /// dollars anywhere today.
+    /// The caps chip is now also the caps MENU -- the watchlist toggle
+    /// and credit steppers moved here from the retired queue-table
+    /// page's toolbar ("The caps live in the top bar from then on").
     private var killSwitchReadout: some View {
-        HStack(spacing: 5) {
-            Circle()
-                .fill(model.delegationAgentWatchlistEnabled ? Theme.savyGreen : Theme.macRed.opacity(0.6))
-                .frame(width: 6, height: 6)
-            Text("\(model.delegationAgentDailySpend)/\(model.delegationAgentDailyCreditLimit)")
-                .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                .foregroundStyle(Theme.macInk.opacity(0.6))
+        Menu {
+            Toggle("Watchlist on", isOn: Binding(
+                get: { model.delegationAgentWatchlistEnabled },
+                set: { model.setDelegationAgentWatchlistEnabled($0) }
+            ))
+
+            Stepper(
+                "Run credits: \(model.delegationAgentPerRunCreditLimit)",
+                value: Binding(
+                    get: { model.delegationAgentPerRunCreditLimit },
+                    set: { model.setDelegationAgentPerRunCreditLimit($0) }
+                ),
+                in: 1...100
+            )
+
+            Stepper(
+                "Day credits: \(model.delegationAgentDailyCreditLimit)",
+                value: Binding(
+                    get: { model.delegationAgentDailyCreditLimit },
+                    set: { model.setDelegationAgentDailyCreditLimit($0) }
+                ),
+                in: 1...500
+            )
+        } label: {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(model.delegationAgentWatchlistEnabled ? Theme.savyGreen : Theme.macRed.opacity(0.6))
+                    .frame(width: 6, height: 6)
+                Text("\(model.delegationAgentDailySpend)/\(model.delegationAgentDailyCreditLimit)")
+                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(Theme.macInk.opacity(0.6))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Theme.macEntry.opacity(0.28), in: Capsule())
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(Theme.macEntry.opacity(0.28), in: Capsule())
+        .menuStyle(.borderlessButton)
+        .fixedSize()
         .help(
             "Kill Switch: \(model.delegationAgentDailySpend) of \(model.delegationAgentDailyCreditLimit) Firecrawl credits used today"
                 + (model.delegationAgentWatchlistEnabled ? "" : " — watchlist disabled")
         )
+    }
+
+    /// Moved from the retired queue-table toolbar -- same name, same
+    /// action; the scout must stay reachable on the two-page app.
+    private var runAgentButton: some View {
+        Button {
+            model.runDelegationAgent()
+        } label: {
+            Label("Run agent", systemImage: "play.circle")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Theme.macInk.opacity(0.76))
+                .padding(.horizontal, 10)
+                .frame(height: 24)
+                .background(Theme.macEntry.opacity(0.28), in: RoundedRectangle(cornerRadius: 7))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.macHair, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .disabled(model.isRunning)
+        .help("Run the delegation scout agent now")
     }
 
     private func chatToolbarIcon(_ systemImage: String, help: String, action: @escaping () -> Void) -> some View {
@@ -1820,12 +1862,10 @@ struct MacChatView: View {
 
     private var centerViewTitle: String {
         switch centerView {
+        case .delegation:
+            return "Delegation"
         case .chat:
-            return "Delegate"
-        case .cockpit:
-            return "Harness Cockpit"
-        case .board:
-            return "Delegation Queue"
+            return "Chat"
         }
     }
 
@@ -3490,21 +3530,24 @@ private enum MacSuiteEntryKind: String, CaseIterable, Identifiable {
     }
 }
 
+/// Adam's language, verbatim (2026-07-09): "2 pages the first one is
+/// delegate with all of that beautiful design on it because I'm not
+/// doing anything I'm delegating it. It's an orchestration layout ...
+/// and then chat would be something where maybe I wanna do my own
+/// research ... just open chat box." Cockpit: "There's no such thing
+/// as cockpit. It should go away."
 enum WorkbenchCenterView: String, CaseIterable, Identifiable, Hashable {
+    case delegation
     case chat
-    case cockpit
-    case board
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
+        case .delegation:
+            return "Delegation"
         case .chat:
             return "Chat"
-        case .cockpit:
-            return "Cockpit"
-        case .board:
-            return "Delegation"
         }
     }
 }

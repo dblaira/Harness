@@ -136,14 +136,14 @@ import OntologyKit
     #expect(poolCards.first?.retrievedBy == "firecrawl-scrape")
 }
 
-@Test func workbenchCenterViewsIncludeDelegationQueue() {
-    // Adam, 2026-07-09: the cockpit canvas IS the chat page (his
-    // homepage) -- the separate Blueprint tab is gone for good, and
-    // every surviving view keeps its same name.
-    #expect(WorkbenchCenterView.allCases.map(\.rawValue) == ["chat", "cockpit", "board"])
+@Test func workbenchCenterViewsAreExactlyDelegationThenChat() {
+    // Adam's language, verbatim (2026-07-09): "2 pages the first one
+    // is delegate with all of that beautiful design on it ... and then
+    // chat would be ... just open chat box." Cockpit: "There's no such
+    // thing as cockpit."
+    #expect(WorkbenchCenterView.allCases.map(\.rawValue) == ["delegation", "chat"])
+    #expect(WorkbenchCenterView.delegation.label == "Delegation")
     #expect(WorkbenchCenterView.chat.label == "Chat")
-    #expect(WorkbenchCenterView.cockpit.label == "Cockpit")
-    #expect(WorkbenchCenterView.board.label == "Delegation")
 }
 
 @Test func delegationQueueActionRecordsShareBatchForMultiSelect() {
