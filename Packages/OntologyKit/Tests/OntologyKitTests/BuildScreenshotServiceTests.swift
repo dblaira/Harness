@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Testing
 @testable import OntologyKit
@@ -141,3 +142,4 @@ private func tempDirectory() throws -> URL {
 
     #expect(captured.value?["ONTOLOGY_ACCEPTED_DIR"] == "/tmp/fake-accepted-dir")
 }
+#endif

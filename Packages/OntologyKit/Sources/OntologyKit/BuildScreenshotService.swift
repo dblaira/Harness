@@ -1,5 +1,11 @@
 import Foundation
 
+// This whole file is macOS-only: it shells out to xcodebuild/simctl
+// (via AgentRunner.shell(), itself #if os(macOS)) and uses Host, which
+// doesn't exist on iOS. The only caller (MacWorkbenchModel) is already
+// macOS-gated, so nothing on the iOS side needs this type to exist.
+#if os(macOS)
+
 /// WO-Q (PLAN-blueprint-cockpit-v1.md): the smallest honest build-loop
 /// spike. One builder (this app, targeting the iOS Simulator), one
 /// screen (a single screenshot), no parallelism -- proving the loop is
@@ -225,3 +231,4 @@ public struct BuildScreenshotService: Sendable {
         }
     }
 }
+#endif
