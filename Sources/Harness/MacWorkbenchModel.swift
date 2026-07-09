@@ -82,6 +82,12 @@ final class MacWorkbenchModel: ObservableObject {
         WorkbenchToolGroup.defaults + [WorkbenchToolGroup.communicationSkills(from: capabilities)]
     }
 
+    /// The skills list behind each composer box's plus menu (memo 20:
+    /// "even plugins or skills anything like that").
+    var workbenchCommunicationSkillTools: [WorkbenchTool] {
+        WorkbenchToolGroup.communicationSkills(from: capabilities).tools
+    }
+
     /// The bouncer's queue, observed directly by the approval cards in the
     /// chat transcript. "Agents propose. The bouncer checks. You decide."
     let toolApprovals = ToolApprovalStore()
@@ -902,6 +908,28 @@ final class MacWorkbenchModel: ObservableObject {
         onImport(panel.urls)
     }
 
+    /// Adam's memo 20: "I should be able to add files separate files to
+    /// each one of these chats ... there's some reference material that
+    /// could be useful there." Keyed by the box's own label; rides into
+    /// the composed prompt as reference lines under that box's words.
+    @Published var composerFieldAttachments: [String: [ComposerFieldAttachment]] = [:]
+
+    func addFieldAttachment(_ attachment: ComposerFieldAttachment, to field: String) {
+        composerFieldAttachments[field, default: []].append(attachment)
+    }
+
+    func removeFieldAttachment(_ attachment: ComposerFieldAttachment, from field: String) {
+        composerFieldAttachments[field]?.removeAll { $0.id == attachment.id }
+    }
+
+    private var fieldAttachmentLines: String {
+        let ordered = ["WHAT DO I WANT?", "WHEN I AM...I LIKE TO", "DONE LOOKS LIKE..."]
+        let lines = ordered.flatMap { field -> [String] in
+            (composerFieldAttachments[field] ?? []).map { "Reference for \(field): \($0.promptLine)" }
+        }
+        return lines.isEmpty ? "" : "\n\n" + lines.joined(separator: "\n")
+    }
+
     private var composedDraftPrompt: String {
         ComposerIntent.composedPrompt(
             userText: draft,
@@ -909,7 +937,7 @@ final class MacWorkbenchModel: ObservableObject {
             intent: composerIntent,
             preferredApproach: preferredApproach,
             doneCondition: doneCondition
-        )
+        ) + fieldAttachmentLines
     }
 
     var canSendComposer: Bool {
@@ -1933,6 +1961,24 @@ struct NotebookLMSourceFile: Identifiable, Equatable {
 /// content obeys the note rule, his words or verbatim quoted sources
 /// only. `attribution` defaults to "ADAM" for his own captured
 /// observations; an external source (a book, a paper) names itself.
+/// One thing Adam stuffed into a composer box: a file, an image, or a
+/// skill (memo 20: "different files even plugins or skills anything
+/// like that").
+struct ComposerFieldAttachment: Identifiable, Equatable {
+    enum Kind { case file, image, skill }
+    let id = UUID()
+    let kind: Kind
+    let label: String
+    let url: URL?
+
+    var promptLine: String {
+        switch kind {
+        case .skill: return "[skill: \(label)]"
+        case .file, .image: return "\(label) — \(url?.path ?? "")"
+        }
+    }
+}
+
 struct FascinationCard: Identifiable, Equatable {
     let id: String
     let quote: String

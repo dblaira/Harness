@@ -1601,11 +1601,6 @@ struct MacChatView: View {
 
             Spacer()
 
-            centerViewSwitcher
-                .help("Switch between Chat, Cockpit, and the Delegation Queue")
-
-            Spacer()
-
             Menu {
                 ForEach(Backend.allCases) { backend in
                     Button {
@@ -1657,6 +1652,11 @@ struct MacChatView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(Theme.macBg)
+        .overlay {
+            // Memo 21: pills page-centered, not spread among the chrome.
+            centerViewSwitcher
+                .help("Switch between Delegation and Chat")
+        }
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(Color.black.opacity(0.06))
@@ -1675,9 +1675,10 @@ struct MacChatView: View {
 
             // No page title -- Adam: "I know what page I'm on. I don't
             // need double reminders." The switcher pill already says it.
+            // (Pills live in an overlay so they sit page-centered --
+            // memo 21: "Move them to the center so they're centered in
+            // the page.")
             Spacer()
-
-            centerViewSwitcher
 
             Picker("Backend", selection: $model.backend) {
                 ForEach(Backend.allCases) { backend in
@@ -1749,6 +1750,10 @@ struct MacChatView: View {
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
         .background(Theme.macBarBg)
+        .overlay {
+            centerViewSwitcher
+                .help("Switch between Delegation and Chat")
+        }
         .overlay(alignment: .bottom) {
             Rectangle().fill(Theme.macRed).frame(height: 2)
         }

@@ -84,7 +84,9 @@ struct MacBlueprintView: View {
             ZStack {
                 Theme.macBg
                 // .canvas{radial-gradient(rgba(8,23,45,.09) 1.1px...) 10px}
-                SavyBendayGround(dotColor: Theme.savyDeepNavy, dotOpacity: 0.09, spacing: 10, dotDiameter: 2.2)
+                // Memo 21: "more prominent ... slightly, slightly darker"
+                // with the size-waving gradient feel. Was 0.09, flat.
+                SavyBendayGround(dotColor: Theme.savyDeepNavy, dotOpacity: 0.13, spacing: 10, dotDiameter: 2.4, waves: true)
             }
         }
     }
@@ -341,11 +343,8 @@ struct MacBlueprintView: View {
                 HStack(alignment: .top, spacing: 0) {
                     sourcesPoolColumn
                         .frame(width: geo.size.width * 0.24, height: geo.size.height - 14, alignment: .topLeading)
-                    centerColumn(width: geo.size.width * 0.47 - 28)
-                        .frame(maxWidth: .infinity, alignment: .top)
-                        .frame(height: geo.size.height - 14, alignment: .top)
-                        .padding(.horizontal, 10)
-                        .zIndex(3)
+                    Color.clear
+                        .frame(maxWidth: .infinity)
                     organizeColumn
                         .frame(width: geo.size.width * 0.29, height: geo.size.height - 14, alignment: .topLeading)
                         .clipped()
@@ -353,6 +352,15 @@ struct MacBlueprintView: View {
                 .frame(maxWidth: .infinity, alignment: .top)
                 .padding(.top, 14)
                 .zIndex(2)
+
+                // Adam's memo 20: "the delegation three steps are in the
+                // dead center of the page" -- centered on the PAGE, not
+                // on the leftover space between unequal columns.
+                composerCard
+                    .frame(width: min(geo.size.width * 0.44, 660))
+                    .padding(.top, 14)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .zIndex(3)
             }
         }
     }
@@ -534,21 +542,8 @@ struct MacBlueprintView: View {
 
     // MARK: - Center column (UP NEXT deck + composer)
 
-    /// Adam (voice follow-ups, verbatim): "the three boxes why are they
-    /// at the bottom?" and "what is 'up Next'? I didn't add that and I
-    /// don't know why the past chats were sitting there staring me in
-    /// the face ... so get rid of it." His three boxes on top; the rest
-    /// of the column is quiet breathing space. No UP NEXT deck, no old
-    /// chat turns.
-    private func centerColumn(width: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            composerCard
-                .padding(.top, 2)
-
-            Spacer(minLength: 4)
-        }
-        .padding(.leading, 8)
-    }
+    // (centerColumn retired -- the composer floats dead-center on the
+    // page per memo 20; the middle of the column row is open space.)
 
     /// Newest last, auto-scrolled to the latest turn. Adam's words show
     /// as the small italic line they are; what agents return comes as a
@@ -736,6 +731,11 @@ struct MacBlueprintView: View {
     /// .composer -- cream, 6px border, pinned to the column bottom.
     /// The three fields bind the SAME @Published storage the chat
     /// composer uses (WO-J): draft / preferredApproach / doneCondition.
+    /// Adam's memo 20: "the inside of the chat to be navy blue and then
+    /// the text will be white ... when I'm typing I need to see some
+    /// large letters ... as I type the box should expand ... I should
+    /// be able to see everything I type." The surrounding cream frame
+    /// stays exactly as it was ("I really love that").
     private var composerCard: some View {
         VStack(alignment: .leading, spacing: 4) {
             composerField(label: "WHAT DO I WANT?", text: $model.draft)
@@ -747,24 +747,112 @@ struct MacBlueprintView: View {
         .overlay(Rectangle().stroke(Theme.macRed, lineWidth: 6))
     }
 
+    /// Memo 21: labels in red ("it kind of fades into the background.
+    /// I can still see it ... but it fades"), plus button red and far
+    /// LEFT ("I write from left to right. So it's going to be there").
+    /// TextEditor instead of TextField: the field was hiding the first
+    /// typed line under the label -- the editor claims its true height,
+    /// so every word stays visible while typing. Cmd+Return sends.
     private func composerField(label: String, text: Binding<String>) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(label)
-                .font(.system(size: 9, weight: .heavy))
-                .kerning(1.5)
-                .foregroundStyle(Theme.macFaint)
-            TextField("", text: text)
-                .textFieldStyle(.plain)
-                .font(.system(size: 12.5))
-                .foregroundStyle(Theme.macInk)
-                // Return sends -- the mockup composer has no send button,
-                // and send() already guards empty drafts and running state.
-                .onSubmit { model.send() }
+        ZStack(alignment: .bottomLeading) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label)
+                    .font(.system(size: 10, weight: .heavy))
+                    .kerning(1.5)
+                    .foregroundStyle(Theme.macRed)
+                TextEditor(text: text)
+                    .scrollDisabled(true)
+                    .scrollContentBackground(.hidden)
+                    .font(.system(size: 17))
+                    .foregroundStyle(.white)
+                    .tint(.white)
+                    .frame(minHeight: 28)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, -5)
+
+                if let items = model.composerFieldAttachments[label], !items.isEmpty {
+                    fieldAttachmentChips(items, field: label)
+                        .padding(.bottom, 2)
+                }
+            }
+            .padding(EdgeInsets(top: 6, leading: 12, bottom: 22, trailing: 12))
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            fieldPlusButton(field: label)
+                .padding(EdgeInsets(top: 0, leading: 8, bottom: 4, trailing: 0))
         }
-        .padding(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white, in: Rectangle())
+        .background(Theme.savyDeepNavy, in: Rectangle())
         .overlay(Rectangle().stroke(Theme.macRed, lineWidth: 3))
+    }
+
+    /// Memo 20: "add a plus button in the bottom right of each one of
+    /// these and then there'll be a pop-up that will give me choices of
+    /// what to add as far as different files even plugins or skills."
+    private func fieldPlusButton(field: String) -> some View {
+        Menu {
+            Button("File…") { pickFieldAttachment(field: field, kind: .file) }
+            Button("Image…") { pickFieldAttachment(field: field, kind: .image) }
+            Menu("Skills") {
+                ForEach(model.workbenchCommunicationSkillTools, id: \.title) { tool in
+                    Button(tool.title) {
+                        model.addFieldAttachment(
+                            ComposerFieldAttachment(kind: .skill, label: tool.skillName ?? tool.title, url: nil),
+                            to: field
+                        )
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(Theme.macRed)
+                .frame(width: 20, height: 20)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+    }
+
+    private func pickFieldAttachment(field: String, kind: ComposerFieldAttachment.Kind) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        if kind == .image {
+            panel.allowedContentTypes = [.image]
+        }
+        guard panel.runModal() == .OK else { return }
+        for url in panel.urls {
+            model.addFieldAttachment(
+                ComposerFieldAttachment(kind: kind, label: url.lastPathComponent, url: url),
+                to: field
+            )
+        }
+    }
+
+    /// Click a chip to remove it -- no extra icons.
+    private func fieldAttachmentChips(_ items: [ComposerFieldAttachment], field: String) -> some View {
+        HStack(spacing: 6) {
+            ForEach(items) { item in
+                Button {
+                    model.removeFieldAttachment(item, from: field)
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: item.kind == .skill ? "wrench.and.screwdriver" : (item.kind == .image ? "photo" : "doc"))
+                            .font(.system(size: 9))
+                        Text(item.label)
+                            .font(.system(size: 10, weight: .semibold))
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(Theme.savyDeepNavy)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Theme.macWarmCream, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .help(item.url?.path ?? item.label)
+            }
+        }
     }
 
     // MARK: - Organize column (right, 29%)

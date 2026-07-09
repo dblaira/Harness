@@ -354,18 +354,36 @@ struct SavyBendayGround: View {
     var dotOpacity: Double = 0.06
     var spacing: CGFloat = 9
     var dotDiameter: CGFloat = 2
+    /// Adam's memo 21: "give them larger in some area and smaller in
+    /// some other areas so it kind of feels like this waving gradient
+    /// effect ... not going to be really pronounced." A slow sine field
+    /// swells dot size (and a touch of ink) across the plane. Still
+    /// motion-free -- texture, not animation.
+    var waves: Bool = false
 
     var body: some View {
         Canvas { context, size in
             let columns = Int(size.width / spacing) + 2
             let rows = Int(size.height / spacing) + 2
-            let shading = GraphicsContext.Shading.color(dotColor.opacity(dotOpacity))
+            let flatShading = GraphicsContext.Shading.color(dotColor.opacity(dotOpacity))
             for row in 0..<rows {
                 let rowOffset = row.isMultiple(of: 2) ? 0 : spacing / 2
                 for column in 0..<columns {
-                    let x = CGFloat(column) * spacing + rowOffset - dotDiameter / 2
-                    let y = CGFloat(row) * spacing - dotDiameter / 2
-                    let dot = Path(ellipseIn: CGRect(x: x, y: y, width: dotDiameter, height: dotDiameter))
+                    let cx = CGFloat(column) * spacing + rowOffset
+                    let cy = CGFloat(row) * spacing
+                    var diameter = dotDiameter
+                    var shading = flatShading
+                    if waves {
+                        let swell = sin(cx * 0.012) * cos(cy * 0.015)
+                        diameter = dotDiameter * (1 + 0.45 * swell)
+                        shading = GraphicsContext.Shading.color(
+                            dotColor.opacity(dotOpacity * (1 + 0.3 * swell))
+                        )
+                    }
+                    let dot = Path(ellipseIn: CGRect(
+                        x: cx - diameter / 2, y: cy - diameter / 2,
+                        width: diameter, height: diameter
+                    ))
                     context.fill(dot, with: shading)
                 }
             }
