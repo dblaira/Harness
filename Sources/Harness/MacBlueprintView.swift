@@ -808,7 +808,9 @@ struct MacBlueprintView: View {
             .offset(y: -14)
             .zIndex(0)
         }
-        .padding(.trailing, 16)
+        // Trailing 28 (was 16): the slots' tilts may lean their BORDERS
+        // toward the edge, but headers and statuses stay whole.
+        .padding(.trailing, 28)
         .padding(.leading, 6)
         .padding(.bottom, 120)
     }
@@ -931,11 +933,15 @@ struct MacBlueprintView: View {
                     let w = geo.size.width
                     let h = geo.size.height
                     let leaves = mindMapLeaves
+                    // Right anchors sit at 0.72, not 0.80 -- leaf ovals are
+                    // up to 110pt wide, and 0.80 pushed their labels past
+                    // the slot (and the window) edge. The DESIGN leans
+                    // borders off the edge; it never amputates words.
                     let anchors: [CGPoint] = [
-                        CGPoint(x: w * 0.22, y: h * 0.16),
-                        CGPoint(x: w * 0.80, y: h * 0.14),
-                        CGPoint(x: w * 0.20, y: h * 0.86),
-                        CGPoint(x: w * 0.80, y: h * 0.84)
+                        CGPoint(x: w * 0.24, y: h * 0.16),
+                        CGPoint(x: w * 0.72, y: h * 0.14),
+                        CGPoint(x: w * 0.22, y: h * 0.86),
+                        CGPoint(x: w * 0.72, y: h * 0.84)
                     ]
                     let centerPoint = CGPoint(x: w * 0.5, y: h * 0.5)
 
@@ -1010,7 +1016,7 @@ struct MacBlueprintView: View {
             .lineLimit(2)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .frame(maxWidth: 120)
+            .frame(maxWidth: 110)
             .background(Ellipse().fill(Theme.macBg))
             .overlay(Ellipse().stroke(Theme.macRed, lineWidth: 3))
             .contentShape(Ellipse())
