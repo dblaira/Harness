@@ -118,7 +118,7 @@ public struct HermesCronReader: Sendable {
     public let fileURL: URL
 
     public static var defaultURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent(".hermes/cron/jobs.json")
     }
 
@@ -364,7 +364,7 @@ public struct RoutineStore: Sendable {
     public let fileURL: URL
 
     public static var defaultURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Documents/Harness/harness-routines.json")
     }
 

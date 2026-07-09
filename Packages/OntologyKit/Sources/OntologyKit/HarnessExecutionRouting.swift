@@ -697,7 +697,7 @@ public struct HarnessRouteExecutor: Sendable {
     public func executeApproved(
         _ plan: HarnessExecutionRoutePlan,
         approvedStepIDs: Set<String>,
-        artifactDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        artifactDirectory: URL = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Documents/Harness/Artifacts", isDirectory: true),
         appleNotesSync: @Sendable (HarnessExecutionRouteStep) async throws -> AppleNotesExportResult = { _ in
             try await AppleNotesExporter().export()

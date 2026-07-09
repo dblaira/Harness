@@ -39,7 +39,7 @@ public struct LocalMemorySource: Identifiable, Codable, Sendable, Equatable {
 
 public enum LocalMemorySourceRegistry {
     public static func defaultSources(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        homeDirectory: URL = URL(fileURLWithPath: NSHomeDirectory()),
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> [LocalMemorySource] {
         HarnessConnectorRegistry.memorySources(
@@ -51,7 +51,7 @@ public enum LocalMemorySourceRegistry {
     }
 
     public static func existingDefaultSources(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        homeDirectory: URL = URL(fileURLWithPath: NSHomeDirectory()),
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> [LocalMemorySource] {
         defaultSources(homeDirectory: homeDirectory, environment: environment).filter(\.exists)

@@ -20,7 +20,7 @@ public struct AppleNotesExporter: Sendable {
     }
 
     public static func defaultOutputDirectory(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = URL(fileURLWithPath: NSHomeDirectory())
     ) -> URL {
         homeDirectory.appendingPathComponent("Documents/Harness/Apple Notes Export", isDirectory: true)
     }

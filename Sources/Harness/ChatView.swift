@@ -208,7 +208,7 @@ struct ChatView: View {
     private static func initialAPIKey(for backend: Backend) -> String {
         #if os(iOS)
         guard backend != .codex else { return "" }
-        APIKeyStore.loadKey(for: backend) ?? ""
+        return APIKeyStore.loadKey(for: backend) ?? ""
         #else
         switch backend {
         case .codex:
