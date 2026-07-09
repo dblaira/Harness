@@ -132,7 +132,31 @@ final class MacWorkbenchModel: ObservableObject {
             refreshFascinationCards()
             await refreshFleetLedger()
         }
+
+        // Adam's list #7: phone captures land on their own -- re-scan
+        // the watched folders every 5 minutes and whenever the app
+        // comes back to the front ("It could be something that calls
+        // every 30 minutes or every hour" -- 5 keeps it feeling live
+        // for a folder scan that costs almost nothing).
+        phoneCaptureTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshOpportunityBoard()
+                self?.refreshSourcePool()
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshOpportunityBoard()
+                self?.refreshSourcePool()
+            }
+        }
     }
+
+    private var phoneCaptureTimer: Timer?
 
     func updateOntology(_ ontology: Ontology) {
         self.ontology = ontology
@@ -324,11 +348,56 @@ final class MacWorkbenchModel: ObservableObject {
 
     func refreshOpportunityBoard() {
         do {
-            opportunityBoardRows = try Self.loadOpportunityBoardRows(from: Self.defaultOpportunityBoardDirectory())
+            var rows = try Self.loadOpportunityBoardRows(from: Self.defaultOpportunityBoardDirectory())
+            // Adam's list #7: merge in whatever his iPhone apps dropped
+            // into the shared iCloud pocket ("I'm out away from my
+            // computer and I have a thought ... transfer automatically
+            // to the harness app"). Missing container = local-only, no
+            // error -- the pocket is additive, never a gate.
+            if let phoneDrop = Self.phoneCaptureDelegationsDirectory() {
+                Self.downloadUbiquitousFiles(in: phoneDrop)
+                let phoneRows = (try? Self.loadOpportunityBoardRows(from: phoneDrop)) ?? []
+                let existingIDs = Set(rows.map(\.id))
+                rows.append(contentsOf: phoneRows.filter { !existingIDs.contains($0.id) })
+            }
+            opportunityBoardRows = rows
             opportunityBoardLoadIssue = nil
         } catch {
             opportunityBoardRows = []
             opportunityBoardLoadIssue = error.localizedDescription
+        }
+    }
+
+    /// Documents/Delegations inside the suite's shared iCloud container.
+    /// Resolved once off the main thread (the first ubiquity lookup can
+    /// touch disk); nil when iCloud is signed out or the entitlement
+    /// isn't provisioned yet -- callers treat that as "no phone drops".
+    nonisolated private static let phoneCaptureContainerURL: URL? = {
+        FileManager.default.url(forUbiquityContainerIdentifier: "iCloud.com.adamblair.harness")
+    }()
+
+    nonisolated static func phoneCaptureDelegationsDirectory() -> URL? {
+        guard let container = phoneCaptureContainerURL else { return nil }
+        let dir = container
+            .appendingPathComponent("Documents", isDirectory: true)
+            .appendingPathComponent("Delegations", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    /// iCloud placeholders (.icloud stubs) don't parse -- ask the daemon
+    /// to materialize anything not yet local. Best effort, non-blocking.
+    nonisolated static func downloadUbiquitousFiles(in directory: URL) {
+        guard let enumerator = FileManager.default.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.ubiquitousItemDownloadingStatusKey],
+            options: [.skipsPackageDescendants]
+        ) else { return }
+        for case let file as URL in enumerator {
+            let status = try? file.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey]).ubiquitousItemDownloadingStatus
+            if status == .notDownloaded {
+                try? FileManager.default.startDownloadingUbiquitousItem(at: file)
+            }
         }
     }
 

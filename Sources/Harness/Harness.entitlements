@@ -13,5 +13,19 @@
          correct if sandbox is ever re-enabled. -->
     <key>com.apple.security.device.audio-input</key>
     <true/>
+    <!-- Adam's list #7: the shared pocket his iPhone apps (SAVY first)
+         drop delegations into. Same container ID across the suite. -->
+    <key>com.apple.developer.icloud-container-identifiers</key>
+    <array>
+        <string>iCloud.com.adamblair.harness</string>
+    </array>
+    <key>com.apple.developer.icloud-services</key>
+    <array>
+        <string>CloudDocuments</string>
+    </array>
+    <key>com.apple.developer.ubiquity-container-identifiers</key>
+    <array>
+        <string>iCloud.com.adamblair.harness</string>
+    </array>
 </dict>
 </plist>
