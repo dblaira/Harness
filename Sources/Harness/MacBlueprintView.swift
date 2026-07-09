@@ -414,16 +414,21 @@ struct MacBlueprintView: View {
     }
 
     /// .pc tilt cycle: 3n -> +3deg, 3n+1 -> -2.6deg, 3n+2 -> +1.6deg +4px.
+    /// "New arrivals warm. The past cools but never leaves the canvas" --
+    /// cards older than a week take the mockup's `.pc.old` treatment
+    /// (cool grey fill + grey dot field + cool ink); fresh ones stay warm.
+    /// Tap opens the thing the card holds.
     private func sourcePoolCell(_ card: OpportunitySourceCard, index: Int) -> some View {
         let cycle = index % 3
         let tilt: Double = cycle == 0 ? -2.6 : (cycle == 1 ? 1.6 : 3)
         let yOffset: CGFloat = cycle == 1 ? 4 : 0
+        let cooled = poolCardIsCooled(card)
 
         return VStack(alignment: .leading, spacing: 3) {
             Text(poolKicker(card))
                 .font(.system(size: 10, weight: .heavy))
                 .kerning(1.5)
-                .foregroundStyle(Theme.macRed)
+                .foregroundStyle(cooled ? Theme.macCoolInk : Theme.macRed)
                 .lineLimit(1)
             if let thumbnail = poolThumbnail(for: card) {
                 Image(nsImage: thumbnail)
@@ -431,23 +436,56 @@ struct MacBlueprintView: View {
                     .scaledToFill()
                     .frame(height: 34)
                     .clipped()
+                    .opacity(cooled ? 0.55 : 1)
             }
             Text(poolResourceLabel(card))
                 .font(.system(size: 11.5))
-                .foregroundStyle(Theme.macInk)
+                .foregroundStyle(cooled ? Theme.macCoolInk : Theme.macInk)
                 .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(Color(hex: 0xF5F0E6), in: Rectangle())
-        .overlay(Rectangle().stroke(Theme.macRed, lineWidth: 4))
+        .background {
+            if cooled {
+                ZStack {
+                    Theme.macCoolBg
+                    SavyBendayGround(dotColor: Theme.macCoolInk, dotOpacity: 0.35, spacing: 7, dotDiameter: 2.4)
+                }
+            } else {
+                Color(hex: 0xF5F0E6)
+            }
+        }
+        .overlay(Rectangle().stroke(Theme.macRed.opacity(cooled ? 0.55 : 1), lineWidth: 4))
         .rotationEffect(.degrees(tilt))
         .offset(y: yOffset)
+        .contentShape(Rectangle())
+        .onTapGesture { openPoolCard(card) }
         .help(card.envelope.resource ?? "")
     }
 
     private func poolKicker(_ card: OpportunitySourceCard) -> String {
         card.retrievedBy.isEmpty ? "SOURCE" : card.retrievedBy.uppercased()
+    }
+
+    /// Warm for the first week, cool after -- from the card's own
+    /// frontmatter timestamp. No timestamp = stays warm (never cool a
+    /// card on a guess).
+    private func poolCardIsCooled(_ card: OpportunitySourceCard) -> Bool {
+        guard let stamp = card.envelope.timestamp,
+              let date = Self.poolTimestampFormatter.date(from: stamp) else { return false }
+        return Date().timeIntervalSince(date) > 7 * 24 * 3600
+    }
+
+    private static let poolTimestampFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
+    private func openPoolCard(_ card: OpportunitySourceCard) {
+        guard let resource = card.envelope.resource, let url = URL(string: resource) else { return }
+        NSWorkspace.shared.open(url)
     }
 
     private func poolThumbnail(for card: OpportunitySourceCard) -> NSImage? {
@@ -477,12 +515,75 @@ struct MacBlueprintView: View {
 
             upNextDeck(width: max(width, 200))
 
-            Spacer(minLength: 4)
+            // The lap: what comes back lands HERE, center screen,
+            // between the deck and your words -- this canvas is the
+            // chat page, not a separate room. Empty = breathing space,
+            // exactly like the mockup's middle gap.
+            if model.chatThread.isEmpty {
+                Spacer(minLength: 4)
+            } else {
+                landedStack
+                    .padding(.vertical, 6)
+            }
 
             composerCard
                 .padding(.bottom, 10)
         }
         .padding(.leading, 8)
+    }
+
+    /// Newest last, auto-scrolled to the latest turn. Adam's words show
+    /// as the small italic line they are; what agents return comes as a
+    /// bordered card in his lap.
+    private var landedStack: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(model.chatThread) { turn in
+                        landedTurn(turn).id(turn.id)
+                    }
+                    if model.isRunning {
+                        HStack(spacing: 6) {
+                            SavyBreathingDot(color: Theme.savyGreen, diameter: 7)
+                            Text("working")
+                                .font(.caption.weight(.bold))
+                                .textCase(.uppercase)
+                                .foregroundStyle(Theme.macFaint)
+                        }
+                        .id("working-indicator")
+                    }
+                }
+                .padding(.trailing, 8)
+            }
+            .frame(maxWidth: .infinity)
+            .onChange(of: model.chatThread.count) {
+                if let lastID = model.chatThread.last?.id {
+                    withAnimation(.easeOut(duration: 0.25)) {
+                        proxy.scrollTo(lastID, anchor: .bottom)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func landedTurn(_ turn: ConversationTurn) -> some View {
+        if turn.role == .user {
+            Text(turn.text)
+                .font(.system(size: 12, design: .serif).italic())
+                .foregroundStyle(Theme.macMuted)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .multilineTextAlignment(.trailing)
+        } else {
+            Text(turn.text)
+                .font(.system(size: 12.5))
+                .foregroundStyle(Theme.macInk)
+                .textSelection(.enabled)
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.white, in: Rectangle())
+                .overlay(Rectangle().stroke(Theme.macRed, lineWidth: 3))
+        }
     }
 
     private var upNextRow: OpportunityBoardRow? {
@@ -641,6 +742,9 @@ struct MacBlueprintView: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: 12.5))
                 .foregroundStyle(Theme.macInk)
+                // Return sends -- the mockup composer has no send button,
+                // and send() already guards empty drafts and running state.
+                .onSubmit { model.send() }
         }
         .padding(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -663,7 +767,7 @@ struct MacBlueprintView: View {
                 status: "pending (\(model.opportunityBoardRows.count))",
                 dotColor: Theme.statusPending
             ) {
-                mindMapTree
+                mindMapPlanView
                 Text("PLAN VIEW — SAME BUILD, FROM ABOVE")
                     .font(.system(size: 9, weight: .heavy))
                     .kerning(1.5)
@@ -704,7 +808,9 @@ struct MacBlueprintView: View {
             .offset(y: -14)
             .zIndex(0)
         }
-        .padding(.trailing, 16)
+        // Trailing 28 (was 16): the slots' tilts may lean their BORDERS
+        // toward the edge, but headers and statuses stay whole.
+        .padding(.trailing, 28)
         .padding(.leading, 6)
         .padding(.bottom, 120)
     }
@@ -740,7 +846,8 @@ struct MacBlueprintView: View {
     }
 
     /// .slides -- one 26px cell per board row (capped), first navy,
-    /// the UP NEXT row's cell warm. Real rows, not decoration.
+    /// the UP NEXT row's cell warm. Real rows, and now real steering:
+    /// tap a slide and that delegation becomes the UP NEXT decision.
     private var slideFilmstrip: some View {
         HStack(spacing: 4) {
             let rows = OpportunityBoardProjection(rows: model.opportunityBoardRows).rows.prefix(6)
@@ -757,20 +864,27 @@ struct MacBlueprintView: View {
                             index == 0 ? Theme.savyDeepNavy : (row.id == upNextRowID ? Theme.macTan : Theme.macRed),
                             lineWidth: 2
                         ))
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            withAnimation(.easeInOut(duration: 0.25)) { upNextRowID = row.id }
+                        }
                         .help(deckTitle(row))
                 }
             }
         }
     }
 
+    /// "live · what changed" -- plays the newest run's own summary text
+    /// verbatim (never new wording); falls back to the UP NEXT pitch
+    /// when no run exists yet. The bar is the synthesizer's real
+    /// position in the text, not a timer.
     private var audioPlayerRow: some View {
         HStack(spacing: 8) {
             Button {
                 if audioBriefPlayer.isSpeaking {
                     audioBriefPlayer.stop()
-                } else if let row = upNextRow {
-                    let pitch = row.card.envelope.description ?? ""
-                    audioBriefPlayer.speak("\(deckTitle(row)). \(pitch)")
+                } else if let brief = whatChangedBrief {
+                    audioBriefPlayer.speak(brief)
                 }
             } label: {
                 Image(systemName: audioBriefPlayer.isSpeaking ? "stop.fill" : "play.fill")
@@ -780,69 +894,136 @@ struct MacBlueprintView: View {
                     .background(Theme.macRed, in: Circle())
             }
             .buttonStyle(.plain)
-            .disabled(upNextRow == nil && !audioBriefPlayer.isSpeaking)
+            .disabled(whatChangedBrief == nil && !audioBriefPlayer.isSpeaking)
 
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Rectangle().fill(Theme.macTan)
                     Rectangle()
                         .fill(Theme.macRed)
-                        .frame(width: audioBriefPlayer.isSpeaking ? geo.size.width : 0)
-                        .animation(.easeInOut(duration: 0.4), value: audioBriefPlayer.isSpeaking)
+                        .frame(width: geo.size.width * audioBriefPlayer.progress)
                 }
             }
             .frame(height: 6)
         }
     }
 
+    private var whatChangedBrief: String? {
+        if let latest = model.runs.first {
+            let answer = latest.finalAnswer.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !answer.isEmpty { return answer }
+        }
+        guard let row = upNextRow else { return nil }
+        let pitch = row.card.envelope.description ?? ""
+        return "\(deckTitle(row)). \(pitch)"
+    }
+
     // MARK: - Mind Map tree (WO-O, read-only)
 
-    /// Compact by design -- the mockup's map holds ~5 nodes. Three rows
-    /// per app plus an honest "+N more" so the slot never balloons the
-    /// column past the viewport.
-    private var mindMapTree: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if mindMapGroups.isEmpty {
-                Text("No delegation items yet — the tree fills in as the queue does.")
-                    .font(.caption)
-                    .foregroundStyle(Theme.macFaint)
-            } else {
-                ForEach(mindMapGroups) { group in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(group.app.rawValue)
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(Theme.macInk.opacity(0.6))
-                        ForEach(group.rows.prefix(1)) { row in
-                            mindMapNode(row)
+    /// The mockup's plan-view node map, from real rows: center navy
+    /// ellipse = the UP NEXT delegation (the build's intent, white
+    /// italic), leaf ellipses = the next rows by priority on tan
+    /// spokes. The warm leaf's spoke is crimson. Tap ANY leaf and it
+    /// becomes UP NEXT -- "The map of leverage. The only navigation
+    /// there is."
+    private var mindMapPlanView: some View {
+        Group {
+            if let center = upNextRow {
+                GeometryReader { geo in
+                    let w = geo.size.width
+                    let h = geo.size.height
+                    let leaves = mindMapLeaves
+                    // Right anchors sit at 0.72, not 0.80 -- leaf ovals are
+                    // up to 110pt wide, and 0.80 pushed their labels past
+                    // the slot (and the window) edge. The DESIGN leans
+                    // borders off the edge; it never amputates words.
+                    let anchors: [CGPoint] = [
+                        CGPoint(x: w * 0.24, y: h * 0.16),
+                        CGPoint(x: w * 0.72, y: h * 0.14),
+                        CGPoint(x: w * 0.22, y: h * 0.86),
+                        CGPoint(x: w * 0.72, y: h * 0.84)
+                    ]
+                    let centerPoint = CGPoint(x: w * 0.5, y: h * 0.5)
+
+                    ZStack {
+                        // Spokes first, under the nodes.
+                        ForEach(Array(leaves.enumerated()), id: \.element.id) { index, leaf in
+                            if index < anchors.count {
+                                Path { path in
+                                    path.move(to: centerPoint)
+                                    path.addLine(to: anchors[index])
+                                }
+                                .stroke(
+                                    leaf.id == upNextRowID ? Theme.macRed : Theme.macTan,
+                                    lineWidth: leaf.id == upNextRowID ? 3.5 : 3
+                                )
+                            }
                         }
-                        if group.rows.count > 1 {
-                            Text("+\(group.rows.count - 1) more")
-                                .font(.system(size: 9))
-                                .foregroundStyle(Theme.macFaint)
-                                .padding(.leading, 12)
+
+                        mindMapCenterNode(center)
+                            .position(centerPoint)
+
+                        ForEach(Array(leaves.enumerated()), id: \.element.id) { index, leaf in
+                            if index < anchors.count {
+                                mindMapLeafNode(leaf)
+                                    .position(anchors[index])
+                            }
                         }
                     }
                 }
+                .frame(height: 148)
+            } else {
+                Text("No delegation items yet — the map fills in as the queue does.")
+                    .font(.caption)
+                    .foregroundStyle(Theme.macFaint)
             }
         }
     }
 
+    /// The rows orbiting the center: the next four by priority,
+    /// excluding the center itself.
+    private var mindMapLeaves: [OpportunityBoardRow] {
+        Array(
+            OpportunityBoardProjection(rows: model.opportunityBoardRows).rows
+                .filter { $0.id != upNextRowID }
+                .prefix(4)
+        )
+    }
+
+    /// Still feeds the fleet ledger's per-app counts.
     private var mindMapGroups: [OpportunityBoardAppGroup] {
         OpportunityBoardProjection(rows: model.opportunityBoardRows).groupsByApp()
     }
 
-    private func mindMapNode(_ row: OpportunityBoardRow) -> some View {
-        let isWarm = row.id == upNextRowID
-        return HStack(spacing: 5) {
-            Circle()
-                .fill(isWarm ? Theme.macRed : Theme.macInk.opacity(0.3))
-                .frame(width: 5, height: 5)
-            Text(deckTitle(row))
-                .font(.system(size: 10, weight: isWarm ? .semibold : .regular))
-                .foregroundStyle(isWarm ? Theme.macInk : Theme.macCoolInk)
-                .lineLimit(1)
-        }
-        .padding(.leading, 12)
+    private func mindMapCenterNode(_ row: OpportunityBoardRow) -> some View {
+        Text(deckTitle(row))
+            .font(.system(size: 10, design: .serif).italic())
+            .foregroundStyle(Theme.savyCard)
+            .multilineTextAlignment(.center)
+            .lineLimit(2)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .frame(maxWidth: 170)
+            .background(Ellipse().fill(Theme.savyDeepNavy))
+            .overlay(Ellipse().stroke(Theme.macRed, lineWidth: 3.5))
+    }
+
+    private func mindMapLeafNode(_ row: OpportunityBoardRow) -> some View {
+        Text(deckTitle(row))
+            .font(.system(size: 9.5, weight: .semibold))
+            .foregroundStyle(Theme.macInk)
+            .multilineTextAlignment(.center)
+            .lineLimit(2)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .frame(maxWidth: 110)
+            .background(Ellipse().fill(Theme.macBg))
+            .overlay(Ellipse().stroke(Theme.macRed, lineWidth: 3))
+            .contentShape(Ellipse())
+            .onTapGesture {
+                withAnimation(.easeInOut(duration: 0.25)) { upNextRowID = row.id }
+            }
+            .help("Make this the UP NEXT decision")
     }
 
     // MARK: - Fleet ledger (bottom, tilted plane)

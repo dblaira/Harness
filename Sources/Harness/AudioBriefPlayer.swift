@@ -10,8 +10,13 @@ import AVFoundation
 @MainActor
 final class AudioBriefPlayer: NSObject, ObservableObject {
     @Published private(set) var isSpeaking = false
+    /// 0...1, driven by the synthesizer's own per-word callback -- real
+    /// progress through the spoken text, not a timer guess. Resets to 0
+    /// when playback ends or is cancelled.
+    @Published private(set) var progress: Double = 0
 
     private let synthesizer = AVSpeechSynthesizer()
+    private var utteranceLength = 0
 
     override init() {
         super.init()
@@ -24,6 +29,8 @@ final class AudioBriefPlayer: NSObject, ObservableObject {
         if synthesizer.isSpeaking {
             synthesizer.stopSpeaking(at: .immediate)
         }
+        utteranceLength = trimmed.utf16.count
+        progress = 0
         let utterance = AVSpeechUtterance(string: trimmed)
         if let languageCode = AVSpeechSynthesisVoice.currentLanguageCode() as String?,
            let voice = AVSpeechSynthesisVoice(language: languageCode) {
@@ -42,12 +49,25 @@ extension AudioBriefPlayer: AVSpeechSynthesizerDelegate {
         Task { @MainActor in self.isSpeaking = true }
     }
 
+    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, willSpeakRangeOfSpeechString characterRange: NSRange, utterance: AVSpeechUtterance) {
+        Task { @MainActor in
+            guard self.utteranceLength > 0 else { return }
+            self.progress = min(1, Double(characterRange.location + characterRange.length) / Double(self.utteranceLength))
+        }
+    }
+
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        Task { @MainActor in self.isSpeaking = false }
+        Task { @MainActor in
+            self.isSpeaking = false
+            self.progress = 0
+        }
     }
 
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        Task { @MainActor in self.isSpeaking = false }
+        Task { @MainActor in
+            self.isSpeaking = false
+            self.progress = 0
+        }
     }
 }
 #endif

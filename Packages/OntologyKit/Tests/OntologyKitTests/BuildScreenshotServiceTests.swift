@@ -29,7 +29,7 @@ private func tempDirectory() throws -> URL {
 /// WO-Q -- passed must track the file's real existence, never a shell
 /// exit code, since shell() can return without throwing even when
 /// xcodebuild's own exit status was non-zero.
-@Test func buildScreenshotPassesOnlyWhenThePngActuallyExists() async throws {
+@Test func buildScreenshotPassesOnlyWhenBothArtifactsActuallyExist() async throws {
     let projectDir = try tempDirectory()
     let outputDir = try tempDirectory()
 
@@ -43,18 +43,116 @@ private func tempDirectory() throws -> URL {
                 }
                 return ""
             }
+            // The record script carries the mp4 path as "$1" = args.last,
+            // exactly so this fake (and any future one) never has to
+            // parse the shell script text.
+            if args.contains(where: { $0.contains("recordVideo") }) {
+                if let pathArg = args.last {
+                    try "fake-mp4-bytes".write(toFile: pathArg, atomically: true, encoding: .utf8)
+                }
+                return ""
+            }
             return "xcodebuild output"
         }
     )
 
     let detail = service.run(outputDirectory: outputDir, projectDirectory: projectDir)
 
-    let evalResult = try #require(detail.evalResults.first)
-    #expect(evalResult.checkName == "build-and-screenshot")
-    #expect(evalResult.passed == true)
-    let artifactPath = try #require(evalResult.artifactPath)
-    #expect(FileManager.default.fileExists(atPath: artifactPath))
+    #expect(detail.evalResults.count == 2)
+    let screenshotEval = try #require(detail.evalResults.first { $0.checkName == "build-and-screenshot" })
+    #expect(screenshotEval.passed == true)
+    let screenshotPath = try #require(screenshotEval.artifactPath)
+    #expect(FileManager.default.fileExists(atPath: screenshotPath))
+
+    let videoEval = try #require(detail.evalResults.first { $0.checkName == "build-and-video" })
+    #expect(videoEval.passed == true)
+    let videoPath = try #require(videoEval.artifactPath)
+    #expect(FileManager.default.fileExists(atPath: videoPath))
+
     #expect(detail.run.success == true)
+}
+
+/// The whole-run pass is the CONJUNCTION of the checks: a run whose
+/// screenshot exists but whose recording never finalized must read
+/// failed, or the ledger shows green with missing evidence.
+@Test func buildVideoFailureFailsTheRunEvenWhenTheScreenshotSucceeded() async throws {
+    let projectDir = try tempDirectory()
+    let outputDir = try tempDirectory()
+
+    let service = BuildScreenshotService(
+        shellExecutor: { _, args, _, _ in
+            if args.contains("screenshot"), let pathArg = args.last {
+                try "fake-png-bytes".write(toFile: pathArg, atomically: true, encoding: .utf8)
+            }
+            // recordVideo "succeeds" (no throw) but writes nothing --
+            // the never-started / never-finalized case.
+            return ""
+        }
+    )
+
+    let detail = service.run(outputDirectory: outputDir, projectDirectory: projectDir)
+
+    let screenshotEval = try #require(detail.evalResults.first { $0.checkName == "build-and-screenshot" })
+    #expect(screenshotEval.passed == true)
+    let videoEval = try #require(detail.evalResults.first { $0.checkName == "build-and-video" })
+    #expect(videoEval.passed == false)
+    #expect(videoEval.artifactPath == nil)
+    #expect(detail.run.success == false)
+}
+
+/// An empty mp4 (recording started, killed before finalizing) is not
+/// evidence -- zero bytes must not pass, even though the file exists.
+@Test func buildVideoEmptyFileDoesNotPass() async throws {
+    let projectDir = try tempDirectory()
+    let outputDir = try tempDirectory()
+
+    let service = BuildScreenshotService(
+        shellExecutor: { _, args, _, _ in
+            if args.contains("screenshot"), let pathArg = args.last {
+                try "fake-png-bytes".write(toFile: pathArg, atomically: true, encoding: .utf8)
+            }
+            if args.contains(where: { $0.contains("recordVideo") }), let pathArg = args.last {
+                try Data().write(to: URL(fileURLWithPath: pathArg))
+            }
+            return ""
+        }
+    )
+
+    let detail = service.run(outputDirectory: outputDir, projectDirectory: projectDir)
+
+    let videoEval = try #require(detail.evalResults.first { $0.checkName == "build-and-video" })
+    #expect(videoEval.passed == false)
+    #expect(detail.run.success == false)
+}
+
+/// The recording must stop itself gracefully INSIDE the one shell call
+/// (background + sleep + SIGINT) -- never by letting shell()'s timeout
+/// fire, whose escalation path ends in SIGKILL and a corrupt file.
+@Test func buildVideoRecordScriptStopsItselfWithSigintNotTheShellTimeout() async throws {
+    let projectDir = try tempDirectory()
+    let outputDir = try tempDirectory()
+
+    let recordScript = LockedBox<String?>(nil)
+    let recordTimeout = LockedBox<TimeInterval>(0)
+
+    let service = BuildScreenshotService(
+        shellExecutor: { _, args, timeout, _ in
+            if let script = args.first(where: { $0.contains("recordVideo") }) {
+                recordScript.value = script
+                recordTimeout.value = timeout
+            }
+            return ""
+        },
+        videoSeconds: 6
+    )
+
+    _ = service.run(outputDirectory: outputDir, projectDirectory: projectDir)
+
+    let script = try #require(recordScript.value)
+    #expect(script.contains("kill -INT"))
+    // The shell timeout must comfortably outlast the scripted sleep, so
+    // the graceful stop always wins the race against SIGKILL.
+    #expect(recordTimeout.value > 6)
 }
 
 @Test func buildScreenshotFailsWhenScreenshotCommandExitsCleanButNoFileAppears() async throws {

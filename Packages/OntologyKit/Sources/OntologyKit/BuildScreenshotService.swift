@@ -32,6 +32,11 @@ public struct BuildScreenshotService: Sendable {
     private let simulatorName: String
     private let scheme: String
     private let deviceName: String
+    private let bundleIdentifier: String
+    /// Seconds of simulator screen recording attached as the video
+    /// artifact. Short on purpose: the point is proof the app runs,
+    /// not a screencast.
+    private let videoSeconds: Int
 
     /// Production entry point -- always AgentRunner().shell(), the one
     /// sanctioned shell-out path (CLAUDE.md hard rule 2). Not a default
@@ -42,7 +47,12 @@ public struct BuildScreenshotService: Sendable {
         fileManager: FileManager = .default,
         simulatorName: String = "iPhone 17",
         scheme: String = "Harness",
-        deviceName: String = Host.current().localizedName ?? "Mac"
+        deviceName: String = Host.current().localizedName ?? "Mac",
+        bundleIdentifier: String = "com.adamblair.Harness",
+        // recordVideo spends ~4s spinning up before frames land, so the
+        // scripted window must be comfortably larger than the recording
+        // you actually want (10s window ~= 5-6s of real footage).
+        videoSeconds: Int = 10
     ) {
         self.init(
             shellExecutor: { launchPath, args, timeout, environment in
@@ -51,7 +61,9 @@ public struct BuildScreenshotService: Sendable {
             fileManager: fileManager,
             simulatorName: simulatorName,
             scheme: scheme,
-            deviceName: deviceName
+            deviceName: deviceName,
+            bundleIdentifier: bundleIdentifier,
+            videoSeconds: videoSeconds
         )
     }
 
@@ -62,13 +74,17 @@ public struct BuildScreenshotService: Sendable {
         fileManager: FileManager = .default,
         simulatorName: String = "iPhone 17",
         scheme: String = "Harness",
-        deviceName: String = Host.current().localizedName ?? "Mac"
+        deviceName: String = Host.current().localizedName ?? "Mac",
+        bundleIdentifier: String = "com.adamblair.Harness",
+        videoSeconds: Int = 6
     ) {
         self.shellExecutor = shellExecutor
         self.fileManager = fileManager
         self.simulatorName = simulatorName
         self.scheme = scheme
         self.deviceName = deviceName
+        self.bundleIdentifier = bundleIdentifier
+        self.videoSeconds = videoSeconds
     }
 
     /// Synchronous and potentially long-running (xcodebuild build can
@@ -112,6 +128,13 @@ public struct BuildScreenshotService: Sendable {
         }
 
         let projectPath = projectDirectory.appendingPathComponent("Harness.xcodeproj").path
+        // A fixed -derivedDataPath (stable across runs, so builds stay
+        // incremental) makes the built .app's location deterministic --
+        // needed to install + launch the app so the artifacts show it
+        // RUNNING, not whatever happened to be on the booted screen.
+        let derivedDataURL = outputDirectory.appendingPathComponent("DerivedData", isDirectory: true)
+        let appPath = derivedDataURL
+            .appendingPathComponent("Build/Products/Debug-iphonesimulator/\(scheme).app").path
         let buildOutputTail: String
         do {
             let output = try shellExecutor(
@@ -120,6 +143,7 @@ public struct BuildScreenshotService: Sendable {
                     "-project", projectPath,
                     "-scheme", scheme,
                     "-destination", "platform=iOS Simulator,name=\(simulatorName)",
+                    "-derivedDataPath", derivedDataURL.path,
                     "build"
                 ],
                 600,
@@ -146,6 +170,21 @@ public struct BuildScreenshotService: Sendable {
         // deliberately swallowed with try? rather than aborting the run.
         _ = try? shellExecutor("/usr/bin/xcrun", ["simctl", "boot", simulatorName], 60, [:])
 
+        // Install + launch the build we just made, so both artifacts
+        // show THIS app running -- a screenshot of an idle home screen
+        // proves a simulator exists, not that the build works. Failures
+        // land in the eval detail rather than aborting: the screenshot
+        // of whatever state resulted is still honest evidence.
+        var launchOutput = ""
+        do {
+            _ = try shellExecutor("/usr/bin/xcrun", ["simctl", "install", "booted", appPath], 60, [:])
+            launchOutput = try shellExecutor("/usr/bin/xcrun", ["simctl", "launch", "booted", bundleIdentifier], 60, [:])
+            traceEvents.append(TraceEvent(runId: runID, stage: .evaluation, message: "App installed and launched on \(simulatorName).", createdAt: Date()))
+        } catch {
+            launchOutput = "install/launch failed: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
+            traceEvents.append(TraceEvent(runId: runID, stage: .evaluation, message: launchOutput, createdAt: Date()))
+        }
+
         try? fileManager.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
         let screenshotURL = outputDirectory.appendingPathComponent("build-screenshot-\(runID).png")
         var screenshotOutput = ""
@@ -160,6 +199,30 @@ public struct BuildScreenshotService: Sendable {
             screenshotOutput = "simctl screenshot failed: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
         }
 
+        // The video: one /bin/sh invocation (still through
+        // AgentRunner.shell(), hard rule 2) that starts recordVideo in
+        // the background, lets it run, then stops it with SIGINT so the
+        // file finalizes -- recordVideo only writes a playable mp4 on a
+        // graceful stop, and shell()'s own timeout path escalates to
+        // SIGKILL, which would corrupt it. The mp4 path rides as "$1"
+        // so tests can read it from args rather than parsing the script.
+        let videoURL = outputDirectory.appendingPathComponent("build-video-\(runID).mp4")
+        let recordScript = """
+        /usr/bin/xcrun simctl io booted recordVideo --codec h264 --force "$1" & \
+        REC=$!; sleep \(videoSeconds); kill -INT $REC 2>/dev/null; wait $REC; exit 0
+        """
+        var videoOutput = ""
+        do {
+            videoOutput = try shellExecutor(
+                "/bin/sh",
+                ["-c", recordScript, "sh", videoURL.path],
+                TimeInterval(videoSeconds + 30),
+                [:]
+            )
+        } catch {
+            videoOutput = "recordVideo failed: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
+        }
+
         // CLAUDE.md hard rule 3: a Pass is invalid without an on-disk
         // artifact -- gated on the file actually existing, never on a
         // shell exit code alone. shell() can return normally (no throw)
@@ -167,19 +230,36 @@ public struct BuildScreenshotService: Sendable {
         // as long as it printed something to stdout (see shell()'s
         // `terminationStatus != 0 && text.isEmpty` guard) -- exit codes
         // alone are not a trustworthy pass signal for this caller.
-        let exists = fileManager.fileExists(atPath: screenshotURL.path)
-        let evalResult = EvalResult(
+        let screenshotExists = fileManager.fileExists(atPath: screenshotURL.path)
+        let screenshotEval = EvalResult(
             runId: runID,
             checkName: "build-and-screenshot",
-            passed: exists,
-            detail: exists
+            passed: screenshotExists,
+            detail: screenshotExists
                 ? "Simulator screenshot captured at \(screenshotURL.path)."
                 : "No screenshot file found after build+capture. Build tail: \(buildOutputTail) Screenshot output: \(screenshotOutput)",
-            artifactPath: exists ? screenshotURL.path : nil
+            artifactPath: screenshotExists ? screenshotURL.path : nil
         )
-        traceEvents.append(TraceEvent(runId: runID, stage: .traceSaved, message: evalResult.detail, createdAt: Date()))
+        traceEvents.append(TraceEvent(runId: runID, stage: .traceSaved, message: screenshotEval.detail, createdAt: Date()))
 
-        return Self.detail(runID: runID, start: start, end: Date(), evalResult: evalResult, traceEvents: traceEvents, deviceName: deviceName)
+        // Same artifact-required contract for the recording. An empty
+        // file (recording started but never finalized) is not evidence.
+        let videoSize = (try? fileManager.attributesOfItem(atPath: videoURL.path)[.size] as? Int) ?? 0
+        let videoExists = fileManager.fileExists(atPath: videoURL.path) && (videoSize ?? 0) > 0
+        // (attributesOfItem returns Any; the double-optional collapse above
+        // is deliberate -- missing file or unreadable size both read as 0.)
+        let videoEval = EvalResult(
+            runId: runID,
+            checkName: "build-and-video",
+            passed: videoExists,
+            detail: videoExists
+                ? "Simulator screen recording (\(videoSeconds)s) captured at \(videoURL.path). Launch: \(launchOutput.trimmingCharacters(in: .whitespacesAndNewlines))"
+                : "No playable video file found after recording. Launch: \(launchOutput) Record output: \(videoOutput)",
+            artifactPath: videoExists ? videoURL.path : nil
+        )
+        traceEvents.append(TraceEvent(runId: runID, stage: .traceSaved, message: videoEval.detail, createdAt: Date()))
+
+        return Self.detail(runID: runID, start: start, end: Date(), evalResults: [screenshotEval, videoEval], traceEvents: traceEvents, deviceName: deviceName)
     }
 
     private static func detail(
@@ -190,7 +270,19 @@ public struct BuildScreenshotService: Sendable {
         traceEvents: [TraceEvent],
         deviceName: String
     ) -> HarnessRunDetail {
+        detail(runID: runID, start: start, end: end, evalResults: [evalResult], traceEvents: traceEvents, deviceName: deviceName)
+    }
+
+    private static func detail(
+        runID: String,
+        start: Date,
+        end: Date,
+        evalResults: [EvalResult],
+        traceEvents: [TraceEvent],
+        deviceName: String
+    ) -> HarnessRunDetail {
         let prompt = "Build-and-screenshot spike"
+        let summary = evalResults.map(\.detail).joined(separator: " ")
         let run = HarnessRun(
             id: runID,
             prompt: prompt,
@@ -198,11 +290,15 @@ public struct BuildScreenshotService: Sendable {
             modelName: "build-screenshot-spike-v1",
             invocationMethod: "xcodebuild+simctl",
             promptPacketHash: "sha256:n/a",
-            success: evalResult.passed,
+            // The run passes only if EVERY check carried its artifact --
+            // a green run with a missing video would be the exact
+            // looks-enforced-while-enforcing-nothing failure the plan
+            // warns about.
+            success: evalResults.allSatisfy(\.passed),
             duration: end.timeIntervalSince(start),
             tokenCount: nil,
             cost: nil,
-            finalAnswer: evalResult.detail,
+            finalAnswer: summary,
             deviceName: deviceName,
             createdAt: start
         )
@@ -210,12 +306,12 @@ public struct BuildScreenshotService: Sendable {
             run: run,
             messages: [
                 HarnessMessage(runId: runID, role: .user, text: prompt, createdAt: start),
-                HarnessMessage(runId: runID, role: .assistant, text: evalResult.detail, createdAt: end)
+                HarnessMessage(runId: runID, role: .assistant, text: summary, createdAt: end)
             ],
             authorityHits: [],
             memoryHits: [],
             traceEvents: traceEvents,
-            evalResults: [evalResult],
+            evalResults: evalResults,
             memoryCandidates: [],
             validationResults: []
         )
