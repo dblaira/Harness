@@ -49,17 +49,10 @@ targets:
         ENABLE_PREVIEWS: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
-        # Ad-hoc signing on macOS -- known trade-off: it re-keys the
-        # app's Keychain access grants on every rebuild, which forces a
-        # "wants to use your confidential information" password prompt
-        # on every relaunch. scripts/setup-local-codesign.sh creates a
-        # stable local certificate meant to fix this, but Xcode's
-        # signing resolver won't accept it as-is (it isn't in the
-        # system's trusted-for-code-signing policy set yet, a separate
-        # step from creating it) -- not wired in here until that's
-        # actually proven working end to end.
-        "CODE_SIGNING_ALLOWED[sdk=macosx*]": NO
         "CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]": NO
+        "CODE_SIGN_STYLE[sdk=macosx*]": Manual
+        "CODE_SIGN_IDENTITY[sdk=macosx*]": Apple Development
+        "DEVELOPMENT_TEAM[sdk=macosx*]": 7FKUS5M5QS
         "CODE_SIGN_STYLE[sdk=iphoneos*]": Automatic
         "CODE_SIGN_IDENTITY[sdk=iphoneos*]": Apple Development
         "DEVELOPMENT_TEAM[sdk=iphoneos*]": 7FKUS5M5QS

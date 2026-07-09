@@ -82,7 +82,7 @@ public final class PromptAssembler: @unchecked Sendable {
     private static let maxFrozenSessions = 16
 
     public init(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        homeDirectory: URL = URL(fileURLWithPath: NSHomeDirectory()),
         environment: [String: String] = ProcessInfo.processInfo.environment,
         fileManager: FileManager = .default
     ) {

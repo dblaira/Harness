@@ -153,7 +153,7 @@ public struct DelegationAgentRunner: Sendable {
         scrape: Scrape? = nil,
         triage: Triage? = nil,
         now: @escaping @Sendable () -> Date = { Date() },
-        deviceName: String = Host.current().localizedName ?? "Mac"
+        deviceName: String = DeviceIdentity.currentName()
     ) {
         self.search = search
         self.scrape = scrape

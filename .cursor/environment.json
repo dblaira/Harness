@@ -1,0 +1,4 @@
+{
+  "install": "true",
+  "start": "bash .cursor/tailscale-join.sh"
+}

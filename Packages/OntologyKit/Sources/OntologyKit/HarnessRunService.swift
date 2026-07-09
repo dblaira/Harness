@@ -504,8 +504,8 @@ public extension ToolExecutor {
     }
 }
 
-enum DeviceIdentity {
-    static func currentName() -> String {
+public enum DeviceIdentity {
+    public static func currentName() -> String {
         #if os(macOS)
         Host.current().localizedName ?? "Mac"
         #elseif os(iOS)

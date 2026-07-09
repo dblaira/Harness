@@ -70,7 +70,7 @@ public struct HarnessCapability: Identifiable, Codable, Sendable, Equatable {
 
 public enum HarnessCapabilityRegistry {
     public static func defaultCapabilities(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = URL(fileURLWithPath: NSHomeDirectory())
     ) -> [HarnessCapability] {
         deduplicated(skillCapabilities(homeDirectory: homeDirectory) + pluginCapabilities(homeDirectory: homeDirectory))
     }

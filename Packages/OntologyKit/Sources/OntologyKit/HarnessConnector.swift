@@ -73,7 +73,7 @@ public struct HarnessConnector: Identifiable, Codable, Sendable, Equatable {
 
 public enum HarnessConnectorRegistry {
     public static func defaultConnectors(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        homeDirectory: URL = URL(fileURLWithPath: NSHomeDirectory()),
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> [HarnessConnector] {
         deduplicated(
