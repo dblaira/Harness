@@ -30,12 +30,18 @@ struct MacBlueprintView: View {
         GeometryReader { geo in
             ScrollViewReader { proxy in
                 ScrollView {
+                    // Adam's list, item 4 (voice memo): "I want to be able
+                    // to copy and paste any text that I see on the page ...
+                    // I don't want any small little icons that tell me I
+                    // can do this." One switch at the root: every Text on
+                    // the canvas is selectable, nothing announces it.
                     VStack(spacing: 0) {
                         cockpitCanvas
                             .frame(height: max(geo.size.height, 560))
                             .clipped()
                         loopSection
                     }
+                    .textSelection(.enabled)
                 }
                 .onAppear { jumpToLoop = { stepID in
                     highlightedStepID = stepID
@@ -57,6 +63,11 @@ struct MacBlueprintView: View {
     /// Set in onAppear so rail cells (built outside ScrollViewReader's
     /// closure) can trigger the proxy scroll.
     @State private var jumpToLoop: (Int) -> Void = { _ in }
+    /// Inline pool-card editing (Adam's list, item 3).
+    @State private var wigglingPoolCardID: String?
+    @State private var editingPoolCardID: String?
+    @State private var editingPoolText = ""
+    @FocusState private var poolEditFocus: String?
 
     // MARK: - The cockpit canvas (one viewport-height screen)
 
@@ -149,22 +160,28 @@ struct MacBlueprintView: View {
         .zIndex(3)
     }
 
+    /// Adam's list, item 1 (2026-07-09 voice memo): "remove the number.
+    /// I want the name ... then the brief description ... the name
+    /// should actually be in black, the description should be in red,
+    /// and then have it repeat that pattern throughout the eight steps."
     private func railCell(_ step: PatternStep) -> some View {
         let state = railState(for: step)
         return VStack(alignment: .leading, spacing: 2) {
-            Text("\(step.id)")
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(state == .locked ? Theme.macCoolInk : Theme.macInk.opacity(0.5))
             Text(step.title)
                 .font(.system(size: 13, weight: .bold))
                 .kerning(0.3)
                 .lineLimit(1)
                 .minimumScaleFactor(0.55)
                 .foregroundStyle(state == .locked ? Theme.macCoolInk : Theme.macInk)
-            Text(railEvidenceText(for: step, state: state))
-                .font(.system(size: state == .locked ? 12 : 15, weight: state == .locked ? .bold : .heavy).monospacedDigit())
-                .foregroundStyle(state == .locked ? Theme.macCoolInk : (state == .current ? Theme.macRed : Theme.macInk))
-                .padding(.top, 2)
+            // Adam (voice follow-up): "remove the ratings below it that
+            // seven out of 10 and the rate ... remove that." Name +
+            // description only; the cell COLORS carry the state, and the
+            // gate still enforces itself underneath.
+            Text(step.description)
+                .font(.system(size: 10.5))
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+                .foregroundStyle(state == .locked ? Theme.macCoolInk : Theme.macRed)
         }
         .padding(EdgeInsets(top: 8, leading: 8, bottom: 7, trailing: 8))
         .frame(maxWidth: .infinity, minHeight: 58, alignment: .topLeading)
@@ -217,15 +234,6 @@ struct MacBlueprintView: View {
         return step.id == currentStep?.id ? .current : .waiting
     }
 
-    private func railEvidenceText(for step: PatternStep, state: RailCellState) -> String {
-        switch state {
-        case .done: return "\(model.patternGateState.ratings[step.id] ?? 0)/10"
-        case .current: return step.zone == .execution ? "building" : "rate"
-        case .waiting: return step.zone == .execution ? "ready" : "rate"
-        case .locked: return "locked"
-        }
-    }
-
     private func railRatingBinding(for step: PatternStep) -> Binding<Bool> {
         Binding(
             get: { ratingPopoverStep == step.id },
@@ -238,9 +246,11 @@ struct MacBlueprintView: View {
     /// .fasc{transform:rotate(-1.2deg)} with a small two-line lead label
     /// and a snap-scrolling row of 246px white cards shingled by
     /// margin-right:-14px; odd tilt -2.4deg, even +2deg +5px.
+    /// Adam's list, item 2, corrected in his words: "I move the
+    /// carosel. it doesn't move on it's own." A hand-driven row --
+    /// swipe/scroll through dozens of cards, nothing moves by itself.
     private var fascinationBand: some View {
-        // No lead label -- the cards speak for themselves (Adam:
-        // "so much extra fucking words for no reason").
+        // No lead label -- the cards speak for themselves.
         HStack(alignment: .center, spacing: 0) {
             // Empty regions stay quiet -- never instructions.
             if model.fascinationCards.isEmpty {
@@ -250,10 +260,13 @@ struct MacBlueprintView: View {
                     HStack(alignment: .top, spacing: -14) {
                         ForEach(Array(model.fascinationCards.enumerated()), id: \.element.id) { index, card in
                             fascinationCard(card, index: index)
+                                .id(card.id)
                         }
                     }
                     .padding(EdgeInsets(top: 10, leading: 6, bottom: 12, trailing: 20))
+                    .scrollTargetLayout()
                 }
+                .scrollTargetBehavior(.viewAligned)
             }
         }
         .rotationEffect(.degrees(-1.2))
@@ -412,11 +425,26 @@ struct MacBlueprintView: View {
                     .clipped()
                     .opacity(cooled ? 0.55 : 1)
             }
-            Text(poolResourceLabel(card))
-                .font(.system(size: 11.5))
-                .foregroundStyle(cooled ? Theme.macCoolInk : Theme.macInk)
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
+            // Adam's list, item 3 (voice memo): "I want to be able just
+            // to click on it, then it starts to shake and wiggle ...
+            // there's an animation that lets me know that after I've
+            // clicked on it that it's alive and ready and then I can
+            // click inside it and change the wording of it if I want."
+            // No pin, no icon.
+            if editingPoolCardID == card.contentHash {
+                TextField("", text: $editingPoolText, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(cooled ? Theme.macCoolInk : Theme.macInk)
+                    .focused($poolEditFocus, equals: card.contentHash)
+                    .onSubmit { commitPoolEdit(card) }
+            } else {
+                Text(poolResourceLabel(card))
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(cooled ? Theme.macCoolInk : Theme.macInk)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -431,11 +459,38 @@ struct MacBlueprintView: View {
             }
         }
         .overlay(Rectangle().stroke(Theme.macRed.opacity(cooled ? 0.55 : 1), lineWidth: 4))
-        .rotationEffect(.degrees(tilt))
+        .rotationEffect(.degrees(tilt + (wigglingPoolCardID == card.contentHash ? 2.2 : 0)))
+        .animation(
+            wigglingPoolCardID == card.contentHash
+                ? .easeInOut(duration: 0.09).repeatCount(7, autoreverses: true)
+                : .easeOut(duration: 0.15),
+            value: wigglingPoolCardID == card.contentHash
+        )
         .offset(y: yOffset)
         .contentShape(Rectangle())
-        .onTapGesture { openPoolCard(card) }
+        .onTapGesture { beginPoolEdit(card) }
         .help(card.envelope.resource ?? "")
+    }
+
+    /// Click -> wiggle for ~0.6s (alive and ready) -> rest -> editable.
+    private func beginPoolEdit(_ card: OpportunitySourceCard) {
+        guard editingPoolCardID != card.contentHash else { return }
+        wigglingPoolCardID = card.contentHash
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 650_000_000)
+            wigglingPoolCardID = nil
+            editingPoolText = poolResourceLabel(card)
+            editingPoolCardID = card.contentHash
+            poolEditFocus = card.contentHash
+        }
+    }
+
+    private func commitPoolEdit(_ card: OpportunitySourceCard) {
+        let text = editingPoolText.trimmingCharacters(in: .whitespacesAndNewlines)
+        editingPoolCardID = nil
+        poolEditFocus = nil
+        guard !text.isEmpty, text != poolResourceLabel(card) else { return }
+        model.updateSourcePoolCardTitle(card, title: text)
     }
 
     private func poolKicker(_ card: OpportunitySourceCard) -> String {
@@ -479,29 +534,18 @@ struct MacBlueprintView: View {
 
     // MARK: - Center column (UP NEXT deck + composer)
 
+    /// Adam (voice follow-ups, verbatim): "the three boxes why are they
+    /// at the bottom?" and "what is 'up Next'? I didn't add that and I
+    /// don't know why the past chats were sitting there staring me in
+    /// the face ... so get rid of it." His three boxes on top; the rest
+    /// of the column is quiet breathing space. No UP NEXT deck, no old
+    /// chat turns.
     private func centerColumn(width: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("UP NEXT")
-                .font(.system(size: 12, weight: .heavy))
-                .kerning(2.5)
-                .foregroundStyle(Theme.macFaint)
-                .padding(.bottom, 6)
-
-            upNextDeck(width: max(width, 200))
-
-            // The lap: what comes back lands HERE, center screen,
-            // between the deck and your words -- this canvas is the
-            // chat page, not a separate room. Empty = breathing space,
-            // exactly like the mockup's middle gap.
-            if model.chatThread.isEmpty {
-                Spacer(minLength: 4)
-            } else {
-                landedStack
-                    .padding(.vertical, 6)
-            }
-
             composerCard
-                .padding(.bottom, 10)
+                .padding(.top, 2)
+
+            Spacer(minLength: 4)
         }
         .padding(.leading, 8)
     }

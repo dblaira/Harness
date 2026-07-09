@@ -415,6 +415,28 @@ final class MacWorkbenchModel: ObservableObject {
         writeSourcePoolCard(resource: url.absoluteString, retrievedBy: "adam-paste")
     }
 
+    /// Adam's list, item 3 (2026-07-09 voice memo): "I can click inside
+    /// it and change the wording of it if I want." Rewrites the card
+    /// file's title frontmatter with HIS words, verbatim, and reloads
+    /// the pool. envelope.source is the file's own path (set by the
+    /// parser at load).
+    func updateSourcePoolCardTitle(_ card: OpportunitySourceCard, title: String) {
+        let path = card.envelope.source
+        guard FileManager.default.fileExists(atPath: path),
+              var text = try? String(contentsOfFile: path, encoding: .utf8) else { return }
+        let escaped = title.replacingOccurrences(of: "\"", with: "\\\"")
+        let titleLine = "title: \"\(escaped)\""
+        if let range = text.range(of: #"(?m)^title:.*$"#, options: .regularExpression) {
+            text.replaceSubrange(range, with: titleLine)
+        } else if let range = text.range(of: #"(?m)^type:.*$"#, options: .regularExpression) {
+            text.replaceSubrange(range, with: text[range] + "\n" + titleLine)
+        } else {
+            return
+        }
+        try? text.write(toFile: path, atomically: true, encoding: .utf8)
+        refreshSourcePool()
+    }
+
     /// Drop a local file (an image dragged from Finder, etc.) -- copies
     /// it into a pool-assets folder next to the watched Delegations
     /// folder so the capture survives even if the original moves, then
