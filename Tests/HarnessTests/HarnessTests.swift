@@ -137,10 +137,13 @@ import OntologyKit
 }
 
 @Test func workbenchCenterViewsIncludeDelegationQueue() {
-    #expect(WorkbenchCenterView.allCases.map(\.rawValue) == ["chat", "cockpit", "board", "blueprint"])
+    // Adam, 2026-07-09: the cockpit canvas IS the chat page (his
+    // homepage) -- the separate Blueprint tab is gone for good, and
+    // every surviving view keeps its same name.
+    #expect(WorkbenchCenterView.allCases.map(\.rawValue) == ["chat", "cockpit", "board"])
+    #expect(WorkbenchCenterView.chat.label == "Chat")
     #expect(WorkbenchCenterView.cockpit.label == "Cockpit")
     #expect(WorkbenchCenterView.board.label == "Delegation")
-    #expect(WorkbenchCenterView.blueprint.label == "Blueprint")
 }
 
 @Test func delegationQueueActionRecordsShareBatchForMultiSelect() {

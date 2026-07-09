@@ -477,12 +477,75 @@ struct MacBlueprintView: View {
 
             upNextDeck(width: max(width, 200))
 
-            Spacer(minLength: 4)
+            // The lap: what comes back lands HERE, center screen,
+            // between the deck and your words -- this canvas is the
+            // chat page, not a separate room. Empty = breathing space,
+            // exactly like the mockup's middle gap.
+            if model.chatThread.isEmpty {
+                Spacer(minLength: 4)
+            } else {
+                landedStack
+                    .padding(.vertical, 6)
+            }
 
             composerCard
                 .padding(.bottom, 10)
         }
         .padding(.leading, 8)
+    }
+
+    /// Newest last, auto-scrolled to the latest turn. Adam's words show
+    /// as the small italic line they are; what agents return comes as a
+    /// bordered card in his lap.
+    private var landedStack: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(model.chatThread) { turn in
+                        landedTurn(turn).id(turn.id)
+                    }
+                    if model.isRunning {
+                        HStack(spacing: 6) {
+                            SavyBreathingDot(color: Theme.savyGreen, diameter: 7)
+                            Text("working")
+                                .font(.caption.weight(.bold))
+                                .textCase(.uppercase)
+                                .foregroundStyle(Theme.macFaint)
+                        }
+                        .id("working-indicator")
+                    }
+                }
+                .padding(.trailing, 8)
+            }
+            .frame(maxWidth: .infinity)
+            .onChange(of: model.chatThread.count) {
+                if let lastID = model.chatThread.last?.id {
+                    withAnimation(.easeOut(duration: 0.25)) {
+                        proxy.scrollTo(lastID, anchor: .bottom)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func landedTurn(_ turn: ConversationTurn) -> some View {
+        if turn.role == .user {
+            Text(turn.text)
+                .font(.system(size: 12, design: .serif).italic())
+                .foregroundStyle(Theme.macMuted)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .multilineTextAlignment(.trailing)
+        } else {
+            Text(turn.text)
+                .font(.system(size: 12.5))
+                .foregroundStyle(Theme.macInk)
+                .textSelection(.enabled)
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.white, in: Rectangle())
+                .overlay(Rectangle().stroke(Theme.macRed, lineWidth: 3))
+        }
     }
 
     private var upNextRow: OpportunityBoardRow? {
@@ -641,6 +704,9 @@ struct MacBlueprintView: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: 12.5))
                 .foregroundStyle(Theme.macInk)
+                // Return sends -- the mockup composer has no send button,
+                // and send() already guards empty drafts and running state.
+                .onSubmit { model.send() }
         }
         .padding(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
         .frame(maxWidth: .infinity, alignment: .leading)

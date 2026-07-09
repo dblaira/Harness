@@ -382,10 +382,10 @@ struct MacChatView: View {
             topBar
             centerViewContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // Blueprint carries its own composer on the canvas (the three
+            // Chat carries its own composer on the canvas (the three
             // bound fields) -- stacking the chat bar under it would both
             // duplicate the surface and shrink the one-screen cockpit.
-            if centerView != .board && centerView != .chat && centerView != .blueprint {
+            if centerView == .cockpit {
                 delegateLabel
                 composer
             }
@@ -398,7 +398,11 @@ struct MacChatView: View {
     private var centerViewContent: some View {
         switch centerView {
         case .chat:
-            MacDelegateFormView(model: model)
+            // Adam, verbatim: "This is my version of the chat page. This
+            // is a personalized chat page." The cockpit canvas IS Chat --
+            // the homepage -- not a separate room (the old Blueprint tab
+            // is gone; every surviving view keeps its same name).
+            MacBlueprintView(model: model)
         case .cockpit:
             MacCockpitView { prompt in
                 model.draft = prompt
@@ -406,8 +410,6 @@ struct MacChatView: View {
             }
         case .board:
             delegationQueueView
-        case .blueprint:
-            MacBlueprintView(model: model)
         }
     }
 
@@ -1569,6 +1571,34 @@ struct MacChatView: View {
         }
     }
 
+    /// Adam: "the navigation at the top of page invisible for some
+    /// fuckining reason. fix that." The stock segmented Picker rendered
+    /// its unselected labels near-white on the tan bar. Explicit pills
+    /// instead: selected = crimson with white text, unselected = full
+    /// ink on the tan -- readable at a glance, no squinting.
+    private var centerViewSwitcher: some View {
+        HStack(spacing: 2) {
+            ForEach(WorkbenchCenterView.allCases) { view in
+                Button {
+                    centerViewRaw = view.rawValue
+                } label: {
+                    Text(view.label)
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(centerView == view ? .white : Theme.macBarInk.opacity(0.85))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 5)
+                        .background(
+                            centerView == view ? Theme.macRed : Color.clear,
+                            in: Capsule()
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(2)
+        .background(Color.black.opacity(0.10), in: Capsule())
+    }
+
     private var chatTopBar: some View {
         HStack(spacing: 10) {
             chatToolbarIcon(
@@ -1580,15 +1610,8 @@ struct MacChatView: View {
 
             Spacer()
 
-            Picker("View", selection: centerViewBinding) {
-                ForEach(WorkbenchCenterView.allCases) { view in
-                    Text(view.label).tag(view)
-                }
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .frame(width: 240)
-            .help("Switch between Chat, Cockpit, the Delegation Queue, and Blueprint")
+            centerViewSwitcher
+                .help("Switch between Chat, Cockpit, and the Delegation Queue")
 
             Spacer()
 
@@ -1667,14 +1690,7 @@ struct MacChatView: View {
 
             Spacer()
 
-            Picker("View", selection: centerViewBinding) {
-                ForEach(WorkbenchCenterView.allCases) { view in
-                    Text(view.label).tag(view)
-                }
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .frame(width: 240)
+            centerViewSwitcher
 
             Picker("Backend", selection: $model.backend) {
                 ForEach(Backend.allCases) { backend in
@@ -1810,8 +1826,6 @@ struct MacChatView: View {
             return "Harness Cockpit"
         case .board:
             return "Delegation Queue"
-        case .blueprint:
-            return "Blueprint"
         }
     }
 
@@ -3480,7 +3494,6 @@ enum WorkbenchCenterView: String, CaseIterable, Identifiable, Hashable {
     case chat
     case cockpit
     case board
-    case blueprint
 
     var id: String { rawValue }
 
@@ -3492,8 +3505,6 @@ enum WorkbenchCenterView: String, CaseIterable, Identifiable, Hashable {
             return "Cockpit"
         case .board:
             return "Delegation"
-        case .blueprint:
-            return "Blueprint"
         }
     }
 }
