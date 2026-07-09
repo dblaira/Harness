@@ -68,6 +68,10 @@ struct MacBlueprintView: View {
     @State private var editingPoolCardID: String?
     @State private var editingPoolText = ""
     @FocusState private var poolEditFocus: String?
+    /// Memo 22: which box the strip's plus/mic/formatting act on.
+    @FocusState private var focusedComposerField: String?
+    @State private var showPlusMenu = false
+    @StateObject private var voiceDictation = VoiceDictationController()
 
     // MARK: - The cockpit canvas (one viewport-height screen)
 
@@ -84,9 +88,12 @@ struct MacBlueprintView: View {
             ZStack {
                 Theme.macBg
                 // .canvas{radial-gradient(rgba(8,23,45,.09) 1.1px...) 10px}
-                // Memo 21: "more prominent ... slightly, slightly darker"
-                // with the size-waving gradient feel. Was 0.09, flat.
-                SavyBendayGround(dotColor: Theme.savyDeepNavy, dotOpacity: 0.13, spacing: 10, dotDiameter: 2.4, waves: true)
+                // Memo 22: "We might actually go supersonic with that and
+                // just make those huge ... I don't want it to be subtle.
+                // I want to absolutely rock my world and make it feel
+                // like I'm looking at a Lichtenstein painting and I'm in
+                // an art gallery I just happen to work at."
+                SavyBendayGround(dotColor: Theme.savyDeepNavy, dotOpacity: 0.16, spacing: 30, dotDiameter: 12, waves: true)
             }
         }
     }
@@ -361,6 +368,7 @@ struct MacBlueprintView: View {
                     .padding(.top, 14)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     .zIndex(3)
+
             }
         }
     }
@@ -740,77 +748,232 @@ struct MacBlueprintView: View {
         VStack(alignment: .leading, spacing: 4) {
             composerField(label: "WHAT DO I WANT?", text: $model.draft)
             composerField(label: "WHEN I AM...I LIKE TO", text: $model.preferredApproach)
-            composerField(label: "DONE LOOKS LIKE...", text: $model.doneCondition)
+            // Memo 25: the controls live INSIDE the chat, on the dark
+            // ("I thought it was going to be inside the chat ... it
+            // can't be this bright area right there in the center that
+            // constantly is drawing my eyes").
+            composerField(label: "DONE LOOKS LIKE...", text: $model.doneCondition, bottomStrip: true)
         }
         .padding(8)
         .background(Theme.savyCard, in: Rectangle())
         .overlay(Rectangle().stroke(Theme.macRed, lineWidth: 6))
+        // No BIU pill -- Adam: "you already have it down there at the
+        // bottom ... so you just get rid of it." Formatting lives in
+        // the dark strip inside the chat, nowhere else.
     }
 
-    /// Memo 21: labels in red ("it kind of fades into the background.
-    /// I can still see it ... but it fades"), plus button red and far
-    /// LEFT ("I write from left to right. So it's going to be there").
-    /// TextEditor instead of TextField: the field was hiding the first
-    /// typed line under the label -- the editor claims its true height,
-    /// so every word stays visible while typing. Cmd+Return sends.
-    private func composerField(label: String, text: Binding<String>) -> some View {
-        ZStack(alignment: .bottomLeading) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(label)
-                    .font(.system(size: 10, weight: .heavy))
-                    .kerning(1.5)
-                    .foregroundStyle(Theme.macRed)
-                TextEditor(text: text)
-                    .scrollDisabled(true)
-                    .scrollContentBackground(.hidden)
-                    .font(.system(size: 17))
-                    .foregroundStyle(.white)
-                    .tint(.white)
-                    .frame(minHeight: 28)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.leading, -5)
+    /// Memo 21: labels in red, fading into the background. Memo 22
+    /// moved the controls out of the boxes into ONE strip at the bottom
+    /// of the composer (send far left, then plus, mic, formatting,
+    /// model) -- so the boxes themselves are just label + words + chips.
+    private func composerField(label: String, text: Binding<String>, bottomStrip: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.system(size: 10, weight: .heavy))
+                .kerning(1.5)
+                .foregroundStyle(Theme.macRed)
+            TextEditor(text: text)
+                .scrollDisabled(true)
+                .scrollContentBackground(.hidden)
+                .font(.system(size: 17))
+                .foregroundStyle(.white)
+                .tint(.white)
+                .frame(minHeight: 28)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.leading, -5)
+                .focused($focusedComposerField, equals: label)
 
-                if let items = model.composerFieldAttachments[label], !items.isEmpty {
-                    fieldAttachmentChips(items, field: label)
-                        .padding(.bottom, 2)
-                }
+            if let items = model.composerFieldAttachments[label], !items.isEmpty {
+                fieldAttachmentChips(items, field: label)
+                    .padding(.bottom, 2)
             }
-            .padding(EdgeInsets(top: 6, leading: 12, bottom: 22, trailing: 12))
-            .frame(maxWidth: .infinity, alignment: .leading)
 
-            fieldPlusButton(field: label)
-                .padding(EdgeInsets(top: 0, leading: 8, bottom: 4, trailing: 0))
+            if bottomStrip {
+                composerControlStrip
+                    .padding(.top, 6)
+            }
         }
+        .padding(EdgeInsets(top: 6, leading: 12, bottom: 8, trailing: 12))
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.savyDeepNavy, in: Rectangle())
         .overlay(Rectangle().stroke(Theme.macRed, lineWidth: 3))
     }
 
-    /// Memo 20: "add a plus button in the bottom right of each one of
-    /// these and then there'll be a pop-up that will give me choices of
-    /// what to add as far as different files even plugins or skills."
-    private func fieldPlusButton(field: String) -> some View {
-        Menu {
-            Button("File…") { pickFieldAttachment(field: field, kind: .file) }
-            Button("Image…") { pickFieldAttachment(field: field, kind: .image) }
-            Menu("Skills") {
-                ForEach(model.workbenchCommunicationSkillTools, id: \.title) { tool in
-                    Button(tool.title) {
-                        model.addFieldAttachment(
-                            ComposerFieldAttachment(kind: .skill, label: tool.skillName ?? tool.title, url: nil),
-                            to: field
-                        )
+    /// The box the strip acts on -- the focused one, else the first.
+    private var actionField: String { focusedComposerField ?? "WHAT DO I WANT?" }
+
+    private func fieldBinding(_ field: String) -> Binding<String> {
+        switch field {
+        case "WHEN I AM...I LIKE TO": return $model.preferredApproach
+        case "DONE LOOKS LIKE...": return $model.doneCondition
+        default: return $model.draft
+        }
+    }
+
+    private func voiceField(_ field: String) -> ComposerVoiceField {
+        switch field {
+        case "WHEN I AM...I LIKE TO": return .preferredApproach
+        case "DONE LOOKS LIKE...": return .doneCondition
+        default: return .intent
+        }
+    }
+
+    /// Memo 22 (typed): "we'll put the send button on the far left, so
+    /// that's the arrow pointing up ... beside that will be the plus
+    /// button to add files and then beside that will be a microphone
+    /// icon ... and then the last thing would be the model that's being
+    /// used ... the exact model." Plus the heading/bullet/numbered
+    /// formatting buttons from the audio memo.
+    private var composerControlStrip: some View {
+        HStack(spacing: 10) {
+            Button { model.send() } label: {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 26, height: 26)
+                    .background(Theme.macRed, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .help("Send the delegation")
+
+            Button { showPlusMenu.toggle() } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(Theme.macRed)
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain)
+            .popover(isPresented: $showPlusMenu, arrowEdge: .bottom) { savyPlusMenu }
+
+            Button {
+                let field = actionField
+                let binding = fieldBinding(field)
+                voiceDictation.toggle(field: voiceField(field), currentText: binding.wrappedValue) { newText in
+                    binding.wrappedValue = newText
+                }
+            } label: {
+                Image(systemName: voiceDictation.activeField != nil ? "mic.fill" : "mic")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(voiceDictation.activeField != nil ? .white : Theme.macRed)
+                    .frame(width: 24, height: 24)
+                    .background(voiceDictation.activeField != nil ? Theme.macRed : .clear, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .help("Dictate into the selected box — words appear as you speak")
+
+            // The exact model, right beside the mic and kept dark --
+            // Adam: "I want it next to the microphone and I want it
+            // also dark and shaded ... I don't want this large amount
+            // of contrast so I can focus." (No reasoning-effort knob
+            // exists in the app yet -- nothing fake shown.)
+            Menu {
+                ForEach(Backend.allCases) { backend in
+                    Button {
+                        model.backend = backend
+                    } label: {
+                        if model.backend == backend {
+                            Label("\(backend.rawValue) · \(backend.defaultModelName)", systemImage: "checkmark")
+                        } else {
+                            Text("\(backend.rawValue) · \(backend.defaultModelName)")
+                        }
                     }
                 }
+            } label: {
+                Text("\(model.backend.rawValue) · \(model.backend.defaultModelName)")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.savyCard.opacity(0.38))
             }
-        } label: {
-            Image(systemName: "plus")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(Theme.macRed)
-                .frame(width: 20, height: 20)
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+
+            Rectangle().fill(Color.white.opacity(0.12)).frame(width: 1, height: 18)
+
+            formatButton("textformat.size", help: "Heading") { applyMarkdown(prefix: "## ", suffix: "") }
+            formatButton("list.bullet", help: "Bullet list") { applyMarkdown(prefix: "- ", suffix: "") }
+            formatButton("list.number", help: "Numbered list") { applyMarkdown(prefix: "1. ", suffix: "") }
+
+            Spacer()
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
+        .padding(.horizontal, 4)
+        .padding(.top, 2)
+    }
+
+    /// Memo 22 (audio): "When it opens, there needs to be more styling
+    /// ... reference the SAVY app ... the right background ... the right
+    /// font colors and styling. That makes that more enjoyable to press."
+    private var savyPlusMenu: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            savyMenuRow("doc", "File…") {
+                showPlusMenu = false
+                pickFieldAttachment(field: actionField, kind: .file)
+            }
+            savyMenuRow("photo", "Image…") {
+                showPlusMenu = false
+                pickFieldAttachment(field: actionField, kind: .image)
+            }
+            Rectangle().fill(Theme.macHair).frame(height: 1).padding(.vertical, 4)
+            Text("SKILLS")
+                .font(.system(size: 9, weight: .heavy))
+                .kerning(1.5)
+                .foregroundStyle(Theme.savyTertiaryText)
+                .padding(.horizontal, 10)
+            ForEach(model.workbenchCommunicationSkillTools, id: \.title) { tool in
+                savyMenuRow("wrench.and.screwdriver", tool.title) {
+                    showPlusMenu = false
+                    model.addFieldAttachment(
+                        ComposerFieldAttachment(kind: .skill, label: tool.skillName ?? tool.title, url: nil),
+                        to: actionField
+                    )
+                }
+            }
+        }
+        .padding(10)
+        .frame(width: 240)
+        .background(Theme.savyCard)
+    }
+
+    private func savyMenuRow(_ icon: String, _ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.macRed)
+                    .frame(width: 18)
+                Text(title)
+                    .font(Theme.savyRobotoMedium(13))
+                    .foregroundStyle(Theme.savyTabActive)
+                Spacer()
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 10)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func formatButton(_ icon: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.macRed)
+                .frame(width: 22, height: 22)
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
+    /// Applies markdown to the live selection in whichever box has the
+    /// keyboard -- TextEditor is NSTextView-backed, so the first
+    /// responder route edits the real selection, not a fake append.
+    private func applyMarkdown(prefix: String, suffix: String) {
+        guard let textView = NSApp.keyWindow?.firstResponder as? NSTextView else { return }
+        let range = textView.selectedRange()
+        let selected = (textView.string as NSString).substring(with: range)
+        let replacement = prefix + selected + suffix
+        if textView.shouldChangeText(in: range, replacementString: replacement) {
+            textView.replaceCharacters(in: range, with: replacement)
+            textView.didChangeText()
+        }
     }
 
     private func pickFieldAttachment(field: String, kind: ComposerFieldAttachment.Kind) {
