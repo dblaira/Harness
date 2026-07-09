@@ -344,6 +344,14 @@ public actor RunLedgerStore {
                 try db.create(index: "messages_on_sessionId", on: "messages", columns: ["sessionId"], ifNotExists: true)
             }
         }
+        migrator.registerMigration("v6-eval-result-artifact-path") { db in
+            let evalResultColumns = try db.columns(in: "eval_results").map(\.name)
+            if !evalResultColumns.contains("artifactPath") {
+                try db.alter(table: "eval_results") { t in
+                    t.add(column: "artifactPath", .text)
+                }
+            }
+        }
         return migrator
     }
 
@@ -501,8 +509,8 @@ private func insertTraceEvent(_ event: TraceEvent, db: Database) throws {
 
 private func insertEvalResult(_ result: EvalResult, db: Database) throws {
     try db.execute(
-        sql: "INSERT OR REPLACE INTO eval_results (id, runId, checkName, passed, detail) VALUES (?, ?, ?, ?, ?)",
-        arguments: [result.id, result.runId, result.checkName, result.passed, result.detail]
+        sql: "INSERT OR REPLACE INTO eval_results (id, runId, checkName, passed, detail, artifactPath) VALUES (?, ?, ?, ?, ?, ?)",
+        arguments: [result.id, result.runId, result.checkName, result.passed, result.detail, result.artifactPath]
     )
 }
 
@@ -667,7 +675,8 @@ private func mapEvalResult(_ row: Row) -> EvalResult {
         runId: row["runId"],
         checkName: row["checkName"],
         passed: row["passed"],
-        detail: row["detail"]
+        detail: row["detail"],
+        artifactPath: row["artifactPath"]
     )
 }
 

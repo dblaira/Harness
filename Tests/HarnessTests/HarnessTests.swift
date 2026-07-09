@@ -127,12 +127,20 @@ import OntologyKit
     #expect(rows.map(\.id) == ["DELEGATION-NOTEBOOKLM"])
     #expect(rows.first?.card.envelope.authorityLevel == .supporting)
     #expect(rows.first?.card.envelope.trustNote == "Self-declared trust_level accepted ignored; connector ceiling is supporting.")
+
+    // WO-N: the mirror image of the assertion above -- the pool keeps
+    // ONLY the source card, the delegation board keeps ONLY the
+    // opportunity. Same directory, same files, opposite filter.
+    let poolCards = try MacWorkbenchModel.loadSourcePoolCards(from: root)
+    #expect(poolCards.map(\.envelope.resource) == ["https://example.com/source"])
+    #expect(poolCards.first?.retrievedBy == "firecrawl-scrape")
 }
 
 @Test func workbenchCenterViewsIncludeDelegationQueue() {
-    #expect(WorkbenchCenterView.allCases.map(\.rawValue) == ["chat", "cockpit", "board"])
+    #expect(WorkbenchCenterView.allCases.map(\.rawValue) == ["chat", "cockpit", "board", "blueprint"])
     #expect(WorkbenchCenterView.cockpit.label == "Cockpit")
     #expect(WorkbenchCenterView.board.label == "Delegation")
+    #expect(WorkbenchCenterView.blueprint.label == "Blueprint")
 }
 
 @Test func delegationQueueActionRecordsShareBatchForMultiSelect() {

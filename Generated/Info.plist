@@ -22,6 +22,10 @@
 	<string>1</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Harness uses the microphone to let you dictate delegation fields instead of typing them.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Harness uses on-device speech recognition to turn what you say into text in the delegation composer.</string>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>

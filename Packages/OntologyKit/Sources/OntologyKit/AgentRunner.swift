@@ -560,7 +560,8 @@ public struct AgentRunner: Sendable {
         _ args: [String],
         timeout: TimeInterval = 90,
         includeStderrOnSuccess: Bool = false,
-        scrubSecretEnvironment: Bool = false
+        scrubSecretEnvironment: Bool = false,
+        environment: [String: String] = [:]
     ) throws -> String {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: launchPath)
@@ -574,6 +575,13 @@ public struct AgentRunner: Sendable {
         // env var, so the only robust defence is to remove the value.
         if scrubSecretEnvironment {
             env = Self.scrubbingSecretEnvironment(env)
+        }
+        // Explicit additions land AFTER scrubbing and the PATH override, so
+        // a caller-supplied var always wins and is never accidentally
+        // stripped as secret-shaped (e.g. WO-Q exporting ONTOLOGY_ACCEPTED_DIR
+        // to a nested xcodebuild pre-build script).
+        for (key, value) in environment {
+            env[key] = value
         }
         proc.environment = env
         let out = Pipe(); let err = Pipe()

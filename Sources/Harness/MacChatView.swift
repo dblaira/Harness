@@ -5,6 +5,7 @@ import OntologyKit
 struct MacChatView: View {
     let ontology: Ontology
     @StateObject private var model = MacWorkbenchModel()
+    @EnvironmentObject private var audioBriefPlayer: AudioBriefPlayer
     @State private var inspectorTab: WorkbenchInspectorTab = .authority
     @State private var isSidebarVisible = false
     @State private var isInspectorVisible = false
@@ -16,6 +17,10 @@ struct MacChatView: View {
     @State private var inspectorDragStartWidth: Double?
     @State private var isInspectorDetailPresented = false
     @State private var selectedOpportunityIDs = Set<String>()
+    /// WO-L: the UP NEXT card's row, locked once shown -- "never
+    /// reordered while visible" even if a higher-priority row scouts in
+    /// underneath it. Advances only when the locked row is gone.
+    @State private var upNextRowID: String?
     @State private var delegationEntryKind: MacSuiteEntryKind = .action
     @State private var isDelegationEntryFormPresented = false
     @State private var showingLinkSheet = false
@@ -42,6 +47,7 @@ struct MacChatView: View {
         .onAppear {
             normalizePanelWidths()
             model.updateOntology(ontology)
+            refreshUpNextLock()
         }
         .sheet(isPresented: $isInspectorDetailPresented) {
             expandedInspectorSheet
@@ -72,7 +78,20 @@ struct MacChatView: View {
         .onChange(of: model.searchText) { _, _ in Task { await model.searchSessions() } }
         .onChange(of: model.opportunityBoardRows.map(\.id)) { _, ids in
             selectedOpportunityIDs.formIntersection(Set(ids))
+            refreshUpNextLock()
         }
+    }
+
+    private func refreshUpNextLock() {
+        if let upNextRowID, model.opportunityBoardRows.contains(where: { $0.id == upNextRowID }) {
+            return
+        }
+        upNextRowID = opportunityBoardProjection.rows.first?.id
+    }
+
+    private var upNextRow: OpportunityBoardRow? {
+        guard let upNextRowID else { return nil }
+        return model.opportunityBoardRows.first { $0.id == upNextRowID }
     }
 
     private var currentLayout: HarnessWorkbenchLayoutState {
@@ -363,7 +382,10 @@ struct MacChatView: View {
             topBar
             centerViewContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            if centerView != .board && centerView != .chat {
+            // Blueprint carries its own composer on the canvas (the three
+            // bound fields) -- stacking the chat bar under it would both
+            // duplicate the surface and shrink the one-screen cockpit.
+            if centerView != .board && centerView != .chat && centerView != .blueprint {
                 delegateLabel
                 composer
             }
@@ -384,6 +406,8 @@ struct MacChatView: View {
             }
         case .board:
             delegationQueueView
+        case .blueprint:
+            MacBlueprintView(model: model)
         }
     }
 
@@ -887,6 +911,10 @@ struct MacChatView: View {
 
     private func delegationQueueListSurface(showAgent: Bool) -> some View {
         VStack(alignment: .leading, spacing: 6) {
+            if let row = upNextRow {
+                upNextCard(row)
+            }
+
             HStack(spacing: 12) {
                 Picker("Queue View", selection: opportunityBoardViewModeBinding) {
                     ForEach(OpportunityBoardViewMode.allCases) { mode in
@@ -1404,6 +1432,13 @@ struct MacChatView: View {
 
     private func pursueSelectedOpportunity() {
         guard selectedOpportunityRows.count == 1, let row = selectedOpportunityRows.first else { return }
+        pursue(row)
+    }
+
+    /// Shared by the multi-select verb bar and the UP NEXT card -- Pursue
+    /// primes the composer the same way regardless of which surface it
+    /// was pressed from.
+    private func pursue(_ row: OpportunityBoardRow) {
         let card = row.card
         model.recordOpportunityBoardAction(.pursue, rows: [row])
         model.draft = """
@@ -1413,6 +1448,101 @@ struct MacChatView: View {
         Agent: \(card.scoutID ?? "unknown")
         """
         centerViewRaw = WorkbenchCenterView.chat.rawValue
+    }
+
+    /// WO-L: the one decision visible by default -- the top-priority row,
+    /// locked in place (see refreshUpNextLock/upNextRowID) with the same
+    /// Pass/Hold/Bookmark/Pursue verbs as the multi-select bar, scoped to
+    /// just this row. The case-against dissent, when the scout wrote one,
+    /// renders as SavyDarkCard -- the one surface that is explicitly not
+    /// Adam's words.
+    /// Mockup: the dissent card sits BEHIND the pitch, overlapping its
+    /// top-right corner (`.dissent{position:absolute;right:0;top:34px;
+    /// z-index:1}` under the `.dcard{z-index:2}`) -- "binocular vision,"
+    /// two readings of one claim at once, not two cards stacked in a
+    /// column. ZStack + alignment reproduces that overlap in SwiftUI.
+    private func upNextCard(_ row: OpportunityBoardRow) -> some View {
+        ZStack(alignment: .topTrailing) {
+            if let caseAgainst = row.card.caseAgainst?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !caseAgainst.isEmpty {
+                upNextDissentCard(caseAgainst)
+                    .frame(maxWidth: 280)
+                    .offset(x: -8, y: 28)
+                    .zIndex(0)
+            }
+            upNextDeckCard(row)
+                .frame(maxWidth: 420)
+                .zIndex(1)
+        }
+        .padding(.bottom, 4)
+    }
+
+    private func upNextDissentCard(_ caseAgainst: String) -> some View {
+        SavyDarkCard(
+            badge: "CASE AGAINST — AGENT DISSENT",
+            badgeIcon: "exclamationmark.bubble",
+            title: caseAgainst
+        )
+        // Mockup `.dissent`: rotate(3.2deg), 4px border with a 10px
+        // crimson left accent -- SavyDarkCard's own accent bar already
+        // gives the left-edge crimson; this adds the tilt and a full
+        // border to match, without editing the shared component itself.
+        .overlay(Rectangle().stroke(Theme.savyCrimson, lineWidth: 4))
+        .rotationEffect(.degrees(3.2))
+        .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
+    }
+
+    private func upNextDeckCard(_ row: OpportunityBoardRow) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text("UP NEXT")
+                    .font(.system(size: 11, weight: .heavy))
+                    .tracking(1.8)
+                    .foregroundStyle(Theme.savyCrimson)
+                Spacer()
+                Text("priority \(formatPriority(row.card.priority))")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.savyTertiaryText)
+            }
+
+            Text(opportunityTitle(row))
+                .font(Theme.savyDisplaySerif(21))
+                .foregroundStyle(.black)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let description = row.card.envelope.description?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !description.isEmpty {
+                Text(description)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.savySecondaryText)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 8) {
+                opportunityActionButton("Pass", systemImage: "hand.raised", disabled: false) {
+                    model.recordOpportunityBoardAction(.pass, rows: [row])
+                }
+                opportunityActionButton("Hold", systemImage: "pause.circle", disabled: false) {
+                    model.recordOpportunityBoardAction(.hold, rows: [row])
+                }
+                opportunityActionButton("Bookmark", systemImage: "bookmark", disabled: false) {
+                    model.recordOpportunityBoardAction(.bookmark, rows: [row])
+                }
+                opportunityActionButton("Pursue", systemImage: "arrow.up.right.circle", disabled: false) {
+                    pursue(row)
+                }
+            }
+
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // Mockup `.dcard`: warm cream fill, 6px crimson border,
+        // cornerRadius 0, rotate(-1.6deg) -- was plain white/rounded/flat.
+        .background(Theme.macWarmCream, in: Rectangle())
+        .overlay(Rectangle().stroke(Theme.savyCrimson, lineWidth: 6))
+        .rotationEffect(.degrees(-1.6))
+        .shadow(color: .black.opacity(0.08), radius: 10, y: 4)
     }
 
     private func opportunityTitle(_ row: OpportunityBoardRow) -> String {
@@ -1457,8 +1587,8 @@ struct MacChatView: View {
             }
             .labelsHidden()
             .pickerStyle(.segmented)
-            .frame(width: 182)
-            .help("Switch between Chat, Cockpit, and the Delegation Queue")
+            .frame(width: 240)
+            .help("Switch between Chat, Cockpit, the Delegation Queue, and Blueprint")
 
             Spacer()
 
@@ -1483,6 +1613,7 @@ struct MacChatView: View {
             .help(model.backend.rawValue)
 
             backendStatusDot
+            killSwitchReadout
 
             if model.backend == .codex {
                 chatToolbarIcon("key.viewfinder", help: "Authorize") {
@@ -1543,7 +1674,7 @@ struct MacChatView: View {
             }
             .labelsHidden()
             .pickerStyle(.segmented)
-            .frame(width: 182)
+            .frame(width: 240)
 
             Picker("Backend", selection: $model.backend) {
                 ForEach(Backend.allCases) { backend in
@@ -1557,6 +1688,8 @@ struct MacChatView: View {
             backendStatusBand
                 .frame(minWidth: 68, maxWidth: 180, alignment: .leading)
                 .layoutPriority(2)
+
+            killSwitchReadout
 
             if model.backend == .codex {
                 subscriptionAccountBadge(
@@ -1634,6 +1767,30 @@ struct MacChatView: View {
         .help(readiness.actionNeeded ?? readiness.statusWord)
     }
 
+    /// WO-M: "Kill Switch readout also joins the top bar" -- lives in
+    /// both chatTopBar and workbenchTopBar since the design brief calls
+    /// for it "permanently in the bar above," regardless of which
+    /// center view is showing. Real tracked units (credits), not an
+    /// invented dollar figure -- the app doesn't measure spend in
+    /// dollars anywhere today.
+    private var killSwitchReadout: some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(model.delegationAgentWatchlistEnabled ? Theme.savyGreen : Theme.macRed.opacity(0.6))
+                .frame(width: 6, height: 6)
+            Text("\(model.delegationAgentDailySpend)/\(model.delegationAgentDailyCreditLimit)")
+                .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                .foregroundStyle(Theme.macInk.opacity(0.6))
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Theme.macEntry.opacity(0.28), in: Capsule())
+        .help(
+            "Kill Switch: \(model.delegationAgentDailySpend) of \(model.delegationAgentDailyCreditLimit) Firecrawl credits used today"
+                + (model.delegationAgentWatchlistEnabled ? "" : " — watchlist disabled")
+        )
+    }
+
     private func chatToolbarIcon(_ systemImage: String, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
@@ -1653,6 +1810,8 @@ struct MacChatView: View {
             return "Harness Cockpit"
         case .board:
             return "Delegation Queue"
+        case .blueprint:
+            return "Blueprint"
         }
     }
 
@@ -1749,6 +1908,7 @@ struct MacChatView: View {
             statusPill(detail.run.success ? "trace saved" : "failed saved", detail.run.success ? "checkmark.seal" : "exclamationmark.triangle")
             Spacer()
             if !HarnessTranscriptCopy.assistantAnswer(from: detail).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                playBriefButton(HarnessTranscriptCopy.assistantAnswer(from: detail))
                 copyTranscriptButton(
                     label: "Copy answer",
                     help: "Copy the entire Harness answer to the clipboard",
@@ -1798,6 +1958,31 @@ struct MacChatView: View {
         }
         .buttonStyle(.plain)
         .help(help)
+    }
+
+    /// WO-P: audio over the SAME text the "Copy answer" button copies --
+    /// no separate brief-generation step, no new wording.
+    private func playBriefButton(_ text: String) -> some View {
+        Button {
+            if audioBriefPlayer.isSpeaking {
+                audioBriefPlayer.stop()
+            } else {
+                audioBriefPlayer.speak(text)
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: audioBriefPlayer.isSpeaking ? "stop.fill" : "speaker.wave.2")
+                Text(audioBriefPlayer.isSpeaking ? "Stop" : "Play brief")
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(Theme.macInk.opacity(0.72))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Theme.macEntry.opacity(0.35), in: Capsule())
+            .overlay(Capsule().stroke(Theme.macHair, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .help("Speak this run's answer aloud")
     }
 
     private func chatTurnBubble(_ turn: ConversationTurn) -> some View {
@@ -2802,7 +2987,9 @@ struct MacChatView: View {
     }
 
     private var tracePanel: some View {
-        Group {
+        VStack(alignment: .leading, spacing: 10) {
+            buildScreenshotButton
+
             if let detail = model.selectedDetail {
                 ForEach(detail.traceEvents) { event in
                     inspectorBlock(
@@ -2813,17 +3000,74 @@ struct MacChatView: View {
                     )
                 }
                 ForEach(detail.evalResults) { result in
-                    inspectorBlock(
-                        title: result.checkName,
-                        subtitle: result.passed ? "passed" : "needs review",
-                        body: result.detail,
-                        status: result.passed ? "passed" : "review"
-                    )
+                    inspectorEvalResultBlock(result)
                 }
             } else {
                 emptyInspectorText("Run trace and eval checks appear here.")
             }
         }
+    }
+
+    /// WO-Q: "One builder, one screen, no parallelism" -- disabled while
+    /// a build is already running, not just visually pending.
+    private var buildScreenshotButton: some View {
+        Button {
+            model.captureBuildScreenshot()
+        } label: {
+            Label(
+                model.isCapturingBuildScreenshot ? "Building…" : "Build & Screenshot",
+                systemImage: model.isCapturingBuildScreenshot ? "hourglass" : "camera.viewfinder"
+            )
+            .font(.caption.weight(.semibold))
+            .labelStyle(.titleAndIcon)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(Theme.macEntry.opacity(0.28), in: RoundedRectangle(cornerRadius: 7))
+            .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.macHair, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .disabled(model.isCapturingBuildScreenshot)
+        .help("xcodebuild build + a real iOS Simulator screenshot, attached as this run's evidence artifact")
+    }
+
+    /// The evidence card the plan's acceptance test names: a real
+    /// simulator PNG, not just pass/fail text. inspectorBlock (used for
+    /// every other eval check) is text-only, so this is a separate
+    /// image-capable variant rather than adding an unused image param
+    /// to every existing caller.
+    private func inspectorEvalResultBlock(_ result: EvalResult) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(result.checkName)
+                    .font(.system(size: 12).weight(.semibold))
+                    .foregroundStyle(Theme.macInk)
+                    .lineLimit(2)
+                Spacer(minLength: 8)
+                statusBadge(result.passed ? "passed" : "needs review")
+            }
+            if let artifactPath = result.artifactPath, let nsImage = NSImage(contentsOfFile: artifactPath) {
+                Image(nsImage: nsImage)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxHeight: 180)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.macHair, lineWidth: 1))
+                Text(artifactPath)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(Theme.macInk.opacity(0.46))
+                    .textSelection(.enabled)
+                    .lineLimit(1)
+            }
+            Text(result.detail)
+                .font(.caption)
+                .foregroundStyle(Theme.macInk.opacity(0.72))
+                .textSelection(.enabled)
+                .lineLimit(8)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.macEntry.opacity(0.24), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
     }
 
     private var candidatePanel: some View {
@@ -3236,6 +3480,7 @@ enum WorkbenchCenterView: String, CaseIterable, Identifiable, Hashable {
     case chat
     case cockpit
     case board
+    case blueprint
 
     var id: String { rawValue }
 
@@ -3247,6 +3492,8 @@ enum WorkbenchCenterView: String, CaseIterable, Identifiable, Hashable {
             return "Cockpit"
         case .board:
             return "Delegation"
+        case .blueprint:
+            return "Blueprint"
         }
     }
 }

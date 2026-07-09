@@ -36,6 +36,33 @@ import Testing
     #expect(prompt.contains("Ship the fix"))
 }
 
+@Test func composedPromptCarriesIntentPreferredApproachAndDoneConditionVerbatim() {
+    let prompt = ComposerIntent.composedPrompt(
+        userText: "Ship the fix",
+        attachments: [],
+        intent: ComposerIntent(),
+        preferredApproach: "When I am heads-down I like to batch small fixes",
+        doneCondition: "Done looks like the build going green"
+    )
+
+    #expect(prompt.hasPrefix(DelegationContext.header))
+    #expect(prompt.contains("PreferredApproach: When I am heads-down I like to batch small fixes"))
+    #expect(prompt.contains("DoneCondition: Done looks like the build going green"))
+    #expect(prompt.contains("Ship the fix"))
+}
+
+@Test func composedPromptOmitsBlankPreferredApproachAndDoneCondition() {
+    let prompt = ComposerIntent.composedPrompt(
+        userText: "Ship the fix",
+        attachments: [],
+        intent: ComposerIntent(),
+        preferredApproach: "   ",
+        doneCondition: ""
+    )
+
+    #expect(prompt == "Ship the fix")
+}
+
 @Test func composerIntentPromptIncludesScheduleAndTagSignals() {
     var intent = ComposerIntent()
     intent.startDeferEnabled = true

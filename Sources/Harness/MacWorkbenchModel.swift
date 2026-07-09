@@ -1,5 +1,6 @@
 #if os(macOS)
 import AppKit
+import CryptoKit
 import Foundation
 import OntologyKit
 import UniformTypeIdentifiers
@@ -11,6 +12,16 @@ final class MacWorkbenchModel: ObservableObject {
     @Published var selectedDetail: HarnessRunDetail?
     @Published var chatThread: [ConversationTurn] = []
     @Published var draft = "" {
+        didSet { refreshRoutePlan() }
+    }
+    /// WO-J field 2 ("When I am...I like to") -- conn-004 "Delegation is
+    /// three sentences." Free text like `draft`, not a ComposerIntent
+    /// signal (those are menu/toggle choices, this is Adam's own sentence).
+    @Published var preferredApproach = "" {
+        didSet { refreshRoutePlan() }
+    }
+    /// WO-J field 3 ("Done looks like...").
+    @Published var doneCondition = "" {
         didSet { refreshRoutePlan() }
     }
     @Published var composerAttachments: [ComposerAttachment] = []
@@ -28,6 +39,10 @@ final class MacWorkbenchModel: ObservableObject {
     @Published var firecrawlAPIKey = ""
     @Published var hasFirecrawlAPIKey = false
     @Published var isRunning = false
+    /// WO-Q: a separate flag from isRunning -- a build-and-screenshot
+    /// run is not a chat send, and "one builder, no parallelism" only
+    /// needs to block a second build, not the whole app.
+    @Published private(set) var isCapturingBuildScreenshot = false
     @Published var status = "Ledger ready"
     @Published var searchText = ""
     @Published var chatSessions: [ChatSession] = []
@@ -37,8 +52,19 @@ final class MacWorkbenchModel: ObservableObject {
     @Published var showApprovalToast = false
     @Published var selectedTool: WorkbenchTool?
     @Published var reviewQueueCandidates: [MemoryCandidate] = []
+    /// The Step Rail's gate state. Starts locked before the first check
+    /// ever completes -- never assume open. See PatternGateChecker
+    /// (fails CLOSED; CLAUDE.md hard rule 1).
+    @Published private(set) var patternGateState = PatternGateState.locked(detail: "Not yet checked.")
     @Published var opportunityBoardRows: [OpportunityBoardRow] = []
     @Published var opportunityBoardLoadIssue: String?
+    /// WO-N: the unlabeled pool -- .sourceCard rows the delegation board
+    /// deliberately excludes (see loadOpportunityBoardRows).
+    @Published var sourcePoolCards: [OpportunitySourceCard] = []
+    /// WO-I: cards of "concepts currently holding my fascination"
+    /// (Adam, design-brief-ios-workbench.md) -- his words or verbatim
+    /// quoted sources only, sourced from watched .md files.
+    @Published var fascinationCards: [FascinationCard] = []
     @Published var connectors: [HarnessConnector] = HarnessConnectorRegistry.defaultConnectors()
     @Published var capabilities: [HarnessCapability] = HarnessCapabilityRegistry.defaultCapabilities()
     @Published var routePlan = HarnessExecutionRoutePlan(prompt: "", steps: [])
@@ -67,6 +93,13 @@ final class MacWorkbenchModel: ObservableObject {
     private var runTask: Task<Void, Never>?
     private var approvalToastTask: Task<Void, Never>?
 
+    private let patternEvidenceStore = PatternEvidenceStore()
+    private let patternGateChecker = PatternGateChecker()
+    /// One ongoing build for v1 -- no build picker exists yet (cut from
+    /// v1 scope). Stable across launches so ratings accumulate.
+    let patternBuildId = MacWorkbenchModel.loadOrCreatePatternBuildId()
+    private let buildScreenshotService = BuildScreenshotService()
+
     init() {
         let store: RunLedgerStore
         do {
@@ -87,7 +120,11 @@ final class MacWorkbenchModel: ObservableObject {
             await refreshSessions()
             await refreshReviewQueue()
             refreshOpportunityBoard()
+            refreshSourcePool()
             refreshConnectors()
+            await refreshPatternGate()
+            refreshFascinationCards()
+            await refreshFleetLedger()
         }
     }
 
@@ -128,6 +165,8 @@ final class MacWorkbenchModel: ObservableObject {
         currentSessionId = nil
         sessionSearchHits = []
         draft = ""
+        preferredApproach = ""
+        doneCondition = ""
         composerAttachments = []
         composerIntent = ComposerIntent()
         searchText = ""
@@ -326,6 +365,183 @@ final class MacWorkbenchModel: ObservableObject {
         return OpportunityBoardDeduper().deduplicate(cards)
     }
 
+    // MARK: - Sources pool (WO-N)
+
+    func refreshSourcePool() {
+        do {
+            sourcePoolCards = try Self.loadSourcePoolCards(from: Self.defaultOpportunityBoardDirectory())
+        } catch {
+            sourcePoolCards = []
+        }
+    }
+
+    /// WO-N: "Stop discarding .sourceCard rows" -- loadOpportunityBoardRows
+    /// above deliberately keeps ONLY .opportunity (source files must not
+    /// become delegation items, per its own test). This is the mirror:
+    /// same watched folder, same parser, keeps ONLY .sourceCard.
+    nonisolated static func loadSourcePoolCards(
+        from directory: URL,
+        fileManager: FileManager = .default
+    ) throws -> [OpportunitySourceCard] {
+        guard fileManager.fileExists(atPath: directory.path) else { return [] }
+        guard let enumerator = fileManager.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else { return [] }
+
+        let parser = OpportunityCardParser()
+        let validator = OpportunityCardValidator()
+        var cards: [OpportunitySourceCard] = []
+
+        for case let file as URL in enumerator {
+            guard file.pathExtension.lowercased() == "md" else { continue }
+            guard (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+            let markdown = try String(contentsOf: file, encoding: .utf8)
+            guard case let .sourceCard(card) = try? parser.parse(markdown: markdown, source: file.path),
+                  validator.validate(card).passed
+            else { continue }
+            cards.append(card)
+        }
+
+        return cards
+    }
+
+    /// Paste or drop a link into the pool -- writes a new source_card
+    /// .md file into the same watched Delegations folder the scout
+    /// already writes to, so it appears through the normal load path.
+    /// No title, no folder picker: recognition-only capture.
+    func captureSourcePoolLink(_ url: URL) {
+        writeSourcePoolCard(resource: url.absoluteString, retrievedBy: "adam-paste")
+    }
+
+    /// Drop a local file (an image dragged from Finder, etc.) -- copies
+    /// it into a pool-assets folder next to the watched Delegations
+    /// folder so the capture survives even if the original moves, then
+    /// writes the source_card pointing at the copy.
+    func captureSourcePoolFile(_ localURL: URL) {
+        let assetsDirectory = Self.defaultOpportunityBoardDirectory().appendingPathComponent("pool-assets", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: assetsDirectory, withIntermediateDirectories: true)
+            let ext = localURL.pathExtension.isEmpty ? "bin" : localURL.pathExtension
+            let destination = assetsDirectory.appendingPathComponent("\(UUID().uuidString).\(ext)")
+            try FileManager.default.copyItem(at: localURL, to: destination)
+            writeSourcePoolCard(resource: destination.absoluteString, retrievedBy: "adam-drop")
+        } catch {
+            status = "Couldn't capture dropped file: \(error.localizedDescription)"
+        }
+    }
+
+    private func writeSourcePoolCard(resource: String, retrievedBy: String) {
+        let directory = Self.defaultOpportunityBoardDirectory()
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let contentHash = Self.sha256Hex(resource)
+            let markdown = """
+            ---
+            type: source_card
+            resource: \(resource)
+            retrieved_by: \(retrievedBy)
+            content_hash: \(contentHash)
+            ---
+
+            """
+            let destination = directory.appendingPathComponent("pool-\(contentHash.prefix(12)).md")
+            try markdown.write(to: destination, atomically: true, encoding: .utf8)
+            refreshSourcePool()
+            status = "Captured into the sources pool."
+        } catch {
+            status = "Couldn't capture into the sources pool: \(error.localizedDescription)"
+        }
+    }
+
+    nonisolated private static func sha256Hex(_ text: String) -> String {
+        let digest = SHA256.hash(data: Data(text.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    // MARK: - FASCINATION carousel (WO-I)
+
+    func refreshFascinationCards() {
+        do {
+            fascinationCards = try Self.loadFascinationCards(from: Self.defaultFascinationsDirectory())
+        } catch {
+            fascinationCards = []
+        }
+    }
+
+    nonisolated static func defaultFascinationsDirectory() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Documents", isDirectory: true)
+            .appendingPathComponent("Harness", isDirectory: true)
+            .appendingPathComponent("Fascinations", isDirectory: true)
+    }
+
+    /// Same watched-folder pattern as loadOpportunityBoardRows, kept as
+    /// its own small parser rather than reusing OpportunityCardParser --
+    /// a fascination card is just a verbatim quote + attribution + date,
+    /// not the delegation-linked OpportunitySourceCard schema (WO-N).
+    nonisolated static func loadFascinationCards(
+        from directory: URL,
+        fileManager: FileManager = .default
+    ) throws -> [FascinationCard] {
+        guard fileManager.fileExists(atPath: directory.path) else { return [] }
+        guard let enumerator = fileManager.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else { return [] }
+
+        var cards: [FascinationCard] = []
+        for case let file as URL in enumerator {
+            guard file.pathExtension.lowercased() == "md" else { continue }
+            guard (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+            let markdown = try String(contentsOf: file, encoding: .utf8)
+            let (frontmatter, body) = Self.splitFrontmatter(markdown)
+            let quote = body.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !quote.isEmpty else { continue }
+
+            let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date()
+            let date = frontmatter["date"].flatMap(Self.fascinationDateFormatter.date(from:)) ?? modified
+            let attribution = frontmatter["attribution"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            cards.append(FascinationCard(
+                id: file.path,
+                quote: quote,
+                attribution: (attribution?.isEmpty == false ? attribution! : nil) ?? "ADAM",
+                date: date
+            ))
+        }
+        return cards.sorted { $0.date > $1.date }
+    }
+
+    /// Frontmatter is optional -- a card with none is still valid, its
+    /// whole body is the quote and it's attributed to ADAM by default
+    /// (recognition-only capture, no required fields to fill in first).
+    nonisolated private static func splitFrontmatter(_ markdown: String) -> (frontmatter: [String: String], body: String) {
+        let lines = markdown.components(separatedBy: "\n")
+        guard lines.first?.trimmingCharacters(in: .whitespaces) == "---",
+              let closingIndex = lines.dropFirst().firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "---" })
+        else {
+            return ([:], markdown)
+        }
+        var frontmatter: [String: String] = [:]
+        for line in lines[1..<closingIndex] {
+            guard let colonIndex = line.firstIndex(of: ":") else { continue }
+            let key = line[line.startIndex..<colonIndex].trimmingCharacters(in: .whitespaces).lowercased()
+            let value = line[line.index(after: colonIndex)...].trimmingCharacters(in: .whitespaces)
+            frontmatter[key] = value
+        }
+        let body = lines[(closingIndex + 1)...].joined(separator: "\n")
+        return (frontmatter, body)
+    }
+
+    nonisolated private static let fascinationDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        return formatter
+    }()
+
     func recordOpportunityBoardAction(_ action: OpportunityBoardAction, rows: [OpportunityBoardRow]) {
         let records = Self.opportunityBoardActionRecords(action: action, rows: rows)
         guard !records.isEmpty else { return }
@@ -337,11 +553,34 @@ final class MacWorkbenchModel: ObservableObject {
                 await MainActor.run {
                     self?.status = "\(action.label) recorded for \(records.count) delegation item\(records.count == 1 ? "" : "s")."
                 }
+                if action == .pursue {
+                    await self?.refreshFleetLedger()
+                }
             } catch {
                 await MainActor.run {
                     self?.status = "\(action.label) failed: \(error.localizedDescription)"
                 }
             }
+        }
+    }
+
+    // MARK: - Fleet ledger (WO-M)
+
+    /// WO-M: "shipped this week" seeded from Pursue ledger actions --
+    /// a v1 approximation (Pursue means "started," not "shipped"; there
+    /// is no dedicated shipped event yet) named explicitly as a stand-in
+    /// by the plan, not a claim of literal completion.
+    @Published private(set) var fleetLedgerShippedThisWeek = 0
+    @Published private(set) var delegationAgentDailySpend = MacWorkbenchModel.delegationAgentCreditsUsedToday()
+
+    func refreshFleetLedger() async {
+        delegationAgentDailySpend = Self.delegationAgentCreditsUsedToday()
+        do {
+            let records = try await ledger.listOpportunityBoardActions(limit: 500)
+            let weekAgo = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? .distantPast
+            fleetLedgerShippedThisWeek = records.filter { $0.action == .pursue && $0.createdAt >= weekAgo }.count
+        } catch {
+            fleetLedgerShippedThisWeek = 0
         }
     }
 
@@ -409,6 +648,7 @@ final class MacWorkbenchModel: ObservableObject {
                     self?.status = result.detail.run.finalAnswer
                 }
                 await self?.refreshRuns()
+                await self?.refreshFleetLedger()
             } catch {
                 await MainActor.run {
                     self?.isRunning = false
@@ -644,7 +884,9 @@ final class MacWorkbenchModel: ObservableObject {
         ComposerIntent.composedPrompt(
             userText: draft,
             attachments: composerAttachments,
-            intent: composerIntent
+            intent: composerIntent,
+            preferredApproach: preferredApproach,
+            doneCondition: doneCondition
         )
     }
 
@@ -1173,6 +1415,39 @@ final class MacWorkbenchModel: ObservableObject {
         }
     }
 
+    // MARK: - Build-and-screenshot spike (WO-Q)
+
+    /// "One builder, one screen, no parallelism" -- this guard is that
+    /// rule, not just a spinner.
+    func captureBuildScreenshot() {
+        guard !isCapturingBuildScreenshot else { return }
+        isCapturingBuildScreenshot = true
+        status = "Building and capturing a simulator screenshot — this can take a few minutes."
+        let service = buildScreenshotService
+        let outputDirectory = Self.defaultBuildEvidenceDirectory()
+        let ledger = ledger
+        Task { [weak self] in
+            let detail = await Task.detached(priority: .userInitiated) {
+                service.run(outputDirectory: outputDirectory)
+            }.value
+            try? await ledger.save(detail)
+            await MainActor.run {
+                guard let self else { return }
+                self.isCapturingBuildScreenshot = false
+                self.selectedDetail = detail
+                self.status = detail.evalResults.first?.detail ?? detail.run.finalAnswer
+            }
+            await self?.refreshRuns()
+        }
+    }
+
+    nonisolated static func defaultBuildEvidenceDirectory() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Documents", isDirectory: true)
+            .appendingPathComponent("Harness", isDirectory: true)
+            .appendingPathComponent("BuildEvidence", isDirectory: true)
+    }
+
     func decideReviewQueueCandidate(_ candidate: MemoryCandidate, decision: ReviewQueueDecision) {
         let reviewQueue = reviewQueue
         Task {
@@ -1192,6 +1467,33 @@ final class MacWorkbenchModel: ObservableObject {
                     self.status = error.localizedDescription
                 }
             }
+        }
+    }
+
+    /// Re-reads the gate. Fuseki unreachable AND no local accepted graph
+    /// -> stays locked; this is the only path callers should trust for
+    /// "is execution unlocked" (never infer it from ratings directly).
+    func refreshPatternGate() async {
+        patternGateState = await patternGateChecker.checkGate(buildId: patternBuildId)
+    }
+
+    func submitPatternRating(step: Int, rating: Int, evidenceNote: String) {
+        let store = patternEvidenceStore
+        let buildId = patternBuildId
+        Task {
+            do {
+                try await store.record(
+                    StepEvidenceRating(buildId: buildId, step: step, rating: rating, evidenceNote: evidenceNote)
+                )
+                await MainActor.run {
+                    self.status = "Step \(step) rated \(rating)."
+                }
+            } catch {
+                await MainActor.run {
+                    self.status = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                }
+            }
+            await refreshPatternGate()
         }
     }
 
@@ -1290,6 +1592,8 @@ final class MacWorkbenchModel: ObservableObject {
         refreshRoutePlan()
         let plannedRoute = routePlan
         draft = ""
+        preferredApproach = ""
+        doneCondition = ""
         composerAttachments = []
         routePlan = plannedRoute
         isRunning = true
@@ -1507,6 +1811,18 @@ final class MacWorkbenchModel: ObservableObject {
         return APIKeyStore.loadFirecrawlKey()
     }
 
+    private static let patternBuildIdKey = "Harness.patternBuildId"
+
+    private static func loadOrCreatePatternBuildId() -> String {
+        let defaults = UserDefaults.standard
+        if let existing = defaults.string(forKey: patternBuildIdKey), !existing.isEmpty {
+            return existing
+        }
+        let created = UUID().uuidString
+        defaults.set(created, forKey: patternBuildIdKey)
+        return created
+    }
+
     private static let delegationAgentWatchlistEnabledKey = "Harness.DelegationAgent.watchlistEnabled"
     private static let delegationAgentPerRunCreditLimitKey = "Harness.DelegationAgent.perRunCreditLimit"
     private static let delegationAgentDailyCreditLimitKey = "Harness.DelegationAgent.dailyCreditLimit"
@@ -1588,6 +1904,18 @@ struct NotebookLMSourceFile: Identifiable, Equatable {
         guard base.count > 36 else { return base }
         return String(base.prefix(33)) + "..."
     }
+}
+
+/// WO-I: one card of "concepts currently holding my fascination"
+/// (Adam, verbatim). `quote` is the .md file's body, untouched --
+/// content obeys the note rule, his words or verbatim quoted sources
+/// only. `attribution` defaults to "ADAM" for his own captured
+/// observations; an external source (a book, a paper) names itself.
+struct FascinationCard: Identifiable, Equatable {
+    let id: String
+    let quote: String
+    let attribution: String
+    let date: Date
 }
 
 enum WorkbenchInspectorTab: String, CaseIterable, Identifiable {

@@ -34,6 +34,10 @@ targets:
         LSApplicationCategoryType: public.app-category.productivity
         UILaunchScreen:
           UIColorName: ""
+        # WO-K: required by TCC before any mic/speech API call, or the
+        # app terminates immediately on first access attempt.
+        NSMicrophoneUsageDescription: "Harness uses the microphone to let you dictate delegation fields instead of typing them."
+        NSSpeechRecognitionUsageDescription: "Harness uses on-device speech recognition to turn what you say into text in the delegation composer."
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.adamblair.Harness
