@@ -244,10 +244,9 @@ public struct BuildScreenshotService: Sendable {
 
         // Same artifact-required contract for the recording. An empty
         // file (recording started but never finalized) is not evidence.
-        let videoSize = (try? fileManager.attributesOfItem(atPath: videoURL.path)[.size] as? Int) ?? 0
-        let videoExists = fileManager.fileExists(atPath: videoURL.path) && (videoSize ?? 0) > 0
-        // (attributesOfItem returns Any; the double-optional collapse above
-        // is deliberate -- missing file or unreadable size both read as 0.)
+        // Missing file or unreadable size both read as 0 and fail.
+        let videoSize = ((try? fileManager.attributesOfItem(atPath: videoURL.path)[.size]) as? Int) ?? 0
+        let videoExists = videoSize > 0
         let videoEval = EvalResult(
             runId: runID,
             checkName: "build-and-video",
