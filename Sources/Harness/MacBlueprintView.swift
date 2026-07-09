@@ -83,12 +83,9 @@ struct MacBlueprintView: View {
     /// .railbar -- HARNESS wordmark, breathing dot + current step,
     /// kill-switch spend readout in tan tabular figures.
     private var railbar: some View {
+        // No wordmark -- Adam: "What the fuck do I need to know that
+        // this is harness? I know what app I opened up."
         HStack(spacing: 14) {
-            Text("HARNESS")
-                .font(Theme.savyDisplaySerif(18, weight: .regular))
-                .kerning(0.5)
-                .foregroundStyle(Theme.savyCard)
-
             HStack(spacing: 6) {
                 if model.patternGateState.executionUnlocked {
                     SavyBreathingDot(color: Theme.savyGreen, diameter: 8)
@@ -242,21 +239,10 @@ struct MacBlueprintView: View {
     /// and a snap-scrolling row of 246px white cards shingled by
     /// margin-right:-14px; odd tilt -2.4deg, even +2deg +5px.
     private var fascinationBand: some View {
+        // No lead label -- the cards speak for themselves (Adam:
+        // "so much extra fucking words for no reason").
         HStack(alignment: .center, spacing: 0) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("FASCINATION")
-                    .font(.system(size: 10, weight: .heavy))
-                    .kerning(2)
-                    .foregroundStyle(Theme.macFaint)
-                Text("what holds it now")
-                    .font(.system(size: 10, design: .serif).italic())
-                    .foregroundStyle(Theme.macFaint)
-            }
-            .padding(.leading, 20)
-            .padding(.trailing, 14)
-
-            // Adam: "I'm not gonna read any directions. It should read
-            // me." Empty regions stay quiet -- never instructions.
+            // Empty regions stay quiet -- never instructions.
             if model.fascinationCards.isEmpty {
                 Spacer().frame(height: 34)
             } else {
@@ -372,13 +358,6 @@ struct MacBlueprintView: View {
                 }
                 .padding(.trailing, 8)
             }
-
-            // .pfoot -- the mockup's own caption, verbatim.
-            Text("New arrivals warm. The past cools but never leaves the canvas.")
-                .font(.system(size: 12, design: .serif).italic())
-                .foregroundStyle(Theme.macMuted)
-                .padding(.top, 14)
-                .padding(.trailing, 12)
 
             Spacer(minLength: 0)
         }

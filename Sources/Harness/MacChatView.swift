@@ -1673,13 +1673,8 @@ struct MacChatView: View {
                 isSidebarVisible.toggle()
             }
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(centerViewTitle)
-                    .font(Theme.recallSerif(20))
-                    .foregroundStyle(Theme.macBarInk)
-                    .lineLimit(1)
-            }
-
+            // No page title -- Adam: "I know what page I'm on. I don't
+            // need double reminders." The switcher pill already says it.
             Spacer()
 
             centerViewSwitcher
