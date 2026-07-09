@@ -69,6 +69,14 @@ enum Theme {
     static let macFaint = savyTertiaryText
     /// Muted text on paper.
     static let macMuted = savySecondaryText
+    /// v6 mockup tokens (`--coolink`, `--coolbg`, `--warm` in the
+    /// approved Blueprint mockup CSS) -- cool = locked/past/receded,
+    /// warm = rated/done. Not in design-vocabulary.md because that file
+    /// predates this mockup; these are the mockup's own literal hex
+    /// values, not invented ones.
+    static let macCoolInk = Color(hex: 0x5A6472)
+    static let macCoolBg = Color(hex: 0xE7E8E6)
+    static let macWarmCream = Color(hex: 0xF7E9CE)
 
     // Legacy suite tokens (delegation board, etc.)
     static let tan = recallTan

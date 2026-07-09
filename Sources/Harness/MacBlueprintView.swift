@@ -46,7 +46,15 @@ struct MacBlueprintView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Theme.macBg)
+        .background {
+            ZStack {
+                Theme.macBg
+                // Mockup: `.canvas{background-image:radial-gradient(rgba(8,23,45,.09)...)}`
+                // -- a faint navy dot field across the whole canvas, not
+                // just the Step Rail band.
+                SavyBendayGround(dotColor: Theme.savyDeepNavy, dotOpacity: 0.09, spacing: 10, dotDiameter: 2.2)
+            }
+        }
         .task { await model.refreshPatternGate() }
         .task { model.refreshFascinationCards() }
         .task { await model.refreshFleetLedger() }
@@ -261,9 +269,9 @@ struct MacBlueprintView: View {
                 placeholderNote("Paste a link or drop a file here — recognition-only, no names, no folders.")
                     .frame(maxWidth: .infinity, minHeight: 60, alignment: .center)
             } else {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 84, maximum: 84), spacing: 8)], spacing: 8) {
-                    ForEach(model.sourcePoolCards, id: \.contentHash) { card in
-                        sourcePoolCell(card)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 84, maximum: 84), spacing: 14)], spacing: 14) {
+                    ForEach(Array(model.sourcePoolCards.enumerated()), id: \.element.contentHash) { index, card in
+                        sourcePoolCell(card, index: index)
                     }
                 }
             }
@@ -298,8 +306,16 @@ struct MacBlueprintView: View {
         }
     }
 
-    private func sourcePoolCell(_ card: OpportunitySourceCard) -> some View {
-        Group {
+    /// Mockup: `.pc:nth-child(3n){rotate(3deg)}`,
+    /// `.pc:nth-child(3n+1){rotate(-2.6deg)}`,
+    /// `.pc:nth-child(3n+2){rotate(1.6deg) translateY(4px)}` -- a
+    /// 3-cycle so the grid reads as hand-placed, not a repeated tic.
+    private func sourcePoolCell(_ card: OpportunitySourceCard, index: Int) -> some View {
+        let cycle = index % 3
+        let tilt: Double = cycle == 0 ? 3 : (cycle == 1 ? -2.6 : 1.6)
+        let yOffset: CGFloat = cycle == 2 ? 4 : 0
+
+        return Group {
             if let thumbnail = poolThumbnail(for: card) {
                 Image(nsImage: thumbnail)
                     .resizable()
@@ -316,9 +332,11 @@ struct MacBlueprintView: View {
             }
         }
         .frame(width: 84, height: 84)
-        .background(Theme.macCardBright, in: RoundedRectangle(cornerRadius: 6))
-        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.macHair, lineWidth: 1))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .background(Theme.macCardBright, in: Rectangle())
+        .overlay(Rectangle().stroke(Theme.macRed, lineWidth: 4))
+        .clipShape(Rectangle())
+        .rotationEffect(.degrees(tilt))
+        .offset(y: yOffset)
         .help(card.envelope.resource ?? "")
     }
 
@@ -495,8 +513,8 @@ private struct PatternObservationalCell: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, minHeight: 128, alignment: .topLeading)
-        .background(Theme.macCardBright, in: Rectangle())
-        .overlay(Rectangle().stroke(Theme.macRed, lineWidth: 2))
+        .background(rating != nil ? Theme.macWarmCream : Theme.macCardBright, in: Rectangle())
+        .overlay(Rectangle().stroke(Theme.macRed, lineWidth: 4))
         .rotationEffect(.degrees(rating != nil ? tiltDegrees : 0))
     }
 
@@ -519,9 +537,13 @@ private struct PatternObservationalCell: View {
 }
 
 /// Cells 5-8: locked at 45% ink until PatternGateChecker says
-/// executionUnlocked — never derived any other way. WO-H ink:
-/// cornerRadius 0, crimson 2-3pt contour (thicker once unlocked),
-/// always display-only so the tilt is always safe to apply.
+/// executionUnlocked — never derived any other way. Matches the
+/// mockup's actual `.rail .cell.locked` treatment precisely: cool
+/// grey-blue fill + ink (not just dimmed crimson-on-cream), its own
+/// Benday dot texture in that same cool tone, uniform 4px crimson
+/// border regardless of state (the mockup never varies border weight
+/// by state -- only the fill and text color carry that meaning).
+/// Always display-only, so the tilt is always safe to apply.
 private struct PatternExecutionCell: View {
     let step: PatternStep
     let unlocked: Bool
@@ -542,11 +564,20 @@ private struct PatternExecutionCell: View {
                 .font(.caption2)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .foregroundStyle(Theme.macInk.opacity(unlocked ? 0.88 : 0.45))
+        .foregroundStyle(unlocked ? Theme.macInk.opacity(0.9) : Theme.macCoolInk)
         .padding(10)
         .frame(maxWidth: .infinity, minHeight: 100, alignment: .topLeading)
-        .background(Theme.macCardBright.opacity(unlocked ? 1 : 0.6), in: Rectangle())
-        .overlay(Rectangle().stroke(Theme.macRed.opacity(unlocked ? 0.9 : 0.5), lineWidth: unlocked ? 3 : 2))
+        .background {
+            if unlocked {
+                Theme.macWarmCream
+            } else {
+                ZStack {
+                    Theme.macCoolBg
+                    SavyBendayGround(dotColor: Theme.macCoolInk, dotOpacity: 0.3, spacing: 7, dotDiameter: 2.2)
+                }
+            }
+        }
+        .overlay(Rectangle().stroke(Theme.macRed, lineWidth: 4))
         .rotationEffect(.degrees(tiltDegrees))
     }
 }

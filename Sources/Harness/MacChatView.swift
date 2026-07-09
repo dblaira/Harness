@@ -1453,7 +1453,43 @@ struct MacChatView: View {
     /// just this row. The case-against dissent, when the scout wrote one,
     /// renders as SavyDarkCard -- the one surface that is explicitly not
     /// Adam's words.
+    /// Mockup: the dissent card sits BEHIND the pitch, overlapping its
+    /// top-right corner (`.dissent{position:absolute;right:0;top:34px;
+    /// z-index:1}` under the `.dcard{z-index:2}`) -- "binocular vision,"
+    /// two readings of one claim at once, not two cards stacked in a
+    /// column. ZStack + alignment reproduces that overlap in SwiftUI.
     private func upNextCard(_ row: OpportunityBoardRow) -> some View {
+        ZStack(alignment: .topTrailing) {
+            if let caseAgainst = row.card.caseAgainst?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !caseAgainst.isEmpty {
+                upNextDissentCard(caseAgainst)
+                    .frame(maxWidth: 280)
+                    .offset(x: -8, y: 28)
+                    .zIndex(0)
+            }
+            upNextDeckCard(row)
+                .frame(maxWidth: 420)
+                .zIndex(1)
+        }
+        .padding(.bottom, 4)
+    }
+
+    private func upNextDissentCard(_ caseAgainst: String) -> some View {
+        SavyDarkCard(
+            badge: "CASE AGAINST — AGENT DISSENT",
+            badgeIcon: "exclamationmark.bubble",
+            title: caseAgainst
+        )
+        // Mockup `.dissent`: rotate(3.2deg), 4px border with a 10px
+        // crimson left accent -- SavyDarkCard's own accent bar already
+        // gives the left-edge crimson; this adds the tilt and a full
+        // border to match, without editing the shared component itself.
+        .overlay(Rectangle().stroke(Theme.savyCrimson, lineWidth: 4))
+        .rotationEffect(.degrees(3.2))
+        .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
+    }
+
+    private func upNextDeckCard(_ row: OpportunityBoardRow) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Text("UP NEXT")
@@ -1495,21 +1531,15 @@ struct MacChatView: View {
                 }
             }
 
-            if let caseAgainst = row.card.caseAgainst?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !caseAgainst.isEmpty {
-                SavyDarkCard(
-                    badge: "CASE AGAINST — AGENT DISSENT",
-                    badgeIcon: "exclamationmark.bubble",
-                    title: caseAgainst
-                )
-            }
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.savyCrimson.opacity(0.3), lineWidth: 1))
+        // Mockup `.dcard`: warm cream fill, 6px crimson border,
+        // cornerRadius 0, rotate(-1.6deg) -- was plain white/rounded/flat.
+        .background(Theme.macWarmCream, in: Rectangle())
+        .overlay(Rectangle().stroke(Theme.savyCrimson, lineWidth: 6))
+        .rotationEffect(.degrees(-1.6))
         .shadow(color: .black.opacity(0.08), radius: 10, y: 4)
-        .padding(.bottom, 4)
     }
 
     private func opportunityTitle(_ row: OpportunityBoardRow) -> String {
