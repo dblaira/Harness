@@ -346,26 +346,45 @@ final class MacWorkbenchModel: ObservableObject {
         }
     }
 
+    /// Phone captures, kept OUT of the board/map -- Adam: "that map ...
+    /// That's where I go to take an idea I want to really think about
+    /// ... some of those ideas might not be that big deal ... I just
+    /// needed to capture it in the moment and then I come back when
+    /// I'm calm." They land on the left, below the pool jumble, until
+    /// he works them or archives them.
+    @Published private(set) var phoneArrivals: [OpportunityBoardRow] = []
+
     func refreshOpportunityBoard() {
         do {
-            var rows = try Self.loadOpportunityBoardRows(from: Self.defaultOpportunityBoardDirectory())
-            // Adam's list #7: merge in whatever his iPhone apps dropped
-            // into the shared iCloud pocket ("I'm out away from my
-            // computer and I have a thought ... transfer automatically
-            // to the harness app"). Missing container = local-only, no
-            // error -- the pocket is additive, never a gate.
-            if let phoneDrop = Self.phoneCaptureDelegationsDirectory() {
-                Self.downloadUbiquitousFiles(in: phoneDrop)
-                let phoneRows = (try? Self.loadOpportunityBoardRows(from: phoneDrop)) ?? []
-                let existingIDs = Set(rows.map(\.id))
-                rows.append(contentsOf: phoneRows.filter { !existingIDs.contains($0.id) })
-            }
-            opportunityBoardRows = rows
+            opportunityBoardRows = try Self.loadOpportunityBoardRows(from: Self.defaultOpportunityBoardDirectory())
             opportunityBoardLoadIssue = nil
         } catch {
             opportunityBoardRows = []
             opportunityBoardLoadIssue = error.localizedDescription
         }
+        if let phoneDrop = Self.phoneCaptureDelegationsDirectory() {
+            Self.downloadUbiquitousFiles(in: phoneDrop)
+            let rows = (try? Self.loadOpportunityBoardRows(from: phoneDrop)) ?? []
+            // The recursive loader also walks Archive/ -- archived
+            // captures stay stored ("I don't delete it. I just archive
+            // it") but leave the canvas.
+            phoneArrivals = rows.filter { !$0.card.envelope.source.contains("/Archive/") }
+        } else {
+            phoneArrivals = []
+        }
+    }
+
+    /// Archive, never delete: the file moves to Archive/ inside the
+    /// shared pocket and the card leaves the arrivals stack.
+    func archivePhoneArrival(_ row: OpportunityBoardRow) {
+        let path = row.card.envelope.source
+        guard FileManager.default.fileExists(atPath: path),
+              let dir = Self.phoneCaptureDelegationsDirectory() else { return }
+        let archive = dir.appendingPathComponent("Archive", isDirectory: true)
+        try? FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
+        let destination = archive.appendingPathComponent(URL(fileURLWithPath: path).lastPathComponent)
+        try? FileManager.default.moveItem(at: URL(fileURLWithPath: path), to: destination)
+        refreshOpportunityBoard()
     }
 
     /// Documents/Delegations inside the suite's shared iCloud container.

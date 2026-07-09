@@ -354,6 +354,19 @@ struct MacBlueprintView: View {
                 .padding(.trailing, 8)
             }
 
+            // Phone arrivals -- what he captured out in the world,
+            // waiting below the jumble for a calm look. Right-click to
+            // archive (never delete); nothing here feeds the map.
+            if !model.phoneArrivals.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(model.phoneArrivals.enumerated()), id: \.element.id) { index, row in
+                        phoneArrivalCard(row, index: index)
+                    }
+                }
+                .padding(.top, 16)
+                .padding(.trailing, 8)
+            }
+
             Spacer(minLength: 0)
         }
         .padding(.leading, 16)
@@ -477,6 +490,31 @@ struct MacBlueprintView: View {
 
     private func poolKicker(_ card: OpportunitySourceCard) -> String {
         card.retrievedBy.isEmpty ? "SOURCE" : card.retrievedBy.uppercased()
+    }
+
+    /// One phone capture: warm, tilted like the jumble above it, the
+    /// app it came from as the kicker. Right-click -> Archive.
+    private func phoneArrivalCard(_ row: OpportunityBoardRow, index: Int) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text((row.card.app?.rawValue ?? "PHONE").uppercased())
+                .font(.system(size: 10, weight: .heavy))
+                .kerning(1.5)
+                .foregroundStyle(Theme.macRed)
+            Text(deckTitle(row))
+                .font(.system(size: 11.5))
+                .foregroundStyle(Theme.macInk)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(Theme.macWarmCream, in: Rectangle())
+        .overlay(Rectangle().stroke(Theme.macRed, lineWidth: 4))
+        .rotationEffect(.degrees(index.isMultiple(of: 2) ? -1.6 : 1.8))
+        .contextMenu {
+            Button("Archive") { model.archivePhoneArrival(row) }
+        }
+        .help(row.card.body)
     }
 
     /// Warm for the first week, cool after -- from the card's own
