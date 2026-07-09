@@ -255,12 +255,10 @@ struct MacBlueprintView: View {
             .padding(.leading, 20)
             .padding(.trailing, 14)
 
+            // Adam: "I'm not gonna read any directions. It should read
+            // me." Empty regions stay quiet -- never instructions.
             if model.fascinationCards.isEmpty {
-                Text("Drop a quote .md file in ~/Documents/Harness/Fascinations — its body becomes the card, verbatim.")
-                    .font(.caption)
-                    .foregroundStyle(Theme.macFaint)
-                    .padding(.vertical, 10)
-                Spacer()
+                Spacer().frame(height: 34)
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(alignment: .top, spacing: -14) {
@@ -365,10 +363,7 @@ struct MacBlueprintView: View {
     private var sourcesPoolColumn: some View {
         VStack(alignment: .leading, spacing: 0) {
             if model.sourcePoolCards.isEmpty {
-                Text("Paste a link or drop a file here — recognition-only, no names, no folders.")
-                    .font(.caption)
-                    .foregroundStyle(Theme.macFaint)
-                    .padding(.trailing, 12)
+                Spacer().frame(height: 34)
             } else {
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 2), GridItem(.flexible(), spacing: 2)], spacing: 2) {
                     ForEach(Array(model.sourcePoolCards.enumerated()), id: \.element.contentHash) { index, card in
@@ -663,10 +658,7 @@ struct MacBlueprintView: View {
                     }
                 }
             } else {
-                Text("UP NEXT fills in as the delegation queue does — nothing is waiting on you right now.")
-                    .font(.system(size: 12, design: .serif).italic())
-                    .foregroundStyle(Theme.macMuted)
-                    .frame(minHeight: 80)
+                Spacer().frame(minHeight: 80)
             }
         }
         .padding(12)
@@ -973,9 +965,7 @@ struct MacBlueprintView: View {
                 }
                 .frame(height: 148)
             } else {
-                Text("No delegation items yet — the map fills in as the queue does.")
-                    .font(.caption)
-                    .foregroundStyle(Theme.macFaint)
+                Spacer().frame(height: 60)
             }
         }
     }
