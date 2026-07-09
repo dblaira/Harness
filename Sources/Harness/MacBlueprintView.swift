@@ -4,351 +4,392 @@ import SwiftUI
 import OntologyKit
 import UniformTypeIdentifiers
 
-/// Shell for the v6-mockup cockpit screen (WO-F/WO-G/WO-H/WO-I). Five
-/// regions per docs/design-brief-ios-workbench.md: Step Rail, Sources
-/// pool, Delegate composer, Organize, Ledger strip -- plus the
-/// FASCINATION carousel, added later directly under the Step Rail
-/// (Adam, verbatim: "I could envision another layer below the Adam
-/// Pattern boxes... a carousel feature may be the answer to how it's
-/// presented"). The Step Rail is live, bound to PatternGateChecker
-/// (fail-closed), and carries the v6 ink (Benday tan band, crimson
-/// contours, cornerRadius 0, one breathing dot). The four original
-/// placeholder regions stay plain scaffolding until their own work
-/// orders — the ink is not yet a whole-screen retrofit. No local copy
-/// of the v6 mockup artifact exists in this repo to diff against
-/// pixel-for-pixel; this is a mechanical read of the written spec.
+/// The v6-mockup cockpit, laid out as the approved artifact actually
+/// renders (claude.ai/code/artifact/1bb1be7b...): one full-height canvas
+/// -- navy railbar, ONE row of 8 rail cells, tilted shingled FASCINATION
+/// band, then a three-column body (sources pool 24% / center / organize
+/// 29%) over a 3D-tilted navy fleet ledger -- not a vertical stack of
+/// labeled sections. Every geometry number below (border widths, tilts,
+/// column fractions, the 16-degree ledger plane) is the mockup's own CSS
+/// value, cited inline. "The loop" detail cards sit below the fold as
+/// the rail's tap-to-jump target, same as the artifact page.
 struct MacBlueprintView: View {
     @ObservedObject var model: MacWorkbenchModel
+    @EnvironmentObject private var audioBriefPlayer: AudioBriefPlayer
 
-    /// The mockup's one real click-interaction (its `#rail .cell` ->
-    /// `#loop .stage` script): tapping a Step Rail cell jumps to and
-    /// highlights its matching detail card in `loopSection` below. Adam,
-    /// after we shipped a static rail: "it actually had interactivity to
-    /// it" — this was the missing piece.
+    /// Rail tap -> scroll to + highlight the matching loop card below
+    /// (the artifact's one real click interaction).
     @State private var highlightedStepID: Int?
+    /// Which observational cell is showing its rating popover.
+    @State private var ratingPopoverStep: Int?
+    /// WO-L lock, mirrored from MacChatView (private there): once shown,
+    /// the UP NEXT row is never swapped while it still exists.
+    @State private var upNextRowID: String?
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    header
-                    stepRail(jumpTo: { stepID in
-                        highlightedStepID = stepID
-                        withAnimation(.easeInOut(duration: 0.4)) {
-                            proxy.scrollTo(stepID, anchor: .top)
-                        }
-                    })
-                    loopSection
-                    fascinationCarousel
-                    blueprintSection(title: "Sources", icon: "tray") {
-                        sourcesPool
-                    }
-                    blueprintSection(title: "Delegate", icon: "text.cursor") {
-                        placeholderNote("The three fields (Intent/PreferredApproach/DoneCondition) are live in the Chat composer (WO-J) — embedding them here is still open.")
-                    }
-                    blueprintSection(title: "Organize", icon: "square.stack.3d.up") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            mindMapTree
-                            placeholderNote("Slide Deck / Audio are still open — read-only Mind Map tree only, per the plan (\"navigation takeover only after it survives daily use\").")
-                        }
-                    }
-                    blueprintSection(title: "Ledger", icon: "chart.bar") {
-                        fleetLedger
+        GeometryReader { geo in
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: 0) {
+                        cockpitCanvas
+                            .frame(height: max(geo.size.height, 560))
+                            .clipped()
+                        loopSection
                     }
                 }
-                .padding(22)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .onAppear { jumpToLoop = { stepID in
+                    highlightedStepID = stepID
+                    withAnimation(.easeInOut(duration: 0.4)) {
+                        proxy.scrollTo(stepID, anchor: .center)
+                    }
+                } }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background {
-                ZStack {
-                    Theme.macBg
-                    // Mockup: `.canvas{background-image:radial-gradient(rgba(8,23,45,.09)...)}`
-                    // -- a faint navy dot field across the whole canvas, not
-                    // just the Step Rail band.
-                    SavyBendayGround(dotColor: Theme.savyDeepNavy, dotOpacity: 0.09, spacing: 10, dotDiameter: 2.2)
-                }
-            }
-            .task { await model.refreshPatternGate() }
-            .task { model.refreshFascinationCards() }
-            .task { await model.refreshFleetLedger() }
-            .task { model.refreshSourcePool() }
         }
+        .background(Theme.macBg)
+        .task { await model.refreshPatternGate() }
+        .task { model.refreshFascinationCards() }
+        .task { await model.refreshFleetLedger() }
+        .task { model.refreshSourcePool() }
+        .onAppear { refreshUpNextLock() }
+        .onChange(of: model.opportunityBoardRows.map(\.id)) { refreshUpNextLock() }
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Blueprint")
-                .font(.system(.title2, design: .serif).weight(.semibold))
-                .foregroundStyle(Theme.macInk)
+    /// Set in onAppear so rail cells (built outside ScrollViewReader's
+    /// closure) can trigger the proxy scroll.
+    @State private var jumpToLoop: (Int) -> Void = { _ in }
 
-            Text("Shell only — the sources pool, composer, organize panel, and ledger arrive in later work orders.")
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.macInk.opacity(0.68))
-                .fixedSize(horizontal: false, vertical: true)
+    // MARK: - The cockpit canvas (one viewport-height screen)
+
+    private var cockpitCanvas: some View {
+        VStack(spacing: 0) {
+            railbar
+            stepRailRow
+            fascinationBand
+                .zIndex(2)
+            canvasBody
+                .zIndex(1)
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.macEntry.opacity(0.22), in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
-    }
-
-    // MARK: - Step Rail (WO-G gate wiring, WO-H ink)
-
-    /// The Step Rail's own container, not the shared `blueprintSection`:
-    /// tan band + Benday ground per the design brief ("Step Rail (top,
-    /// tan band)"), crimson 2.5pt contour, cornerRadius 0 — the v6
-    /// mechanical pass. The other four regions keep the plain scaffold
-    /// treatment until their own work orders reach them.
-    private func stepRail(jumpTo: @escaping (Int) -> Void) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: "list.number")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Theme.macRed)
-                    .frame(width: 16)
-                Text("Step Rail")
-                    .font(.system(size: 13).weight(.bold))
-                    .foregroundStyle(Theme.macInk.opacity(0.78))
-                Spacer()
-                Text("tap a step to jump to it below")
-                    .font(.caption2)
-                    .foregroundStyle(Theme.macInk.opacity(0.4))
-            }
-
-            gateStatusLine
-
-            HStack(alignment: .top, spacing: 8) {
-                ForEach(observationalSteps) { step in
-                    PatternObservationalCell(
-                        step: step,
-                        rating: model.patternGateState.ratings[step.id],
-                        onSubmit: { rating, note in
-                            model.submitPatternRating(step: step.id, rating: rating, evidenceNote: note)
-                        }
-                    )
-                    // Only jump once the cell is display-only (rated) --
-                    // a tap gesture over the live Stepper/TextField/Button
-                    // form would steal taps meant for those controls.
-                    .onTapGesture {
-                        if model.patternGateState.ratings[step.id] != nil { jumpTo(step.id) }
-                    }
-                }
-            }
-
-            HStack(alignment: .top, spacing: 8) {
-                ForEach(executionSteps) { step in
-                    PatternExecutionCell(step: step, unlocked: model.patternGateState.executionUnlocked)
-                        .onTapGesture { jumpTo(step.id) }
-                }
-            }
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
         .background {
             ZStack {
-                Theme.macTan.opacity(0.30)
-                SavyBendayGround()
+                Theme.macBg
+                // .canvas{radial-gradient(rgba(8,23,45,.09) 1.1px...) 10px}
+                SavyBendayGround(dotColor: Theme.savyDeepNavy, dotOpacity: 0.09, spacing: 10, dotDiameter: 2.2)
             }
         }
-        .clipShape(Rectangle())
-        .overlay(Rectangle().stroke(Theme.macRed, lineWidth: 2.5))
     }
 
-    // MARK: - The loop (jump target for Step Rail taps)
+    // MARK: - Railbar (navy status bar)
 
-    /// Mockup's `#loop .stage` cards -- the mockup's own copy, ported
-    /// verbatim from the approved v6 artifact, not written fresh here.
-    /// Two rows of four, same 1/2/3/4 + 5/6/7/8 split as the rail above.
-    private var loopSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: "arrow.triangle.2.circlepath")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Theme.macRed.opacity(0.9))
-                    .frame(width: 16)
-                Text("The loop")
-                    .font(.system(size: 13).weight(.bold))
-                    .foregroundStyle(Theme.macInk.opacity(0.78))
-                Spacer()
-            }
-            Text("SPEAK SENTENCES · RATE FOUR NUMBERS · PRESS CONTINUE — THAT IS THE WHOLE JOB")
-                .font(.system(size: 10).weight(.bold))
-                .tracking(0.6)
-                .foregroundStyle(Theme.macInk.opacity(0.4))
+    /// .railbar -- HARNESS wordmark, breathing dot + current step,
+    /// kill-switch spend readout in tan tabular figures.
+    private var railbar: some View {
+        HStack(spacing: 14) {
+            Text("HARNESS")
+                .font(Theme.savyDisplaySerif(18, weight: .regular))
+                .kerning(0.5)
+                .foregroundStyle(Theme.savyCard)
 
-            HStack(alignment: .top, spacing: 8) {
-                ForEach(observationalSteps) { step in
-                    LoopStepDetailCard(step: step, detail: LoopStepCopy.detail(for: step.id), highlighted: highlightedStepID == step.id)
-                        .id(step.id)
+            HStack(spacing: 6) {
+                if model.patternGateState.executionUnlocked {
+                    SavyBreathingDot(color: Theme.savyGreen, diameter: 8)
+                } else {
+                    Circle().fill(Theme.macRed).frame(width: 8, height: 8)
                 }
+                Text(currentStepReadout)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(Theme.savyCard.opacity(0.92))
             }
-            HStack(alignment: .top, spacing: 8) {
-                ForEach(executionSteps) { step in
-                    LoopStepDetailCard(step: step, detail: LoopStepCopy.detail(for: step.id), highlighted: highlightedStepID == step.id)
-                        .id(step.id)
+
+            Spacer()
+
+            Text("Kill Switch  \(model.delegationAgentDailySpend) of \(model.delegationAgentDailyCreditLimit) today")
+                .font(.system(size: 12.5).monospacedDigit())
+                .foregroundStyle(Theme.macTan)
+                .help("Firecrawl credits used today vs the daily Kill Switch cap")
+
+            Button {
+                Task { await model.refreshPatternGate() }
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.caption2)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Theme.savyCard.opacity(0.6))
+            .help(model.patternGateState.detail)
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 16)
+        .background(Theme.savyDeepNavy)
+    }
+
+    private var currentStepReadout: String {
+        if let step = currentStep {
+            return "Step \(step.id) — \(step.title)"
+        }
+        return model.patternGateState.executionUnlocked ? "unlocked" : "locked"
+    }
+
+    /// The "cur" cell: first unrated observational step; once all four
+    /// are rated and the gate opens, Step 5 (the build) is current.
+    private var currentStep: PatternStep? {
+        if let firstUnrated = observationalSteps.first(where: { model.patternGateState.ratings[$0.id] == nil }) {
+            return firstUnrated
+        }
+        return model.patternGateState.executionUnlocked ? executionSteps.first : nil
+    }
+
+    // MARK: - Step Rail (ONE row of 8, borders collapsed)
+
+    /// .rail -- 8 equal cells, 4px crimson borders collapsing via
+    /// margin-right:-4px, no tilts. done=warm "N/10", cur=cream +
+    /// inset ring + scale(1.045), locked=cool + grey dot field.
+    private var stepRailRow: some View {
+        HStack(spacing: -4) {
+            ForEach(model.ontology.pattern) { step in
+                railCell(step)
+            }
+        }
+        .zIndex(3)
+    }
+
+    private func railCell(_ step: PatternStep) -> some View {
+        let state = railState(for: step)
+        return VStack(alignment: .leading, spacing: 2) {
+            Text("\(step.id)")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(state == .locked ? Theme.macCoolInk : Theme.macInk.opacity(0.5))
+            Text(step.title)
+                .font(.system(size: 13, weight: .bold))
+                .kerning(0.3)
+                .lineLimit(1)
+                .minimumScaleFactor(0.55)
+                .foregroundStyle(state == .locked ? Theme.macCoolInk : Theme.macInk)
+            Text(railEvidenceText(for: step, state: state))
+                .font(.system(size: state == .locked ? 12 : 15, weight: state == .locked ? .bold : .heavy).monospacedDigit())
+                .foregroundStyle(state == .locked ? Theme.macCoolInk : (state == .current ? Theme.macRed : Theme.macInk))
+                .padding(.top, 2)
+        }
+        .padding(EdgeInsets(top: 8, leading: 8, bottom: 7, trailing: 8))
+        .frame(maxWidth: .infinity, minHeight: 58, alignment: .topLeading)
+        .background {
+            switch state {
+            case .done: Theme.macWarmCream
+            case .current: Theme.savyCard
+            case .waiting: Theme.macTan
+            case .locked:
+                ZStack {
+                    Theme.macCoolBg
+                    SavyBendayGround(dotColor: Theme.macCoolInk, dotOpacity: 0.3, spacing: 7, dotDiameter: 2.2)
                 }
             }
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.macEntry.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
+        .overlay(Rectangle().stroke(Theme.macRed, lineWidth: 4))
+        .overlay {
+            // .cell.cur{box-shadow:inset 0 0 0 2px var(--crimson)}
+            if state == .current {
+                Rectangle().stroke(Theme.macRed, lineWidth: 2).padding(4)
+            }
+        }
+        .scaleEffect(state == .current ? 1.045 : 1)
+        .zIndex(state == .current ? 2 : 0)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if step.zone == .observational && model.patternGateState.ratings[step.id] == nil {
+                ratingPopoverStep = step.id
+            } else {
+                jumpToLoop(step.id)
+            }
+        }
+        .popover(isPresented: railRatingBinding(for: step)) {
+            RailRatingForm(step: step) { rating, note in
+                model.submitPatternRating(step: step.id, rating: rating, evidenceNote: note)
+                ratingPopoverStep = nil
+            }
+        }
+        .help(step.description)
     }
 
-    // MARK: - FASCINATION carousel (WO-I)
+    private enum RailCellState { case done, current, waiting, locked }
 
-    private var fascinationCarousel: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: "quote.opening")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Theme.macRed.opacity(0.9))
-                    .frame(width: 16)
-                Text("Fascinations")
-                    .font(.system(size: 13).weight(.bold))
-                    .foregroundStyle(Theme.macInk.opacity(0.78))
-                Spacer()
-                Button {
-                    model.refreshFascinationCards()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.caption2)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Theme.macInk.opacity(0.5))
-                .help("Re-scan ~/Documents/Harness/Fascinations")
+    private func railState(for step: PatternStep) -> RailCellState {
+        if step.zone == .observational {
+            if model.patternGateState.ratings[step.id] != nil { return .done }
+            return step.id == currentStep?.id ? .current : .waiting
+        }
+        guard model.patternGateState.executionUnlocked else { return .locked }
+        return step.id == currentStep?.id ? .current : .waiting
+    }
+
+    private func railEvidenceText(for step: PatternStep, state: RailCellState) -> String {
+        switch state {
+        case .done: return "\(model.patternGateState.ratings[step.id] ?? 0)/10"
+        case .current: return step.zone == .execution ? "building" : "rate"
+        case .waiting: return step.zone == .execution ? "ready" : "rate"
+        case .locked: return "locked"
+        }
+    }
+
+    private func railRatingBinding(for step: PatternStep) -> Binding<Bool> {
+        Binding(
+            get: { ratingPopoverStep == step.id },
+            set: { if !$0 { ratingPopoverStep = nil } }
+        )
+    }
+
+    // MARK: - FASCINATION band (tilted, shingled)
+
+    /// .fasc{transform:rotate(-1.2deg)} with a small two-line lead label
+    /// and a snap-scrolling row of 246px white cards shingled by
+    /// margin-right:-14px; odd tilt -2.4deg, even +2deg +5px.
+    private var fascinationBand: some View {
+        HStack(alignment: .center, spacing: 0) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("FASCINATION")
+                    .font(.system(size: 10, weight: .heavy))
+                    .kerning(2)
+                    .foregroundStyle(Theme.macFaint)
+                Text("what holds it now")
+                    .font(.system(size: 10, design: .serif).italic())
+                    .foregroundStyle(Theme.macFaint)
             }
+            .padding(.leading, 20)
+            .padding(.trailing, 14)
 
             if model.fascinationCards.isEmpty {
-                placeholderNote("Drop a quote .md file in ~/Documents/Harness/Fascinations — its body becomes the card, verbatim.")
+                Text("Drop a quote .md file in ~/Documents/Harness/Fascinations — its body becomes the card, verbatim.")
+                    .font(.caption)
+                    .foregroundStyle(Theme.macFaint)
+                    .padding(.vertical, 10)
+                Spacer()
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(alignment: .top, spacing: 18) {
+                    HStack(alignment: .top, spacing: -14) {
                         ForEach(Array(model.fascinationCards.enumerated()), id: \.element.id) { index, card in
-                            SavyQuoteCard(quote: card.quote, attribution: attributionLine(for: card))
-                                .frame(width: 260)
-                                .rotationEffect(.degrees(fascinationTilt(for: index)))
+                            fascinationCard(card, index: index)
                         }
                     }
-                    .padding(.vertical, 8)
-                    .padding(.horizontal, 4)
+                    .padding(EdgeInsets(top: 10, leading: 6, bottom: 12, trailing: 20))
                 }
             }
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.macEntry.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
+        .rotationEffect(.degrees(-1.2))
+        .padding(.top, 8)
     }
 
-    /// WO-I calls for +/-2-4 degree tilts, cycling for an organic,
-    /// hand-placed feel rather than one repeated angle.
-    private func fascinationTilt(for index: Int) -> Double {
-        let magnitude = 2.0 + Double(index % 3)
-        return index.isMultiple(of: 2) ? magnitude : -magnitude
+    private func fascinationCard(_ card: FascinationCard, index: Int) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(card.quote)
+                .font(.system(size: 12.5, design: .serif).italic())
+                .foregroundStyle(Theme.macInk)
+                .lineLimit(4)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(attributionLine(for: card))
+                .font(.system(size: 10))
+                .kerning(1)
+                .foregroundStyle(Theme.macFaint)
+        }
+        .padding(EdgeInsets(top: 9, leading: 11, bottom: 9, trailing: 11))
+        .frame(width: 246, alignment: .topLeading)
+        .background(Color.white, in: Rectangle())
+        .overlay(Rectangle().stroke(Theme.macRed, lineWidth: 4))
+        // .fc.quote{border-left-width:10px} -- the quote-card edge.
+        .overlay(alignment: .leading) {
+            Rectangle().fill(Theme.macRed).frame(width: 10)
+        }
+        .rotationEffect(.degrees(index.isMultiple(of: 2) ? -2.4 : 2))
+        .offset(y: index.isMultiple(of: 2) ? 0 : 5)
+        .zIndex(Double(100 - index))
     }
 
-    /// "his own captured observations dated and attributed to ADAM" —
+    /// "his own captured observations dated and attributed to ADAM" --
     /// an external source (a book, a paper) just names itself.
     private func attributionLine(for card: FascinationCard) -> String {
         guard card.attribution == "ADAM" else { return card.attribution }
-        return "ADAM · \(Self.fascinationDisplayDateFormatter.string(from: card.date))"
+        return "ADAM — \(Self.fascinationDisplayDateFormatter.string(from: card.date))"
     }
 
     private static let fascinationDisplayDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
-        formatter.dateStyle = .medium
+        formatter.dateFormat = "yyyy-MM-dd"
         return formatter
     }()
 
-    // MARK: - Mind Map, read-only (WO-O)
+    // MARK: - Canvas body (pool 24% / center / organize 29% over ledger)
 
-    /// Read-only tree first -- "navigation takeover only after it
-    /// survives daily use" (the plan's own words). Extends the
-    /// treeColumn pattern (MacCockpitView.swift) with the one status
-    /// distinction the data model actually has today: is this row the
-    /// same top-priority row the UP NEXT card shows (warm), or not
-    /// (cool, receded to 45% ink -- same treatment WO-H's locked Step
-    /// Rail cells use, no new color invented outside the vocabulary).
-    private var mindMapTree: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if mindMapGroups.isEmpty {
-                placeholderNote("No delegation items yet — the tree fills in as the queue does.")
-            } else {
-                ForEach(mindMapGroups) { group in
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "square.grid.2x2")
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(Theme.macInk.opacity(0.4))
-                            Text(group.app.rawValue)
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(Theme.macInk.opacity(0.6))
-                        }
-                        ForEach(group.rows) { row in
-                            mindMapNode(row)
-                        }
-                    }
+    private var canvasBody: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .bottom) {
+                // .povline -- crimson gradient rising from the ledger.
+                LinearGradient(
+                    colors: [Theme.macRed.opacity(0.05), Theme.macRed],
+                    startPoint: .top, endPoint: .bottom
+                )
+                .frame(width: 4)
+                .padding(.bottom, 96)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                .zIndex(0)
+
+                fleetLedgerBand(width: geo.size.width)
+                    .zIndex(1)
+
+                Text("POINT-OF-VIEW")
+                    .font(.system(size: 9, weight: .heavy))
+                    .kerning(2)
+                    .foregroundStyle(Theme.macFaint)
+                    .padding(EdgeInsets(top: 2, leading: 6, bottom: 2, trailing: 6))
+                    .background(Theme.macBg)
+                    .padding(.bottom, 88)
+                    .zIndex(2)
+
+                HStack(alignment: .top, spacing: 0) {
+                    sourcesPoolColumn
+                        .frame(width: geo.size.width * 0.24, height: geo.size.height - 14, alignment: .topLeading)
+                    centerColumn(width: geo.size.width * 0.47 - 28)
+                        .frame(maxWidth: .infinity, alignment: .top)
+                        .frame(height: geo.size.height - 14, alignment: .top)
+                        .padding(.horizontal, 10)
+                        .zIndex(3)
+                    organizeColumn
+                        .frame(width: geo.size.width * 0.29, height: geo.size.height - 14, alignment: .topLeading)
+                        .clipped()
                 }
+                .frame(maxWidth: .infinity, alignment: .top)
+                .padding(.top, 14)
+                .zIndex(2)
             }
         }
     }
 
-    private var mindMapGroups: [OpportunityBoardAppGroup] {
-        OpportunityBoardProjection(rows: model.opportunityBoardRows).groupsByApp()
-    }
+    // MARK: - Sources pool (left, 24%)
 
-    /// The same top-priority row the UP NEXT card starts locked onto
-    /// (MacChatView.upNextRowID) -- computed independently here since
-    /// this view has no access to that screen's local @State. Matches
-    /// in the common case; can diverge only if UP NEXT stays locked
-    /// onto a row that's since fallen out of the top spot.
-    private var mindMapWarmRowID: String? {
-        OpportunityBoardProjection(rows: model.opportunityBoardRows).rows.first?.id
-    }
-
-    private func mindMapNode(_ row: OpportunityBoardRow) -> some View {
-        let isWarm = row.id == mindMapWarmRowID
-        let title = row.card.envelope.title?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return HStack(spacing: 5) {
-            Circle()
-                .fill(isWarm ? Theme.macRed : Theme.macInk.opacity(0.3))
-                .frame(width: 5, height: 5)
-            Text(title?.isEmpty == false ? title! : row.id)
-                .font(.system(size: 10, weight: isWarm ? .semibold : .regular))
-                .foregroundStyle(isWarm ? Theme.macInk : Theme.macInk.opacity(0.45))
-                .lineLimit(1)
-        }
-        .padding(.leading, 14)
-    }
-
-    // MARK: - Sources pool (WO-N)
-
-    /// Unlabeled by design -- no title field, no folder picker.
-    /// "Capture-from-anywhere" for v1 is the watched Delegations folder
-    /// (a Shortcut can share into it from iPhone) plus this in-app
-    /// drop/paste; a real Share Extension is v2, per the plan.
-    private var sourcesPool: some View {
-        Group {
+    private var sourcesPoolColumn: some View {
+        VStack(alignment: .leading, spacing: 0) {
             if model.sourcePoolCards.isEmpty {
-                placeholderNote("Paste a link or drop a file here — recognition-only, no names, no folders.")
-                    .frame(maxWidth: .infinity, minHeight: 60, alignment: .center)
+                Text("Paste a link or drop a file here — recognition-only, no names, no folders.")
+                    .font(.caption)
+                    .foregroundStyle(Theme.macFaint)
+                    .padding(.trailing, 12)
             } else {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 84, maximum: 84), spacing: 14)], spacing: 14) {
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 2), GridItem(.flexible(), spacing: 2)], spacing: 2) {
                     ForEach(Array(model.sourcePoolCards.enumerated()), id: \.element.contentHash) { index, card in
                         sourcePoolCell(card, index: index)
                     }
                 }
+                .padding(.trailing, 8)
             }
+
+            // .pfoot -- the mockup's own caption, verbatim.
+            Text("New arrivals warm. The past cools but never leaves the canvas.")
+                .font(.system(size: 12, design: .serif).italic())
+                .foregroundStyle(Theme.macMuted)
+                .padding(.top, 14)
+                .padding(.trailing, 12)
+
+            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .padding(10)
-        .background(Theme.macEntry.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Theme.macHair, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
-        )
+        .padding(.leading, 16)
+        .padding(.bottom, 120)
+        .contentShape(Rectangle())
         .dropDestination(for: URL.self) { items, _ in
             guard !items.isEmpty else { return false }
             for url in items {
@@ -372,38 +413,41 @@ struct MacBlueprintView: View {
         }
     }
 
-    /// Mockup: `.pc:nth-child(3n){rotate(3deg)}`,
-    /// `.pc:nth-child(3n+1){rotate(-2.6deg)}`,
-    /// `.pc:nth-child(3n+2){rotate(1.6deg) translateY(4px)}` -- a
-    /// 3-cycle so the grid reads as hand-placed, not a repeated tic.
+    /// .pc tilt cycle: 3n -> +3deg, 3n+1 -> -2.6deg, 3n+2 -> +1.6deg +4px.
     private func sourcePoolCell(_ card: OpportunitySourceCard, index: Int) -> some View {
         let cycle = index % 3
-        let tilt: Double = cycle == 0 ? 3 : (cycle == 1 ? -2.6 : 1.6)
-        let yOffset: CGFloat = cycle == 2 ? 4 : 0
+        let tilt: Double = cycle == 0 ? -2.6 : (cycle == 1 ? 1.6 : 3)
+        let yOffset: CGFloat = cycle == 1 ? 4 : 0
 
-        return Group {
+        return VStack(alignment: .leading, spacing: 3) {
+            Text(poolKicker(card))
+                .font(.system(size: 10, weight: .heavy))
+                .kerning(1.5)
+                .foregroundStyle(Theme.macRed)
+                .lineLimit(1)
             if let thumbnail = poolThumbnail(for: card) {
                 Image(nsImage: thumbnail)
                     .resizable()
                     .scaledToFill()
-            } else {
-                VStack(spacing: 4) {
-                    Image(systemName: "link")
-                        .font(.system(size: 15, weight: .semibold))
-                    Text(poolResourceLabel(card))
-                        .font(.system(size: 8, weight: .medium))
-                        .lineLimit(1)
-                }
-                .foregroundStyle(Theme.macInk.opacity(0.5))
+                    .frame(height: 34)
+                    .clipped()
             }
+            Text(poolResourceLabel(card))
+                .font(.system(size: 11.5))
+                .foregroundStyle(Theme.macInk)
+                .lineLimit(2)
         }
-        .frame(width: 84, height: 84)
-        .background(Theme.macCardBright, in: Rectangle())
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(Color(hex: 0xF5F0E6), in: Rectangle())
         .overlay(Rectangle().stroke(Theme.macRed, lineWidth: 4))
-        .clipShape(Rectangle())
         .rotationEffect(.degrees(tilt))
         .offset(y: yOffset)
         .help(card.envelope.resource ?? "")
+    }
+
+    private func poolKicker(_ card: OpportunitySourceCard) -> String {
+        card.retrievedBy.isEmpty ? "SOURCE" : card.retrievedBy.uppercased()
     }
 
     private func poolThumbnail(for card: OpportunitySourceCard) -> NSImage? {
@@ -414,55 +458,460 @@ struct MacBlueprintView: View {
     }
 
     private func poolResourceLabel(_ card: OpportunitySourceCard) -> String {
+        if let title = card.envelope.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            return title
+        }
         guard let resource = card.envelope.resource, let url = URL(string: resource) else { return "source" }
         return url.host ?? url.lastPathComponent
     }
 
-    // MARK: - Fleet ledger (WO-M, flat v1)
+    // MARK: - Center column (UP NEXT deck + composer)
 
-    private var fleetLedger: some View {
-        HStack(spacing: 0) {
-            ledgerFigure(
-                label: "spend today",
-                value: "\(model.delegationAgentDailySpend)/\(model.delegationAgentDailyCreditLimit)",
-                help: "Firecrawl credits used today vs the daily Kill Switch cap"
-            )
-            ledgerDivider
-            ledgerFigure(
-                label: "runs",
-                value: "\(model.runs.count)",
-                help: "Runs in the GRDB ledger (most recent \(model.runs.count))"
-            )
-            ledgerDivider
-            ledgerFigure(
-                label: "shipped this week",
-                value: "\(model.fleetLedgerShippedThisWeek)",
-                help: "Pursue actions recorded in the last 7 days — v1 stand-in for a dedicated shipped event"
-            )
+    private func centerColumn(width: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("UP NEXT")
+                .font(.system(size: 12, weight: .heavy))
+                .kerning(2.5)
+                .foregroundStyle(Theme.macFaint)
+                .padding(.bottom, 6)
+
+            upNextDeck(width: max(width, 200))
+
+            Spacer(minLength: 4)
+
+            composerCard
+                .padding(.bottom, 10)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.leading, 8)
     }
 
-    private func ledgerFigure(label: String, value: String, help: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(value)
-                .font(.system(size: 20, weight: .bold, design: .rounded))
-                .foregroundStyle(Theme.macInk)
+    private var upNextRow: OpportunityBoardRow? {
+        model.opportunityBoardRows.first { $0.id == upNextRowID }
+    }
+
+    private func refreshUpNextLock() {
+        if let id = upNextRowID, model.opportunityBoardRows.contains(where: { $0.id == id }) { return }
+        upNextRowID = OpportunityBoardProjection(rows: model.opportunityBoardRows).rows.first?.id
+    }
+
+    /// .deck2 -- dissent card behind (right, +3.2deg), warm deck card in
+    /// front (62%, -1.6deg, 6px border, the heaviest ink on the canvas).
+    /// Sized by the deck card's natural height, never greedy -- the
+    /// composer below must always stay inside the viewport.
+    private func upNextDeck(width: CGFloat) -> some View {
+        ZStack(alignment: .topLeading) {
+            if let caseAgainst = upNextRow?.card.caseAgainst?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !caseAgainst.isEmpty {
+                dissentCard(caseAgainst)
+                    .frame(width: width * 0.46)
+                    .rotationEffect(.degrees(3.2))
+                    .offset(x: width * 0.54, y: 34)
+                    .zIndex(1)
+            }
+            deckCard
+                .frame(width: width * 0.62)
+                .rotationEffect(.degrees(-1.6))
+                .zIndex(2)
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private var deckCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let row = upNextRow {
+                HStack(alignment: .top) {
+                    Text(deckTitle(row))
+                        .font(.system(size: 14.5, weight: .bold))
+                        .lineLimit(1)
+                        .help(deckTitle(row))
+                        .foregroundStyle(Theme.macInk)
+                    Spacer()
+                    if let fit = row.card.fit {
+                        Text(String(format: "%.1f", fit))
+                            .font(.system(size: 17, weight: .heavy).monospacedDigit())
+                            .foregroundStyle(Theme.macRed)
+                    }
+                }
+
+                if let pitch = row.card.envelope.description?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !pitch.isEmpty {
+                    Text(pitch)
+                        .font(.system(size: 12, design: .serif).italic())
+                        .foregroundStyle(Theme.macMuted)
+                        .lineLimit(1)
+                        .help(pitch)
+                }
+
+                // .verbs{flex-wrap:wrap} -- two rows here since SwiftUI
+                // has no flow layout on macOS 14.
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        deckVerb("Continue", filled: true) {
+                            model.recordOpportunityBoardAction(.pursue, rows: [row])
+                            model.draft = "Pursue delegation \(row.id): \(deckTitle(row))"
+                        }
+                        deckVerb("Change") {
+                            model.draft = "Change delegation \(row.id): "
+                        }
+                        deckVerb("Retry") {
+                            model.draft = "Retry delegation \(row.id): \(deckTitle(row))"
+                        }
+                    }
+                    deckVerb("Hold it in my hand") {
+                        model.recordOpportunityBoardAction(.hold, rows: [row])
+                    }
+                }
+            } else {
+                Text("UP NEXT fills in as the delegation queue does — nothing is waiting on you right now.")
+                    .font(.system(size: 12, design: .serif).italic())
+                    .foregroundStyle(Theme.macMuted)
+                    .frame(minHeight: 80)
+            }
+        }
+        .padding(12)
+        .background(Theme.macWarmCream, in: Rectangle())
+        .overlay(Rectangle().stroke(Theme.macRed, lineWidth: 6))
+    }
+
+    private func deckTitle(_ row: OpportunityBoardRow) -> String {
+        let title = row.card.envelope.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return title?.isEmpty == false ? title! : row.id
+    }
+
+    private func deckVerb(_ label: String, filled: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
             Text(label)
-                .font(.caption2.weight(.semibold))
-                .textCase(.uppercase)
-                .foregroundStyle(Theme.macInk.opacity(0.46))
+                .font(.system(size: 12, weight: .semibold))
+                .lineLimit(1)
+                .fixedSize()
+                .foregroundStyle(filled ? .white : Theme.macInk)
+                .padding(EdgeInsets(top: 5, leading: 13, bottom: 5, trailing: 13))
+                .background(filled ? Theme.macRed : Color.white, in: Rectangle())
+                .overlay(Rectangle().stroke(Theme.macRed, lineWidth: 3.5))
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .help(help)
+        .buttonStyle(.plain)
     }
 
-    private var ledgerDivider: some View {
-        Rectangle()
-            .fill(Theme.macHair)
-            .frame(width: 1)
-            .padding(.vertical, 4)
+    /// THE CASE AGAINST -- the one agent-speech surface, visually marked
+    /// by the 10px left edge (hard rule 4: dissent cards are marked).
+    private func dissentCard(_ text: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("THE CASE AGAINST")
+                .font(.system(size: 10, weight: .heavy))
+                .kerning(1.5)
+                .foregroundStyle(Theme.macRed)
+            Text(text)
+                .font(.system(size: 11.5))
+                .foregroundStyle(Theme.macInk)
+                .lineSpacing(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 12))
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(Color(hex: 0xF5F0E6), in: Rectangle())
+        .overlay(Rectangle().stroke(Theme.macRed, lineWidth: 4))
+        .overlay(alignment: .leading) {
+            Rectangle().fill(Theme.macRed).frame(width: 10)
+        }
     }
+
+    // MARK: - Composer (bottom center, live bindings)
+
+    /// .composer -- cream, 6px border, pinned to the column bottom.
+    /// The three fields bind the SAME @Published storage the chat
+    /// composer uses (WO-J): draft / preferredApproach / doneCondition.
+    private var composerCard: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            composerField(label: "WHAT DO I WANT?", text: $model.draft)
+            composerField(label: "WHEN I AM...I LIKE TO", text: $model.preferredApproach)
+            composerField(label: "DONE LOOKS LIKE...", text: $model.doneCondition)
+        }
+        .padding(8)
+        .background(Theme.savyCard, in: Rectangle())
+        .overlay(Rectangle().stroke(Theme.macRed, lineWidth: 6))
+    }
+
+    private func composerField(label: String, text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(label)
+                .font(.system(size: 9, weight: .heavy))
+                .kerning(1.5)
+                .foregroundStyle(Theme.macFaint)
+            TextField("", text: text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12.5))
+                .foregroundStyle(Theme.macInk)
+        }
+        .padding(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white, in: Rectangle())
+        .overlay(Rectangle().stroke(Theme.macRed, lineWidth: 3))
+    }
+
+    // MARK: - Organize column (right, 29%)
+
+    private var organizeColumn: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("ORGANIZE")
+                .font(.system(size: 12, weight: .heavy))
+                .kerning(2.5)
+                .foregroundStyle(Theme.macFaint)
+                .padding(.bottom, 4)
+
+            organizeSlot(
+                name: "Mind Map",
+                status: "pending (\(model.opportunityBoardRows.count))",
+                dotColor: Theme.statusPending
+            ) {
+                mindMapTree
+                Text("PLAN VIEW — SAME BUILD, FROM ABOVE")
+                    .font(.system(size: 9, weight: .heavy))
+                    .kerning(1.5)
+                    .foregroundStyle(Theme.macFaint)
+                    .padding(.top, 5)
+                Text("The map of leverage. The only navigation there is.")
+                    .font(.system(size: 12, design: .serif).italic())
+                    .foregroundStyle(Theme.macMuted)
+            }
+            .rotationEffect(.degrees(-2.2))
+            .offset(y: -8)
+            .zIndex(2)
+
+            organizeSlot(
+                name: "Slide Deck",
+                status: "live · \(max(model.opportunityBoardRows.count, 1)) slides",
+                dotColor: Theme.statusLive
+            ) {
+                slideFilmstrip
+                Text("FRONT VIEW — SAME BUILD, FACE ON · WARM SLIDE = UP NEXT")
+                    .font(.system(size: 9, weight: .heavy))
+                    .kerning(1.5)
+                    .foregroundStyle(Theme.macFaint)
+                    .padding(.top, 5)
+            }
+            .rotationEffect(.degrees(2))
+            .zIndex(1)
+
+            organizeSlot(
+                name: "Audio",
+                status: "live · what changed",
+                dotColor: Theme.statusLive,
+                breathing: audioBriefPlayer.isSpeaking
+            ) {
+                audioPlayerRow
+            }
+            .rotationEffect(.degrees(1.4))
+            .offset(y: -14)
+            .zIndex(0)
+        }
+        .padding(.trailing, 16)
+        .padding(.leading, 6)
+        .padding(.bottom, 120)
+    }
+
+    private func organizeSlot<Content: View>(
+        name: String,
+        status: String,
+        dotColor: Color,
+        breathing: Bool = false,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                if breathing {
+                    SavyBreathingDot(color: dotColor, diameter: 8)
+                } else {
+                    Circle().fill(dotColor).frame(width: 8, height: 8)
+                }
+                Text(name)
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(Theme.macInk)
+                Spacer()
+                Text(status)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.macFaint)
+            }
+            content()
+        }
+        .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(Color.white, in: Rectangle())
+        .overlay(Rectangle().stroke(Theme.macRed, lineWidth: 4))
+    }
+
+    /// .slides -- one 26px cell per board row (capped), first navy,
+    /// the UP NEXT row's cell warm. Real rows, not decoration.
+    private var slideFilmstrip: some View {
+        HStack(spacing: 4) {
+            let rows = OpportunityBoardProjection(rows: model.opportunityBoardRows).rows.prefix(6)
+            if rows.isEmpty {
+                Rectangle()
+                    .fill(Theme.savyDeepNavy)
+                    .frame(height: 26)
+            } else {
+                ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                    Rectangle()
+                        .fill(index == 0 ? Theme.savyDeepNavy : (row.id == upNextRowID ? Theme.macWarmCream : Theme.macBg))
+                        .frame(height: 26)
+                        .overlay(Rectangle().stroke(
+                            index == 0 ? Theme.savyDeepNavy : (row.id == upNextRowID ? Theme.macTan : Theme.macRed),
+                            lineWidth: 2
+                        ))
+                        .help(deckTitle(row))
+                }
+            }
+        }
+    }
+
+    private var audioPlayerRow: some View {
+        HStack(spacing: 8) {
+            Button {
+                if audioBriefPlayer.isSpeaking {
+                    audioBriefPlayer.stop()
+                } else if let row = upNextRow {
+                    let pitch = row.card.envelope.description ?? ""
+                    audioBriefPlayer.speak("\(deckTitle(row)). \(pitch)")
+                }
+            } label: {
+                Image(systemName: audioBriefPlayer.isSpeaking ? "stop.fill" : "play.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white)
+                    .frame(width: 26, height: 26)
+                    .background(Theme.macRed, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(upNextRow == nil && !audioBriefPlayer.isSpeaking)
+
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Rectangle().fill(Theme.macTan)
+                    Rectangle()
+                        .fill(Theme.macRed)
+                        .frame(width: audioBriefPlayer.isSpeaking ? geo.size.width : 0)
+                        .animation(.easeInOut(duration: 0.4), value: audioBriefPlayer.isSpeaking)
+                }
+            }
+            .frame(height: 6)
+        }
+    }
+
+    // MARK: - Mind Map tree (WO-O, read-only)
+
+    /// Compact by design -- the mockup's map holds ~5 nodes. Three rows
+    /// per app plus an honest "+N more" so the slot never balloons the
+    /// column past the viewport.
+    private var mindMapTree: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if mindMapGroups.isEmpty {
+                Text("No delegation items yet — the tree fills in as the queue does.")
+                    .font(.caption)
+                    .foregroundStyle(Theme.macFaint)
+            } else {
+                ForEach(mindMapGroups) { group in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(group.app.rawValue)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Theme.macInk.opacity(0.6))
+                        ForEach(group.rows.prefix(1)) { row in
+                            mindMapNode(row)
+                        }
+                        if group.rows.count > 1 {
+                            Text("+\(group.rows.count - 1) more")
+                                .font(.system(size: 9))
+                                .foregroundStyle(Theme.macFaint)
+                                .padding(.leading, 12)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var mindMapGroups: [OpportunityBoardAppGroup] {
+        OpportunityBoardProjection(rows: model.opportunityBoardRows).groupsByApp()
+    }
+
+    private func mindMapNode(_ row: OpportunityBoardRow) -> some View {
+        let isWarm = row.id == upNextRowID
+        return HStack(spacing: 5) {
+            Circle()
+                .fill(isWarm ? Theme.macRed : Theme.macInk.opacity(0.3))
+                .frame(width: 5, height: 5)
+            Text(deckTitle(row))
+                .font(.system(size: 10, weight: isWarm ? .semibold : .regular))
+                .foregroundStyle(isWarm ? Theme.macInk : Theme.macCoolInk)
+                .lineLimit(1)
+        }
+        .padding(.leading, 12)
+    }
+
+    // MARK: - Fleet ledger (bottom, tilted plane)
+
+    /// .ledger -- navy, crimson benday dots, 10px crimson top border,
+    /// rotateX(16deg) from the bottom edge with perspective: the
+    /// "distant operational world leaning into view."
+    private func fleetLedgerBand(width: CGFloat) -> some View {
+        HStack(alignment: .top, spacing: 26) {
+            ledgerGroup("SPEND") {
+                Text("\(model.delegationAgentDailySpend) of \(model.delegationAgentDailyCreditLimit)")
+            }
+            ledgerGroup("RUNS") {
+                HStack(spacing: 7) {
+                    if model.isRunning {
+                        SavyBreathingDot(color: Theme.statusLive, diameter: 8)
+                        Text("live 1")
+                    } else {
+                        Circle().fill(Theme.statusLive).frame(width: 8, height: 8)
+                        Text("\(model.runs.count)")
+                    }
+                }
+            }
+            ledgerGroup("SHIPPED THIS WEEK") {
+                Text("\(model.fleetLedgerShippedThisWeek)")
+            }
+            Spacer()
+            ledgerGroup("FLEET") {
+                HStack(spacing: 10) {
+                    ForEach(mindMapGroups) { group in
+                        HStack(spacing: 5) {
+                            Circle().fill(Theme.statusLive).frame(width: 8, height: 8)
+                            Text("\(group.app.rawValue) \(group.rows.count)")
+                        }
+                    }
+                    if mindMapGroups.isEmpty {
+                        Text("—")
+                    }
+                }
+            }
+        }
+        .font(.system(size: 12.5).monospacedDigit())
+        .foregroundStyle(Theme.savyCard)
+        .padding(EdgeInsets(top: 14, leading: width * 0.06, bottom: 0, trailing: width * 0.06))
+        .frame(width: width * 1.06, height: 104, alignment: .top)
+        .background {
+            ZStack {
+                Theme.savyDeepNavy
+                SavyBendayGround(dotColor: Theme.macRed, dotOpacity: 0.3, spacing: 9, dotDiameter: 2.8)
+            }
+        }
+        .overlay(alignment: .top) {
+            Rectangle().fill(Theme.macRed).frame(height: 10)
+        }
+        .rotation3DEffect(.degrees(16), axis: (x: 1, y: 0, z: 0), anchor: .bottom, perspective: 0.7)
+        .offset(y: 6)
+    }
+
+    private func ledgerGroup<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
+        HStack(spacing: 7) {
+            Text(label)
+                .font(.system(size: 10, weight: .heavy))
+                .kerning(1.5)
+                .foregroundStyle(Theme.macTan)
+            content()
+        }
+    }
+
+    // MARK: - The loop (below the fold; jump target for rail taps)
 
     private var observationalSteps: [PatternStep] {
         model.ontology.pattern.filter { $0.zone == .observational }
@@ -472,179 +921,66 @@ struct MacBlueprintView: View {
         model.ontology.pattern.filter { $0.zone == .execution }
     }
 
-    private var gateStatusLine: some View {
-        HStack(spacing: 8) {
-            // The ONE breathing dot (WO-H) — it only breathes when the gate
-            // is genuinely live and open; a locked gate gets a still dot,
-            // since motion here should mean something, not decorate.
-            if model.patternGateState.executionUnlocked {
-                SavyBreathingDot(color: Theme.savyGreen, diameter: 7)
-            } else {
-                Circle()
-                    .fill(Theme.macRed.opacity(0.7))
-                    .frame(width: 7, height: 7)
-            }
-            Text(model.patternGateState.executionUnlocked ? "unlocked" : "locked")
-                .font(.caption.weight(.bold))
-                .textCase(.uppercase)
-                .foregroundStyle(Theme.macInk.opacity(0.7))
-            Text("· \(model.patternGateState.source.rawValue)")
-                .font(.caption2)
-                .foregroundStyle(Theme.macInk.opacity(0.46))
-            Spacer()
-            Button {
-                Task { await model.refreshPatternGate() }
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .font(.caption2)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Theme.macInk.opacity(0.5))
-            .help(model.patternGateState.detail)
-        }
-    }
-
-    private func blueprintSection<Content: View>(
-        title: String,
-        icon: String,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
+    /// Mockup's `#loop .stage` cards -- copy ported verbatim from the
+    /// approved v6 artifact, not written fresh here.
+    private var loopSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: icon)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Theme.macRed.opacity(0.9))
-                    .frame(width: 16)
-                Text(title)
-                    .font(.system(size: 13).weight(.bold))
-                    .foregroundStyle(Theme.macInk.opacity(0.78))
-                Spacer()
+            Text("The loop")
+                .font(.system(size: 22, design: .serif).weight(.semibold))
+                .foregroundStyle(Theme.macInk)
+            Text("SPEAK SENTENCES · RATE FOUR NUMBERS · PRESS CONTINUE — THAT IS THE WHOLE JOB")
+                .font(.system(size: 10, weight: .bold))
+                .kerning(0.6)
+                .foregroundStyle(Theme.macFaint)
+
+            HStack(alignment: .top, spacing: 8) {
+                ForEach(observationalSteps) { step in
+                    LoopStepDetailCard(step: step, detail: LoopStepCopy.detail(for: step.id), highlighted: highlightedStepID == step.id)
+                        .id(step.id)
+                }
             }
-
-            content()
+            HStack(alignment: .top, spacing: 8) {
+                ForEach(executionSteps) { step in
+                    LoopStepDetailCard(step: step, detail: LoopStepCopy.detail(for: step.id), highlighted: highlightedStepID == step.id)
+                        .id(step.id)
+                }
+            }
         }
-        .padding(14)
+        .padding(22)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.macEntry.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
-    }
-
-    private func placeholderNote(_ text: String) -> some View {
-        Text(text)
-            .font(.caption)
-            .foregroundStyle(Theme.macInk.opacity(0.46))
     }
 }
 
-/// Cells 1-4: an isolated rating number once recorded (ratings are
-/// write-once — PatternEvidenceStore.record throws on a second rating
-/// for the same step), otherwise the entry control. WO-H ink: cornerRadius
-/// 0, crimson 2pt contour. The tilt applies only once the cell is
-/// display-only (rated) — a tilted Stepper/TextField/Button while Adam
-/// is actively rating would be a usability regression, not "chaos is
-/// soothing."
-private struct PatternObservationalCell: View {
+/// The rail cell's rating entry, moved out of the cell into a popover so
+/// the rail keeps the mockup's compact one-row silhouette. Ratings stay
+/// write-once (PatternEvidenceStore.record throws on a second rating).
+private struct RailRatingForm: View {
     let step: PatternStep
-    let rating: Int?
     let onSubmit: (Int, String) -> Void
 
     @State private var draftRating: Double = 7
     @State private var evidenceNote = ""
 
-    private var tiltDegrees: Double { step.id.isMultiple(of: 2) ? 1.2 : -1.2 }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            cellHeader
-
-            if let rating {
-                Text("\(rating)")
-                    .font(.system(size: 30, weight: .bold, design: .rounded))
-                    .foregroundStyle(Theme.macRed)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                VStack(alignment: .leading, spacing: 6) {
-                    Stepper("Rating: \(Int(draftRating))", value: $draftRating, in: 1...10, step: 1)
-                        .font(.caption)
-                    TextField("Evidence note", text: $evidenceNote)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.caption)
-                    Button("Rate") {
-                        onSubmit(Int(draftRating), evidenceNote)
-                    }
-                    .font(.caption.weight(.semibold))
-                    .disabled(evidenceNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-            }
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, minHeight: 128, alignment: .topLeading)
-        .background(rating != nil ? Theme.macWarmCream : Theme.macCardBright, in: Rectangle())
-        .overlay(Rectangle().stroke(Theme.macRed, lineWidth: 4))
-        .rotationEffect(.degrees(rating != nil ? tiltDegrees : 0))
-    }
-
-    private var cellHeader: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            HStack(spacing: 5) {
-                Text("\(step.id)")
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Theme.macRed)
-                Text(step.title)
-                    .font(.system(size: 12).weight(.semibold))
-                    .foregroundStyle(Theme.macInk.opacity(0.85))
-            }
+            Text("\(step.id) \(step.title)")
+                .font(.system(size: 13, weight: .bold))
             Text(step.description)
-                .font(.caption2)
-                .foregroundStyle(Theme.macInk.opacity(0.5))
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-}
-
-/// Cells 5-8: locked at 45% ink until PatternGateChecker says
-/// executionUnlocked — never derived any other way. Matches the
-/// mockup's actual `.rail .cell.locked` treatment precisely: cool
-/// grey-blue fill + ink (not just dimmed crimson-on-cream), its own
-/// Benday dot texture in that same cool tone, uniform 4px crimson
-/// border regardless of state (the mockup never varies border weight
-/// by state -- only the fill and text color carry that meaning).
-/// Always display-only, so the tilt is always safe to apply.
-private struct PatternExecutionCell: View {
-    let step: PatternStep
-    let unlocked: Bool
-
-    private var tiltDegrees: Double { step.id.isMultiple(of: 2) ? -1.4 : 1.4 }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 5) {
-                Text("\(step.id)")
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                Image(systemName: unlocked ? "lock.open.fill" : "lock.fill")
-                    .font(.caption2)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Stepper("Rating: \(Int(draftRating))", value: $draftRating, in: 1...10, step: 1)
+                .font(.caption)
+            TextField("Evidence note", text: $evidenceNote)
+                .textFieldStyle(.roundedBorder)
+                .font(.caption)
+            Button("Rate") {
+                onSubmit(Int(draftRating), evidenceNote)
             }
-            Text(step.title)
-                .font(.system(size: 12).weight(.semibold))
-            Text(step.description)
-                .font(.caption2)
-                .fixedSize(horizontal: false, vertical: true)
+            .font(.caption.weight(.semibold))
+            .disabled(evidenceNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
-        .foregroundStyle(unlocked ? Theme.macInk.opacity(0.9) : Theme.macCoolInk)
-        .padding(10)
-        .frame(maxWidth: .infinity, minHeight: 100, alignment: .topLeading)
-        .background {
-            if unlocked {
-                Theme.macWarmCream
-            } else {
-                ZStack {
-                    Theme.macCoolBg
-                    SavyBendayGround(dotColor: Theme.macCoolInk, dotOpacity: 0.3, spacing: 7, dotDiameter: 2.2)
-                }
-            }
-        }
-        .overlay(Rectangle().stroke(Theme.macRed, lineWidth: 4))
-        .rotationEffect(.degrees(tiltDegrees))
+        .padding(14)
+        .frame(width: 260)
     }
 }
 
@@ -696,7 +1032,7 @@ private enum LoopStepCopy {
     ]
 }
 
-/// A jump target for `stepRail`'s tap gesture -- `highlighted` mirrors
+/// A jump target for the rail's tap gesture -- `highlighted` mirrors
 /// the mockup's `.hl` class toggle (thicker crimson ring + warm fill)
 /// for the card a rail tap just scrolled to.
 private struct LoopStepDetailCard: View {
@@ -708,7 +1044,7 @@ private struct LoopStepDetailCard: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("STEP \(step.id) · \(step.zone == .observational ? "OBSERVE" : "EXECUTE")")
                 .font(.system(size: 10).weight(.bold))
-                .tracking(0.4)
+                .kerning(0.4)
                 .foregroundStyle(Theme.macRed)
             Text(step.title)
                 .font(.system(size: 14).weight(.bold))

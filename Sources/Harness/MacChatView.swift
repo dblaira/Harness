@@ -382,7 +382,10 @@ struct MacChatView: View {
             topBar
             centerViewContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            if centerView != .board && centerView != .chat {
+            // Blueprint carries its own composer on the canvas (the three
+            // bound fields) -- stacking the chat bar under it would both
+            // duplicate the surface and shrink the one-screen cockpit.
+            if centerView != .board && centerView != .chat && centerView != .blueprint {
                 delegateLabel
                 composer
             }
