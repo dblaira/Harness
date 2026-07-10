@@ -369,6 +369,9 @@ def run(
     dry_run: bool = False,
     start_date: dt.date = DEFAULT_START_DATE,
     end_date: dt.date | None = None,
+    min_percent: float = 0.55,
+    min_weeks: int = 40,
+    max_new: int = MAX_NEW_CANDIDATES,
 ) -> dict:
     run_date = dt.date.today().isoformat()
     if end_date is None:
@@ -390,7 +393,7 @@ def run(
     queue_keys = existing_queue_keys(queue)
     run_source = f"supabase-ingest {run_date}"
     existing_run_claims = [claim for claim in queue if claim.get("source") == run_source]
-    remaining_run_slots = max(0, MAX_NEW_CANDIDATES - len(existing_run_claims))
+    remaining_run_slots = max(0, max_new - len(existing_run_claims))
     accepted = accepted_pairs(accepted_graph)
 
     all_stats: dict[tuple[str, str], dict] = {}
@@ -412,7 +415,7 @@ def run(
             continue
         if pair_key(domain_a, domain_b, OBSERVED) in queue_keys:
             continue
-        if stats["percent"] >= 0.55 and stats["active_weeks"] >= 40:
+        if stats["percent"] >= min_percent and stats["active_weeks"] >= min_weeks:
             claim = build_observed_claim(stats, run_date)
             claim["id"] = next_candidate_id(queue + new_claims, run_date, domain_a, domain_b, OBSERVED)
             new_claims.append(claim)
@@ -505,12 +508,18 @@ def main() -> int:
     parser.add_argument("--start-date", type=parse_cli_date, default=DEFAULT_START_DATE)
     parser.add_argument("--end-date", type=parse_cli_date, default=dt.date.today())
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--min-percent", type=float, default=0.55)
+    parser.add_argument("--min-weeks", type=int, default=40)
+    parser.add_argument("--max-new", type=int, default=MAX_NEW_CANDIDATES)
     args = parser.parse_args()
     result = run(
         args.ontology_root,
         dry_run=args.dry_run,
         start_date=args.start_date,
         end_date=args.end_date,
+        min_percent=args.min_percent,
+        min_weeks=args.min_weeks,
+        max_new=args.max_new,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
