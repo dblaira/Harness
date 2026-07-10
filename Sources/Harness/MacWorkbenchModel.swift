@@ -157,6 +157,7 @@ final class MacWorkbenchModel: ObservableObject {
     }
 
     private var phoneCaptureTimer: Timer?
+    private var phoneCaptureRefreshTask: Task<Void, Never>?
 
     func updateOntology(_ ontology: Ontology) {
         self.ontology = ontology
@@ -362,15 +363,19 @@ final class MacWorkbenchModel: ObservableObject {
             opportunityBoardRows = []
             opportunityBoardLoadIssue = error.localizedDescription
         }
-        if let phoneDrop = Self.phoneCaptureDelegationsDirectory() {
-            Self.downloadUbiquitousFiles(in: phoneDrop)
-            let rows = (try? Self.loadOpportunityBoardRows(from: phoneDrop)) ?? []
-            // The recursive loader also walks Archive/ -- archived
-            // captures stay stored ("I don't delete it. I just archive
-            // it") but leave the canvas.
-            phoneArrivals = rows.filter { !$0.card.envelope.source.contains("/Archive/") }
-        } else {
-            phoneArrivals = []
+
+        // Ubiquity container resolution, directory creation, and placeholder
+        // materialization can all block on file-provider I/O. Never perform
+        // them on the main actor: a disconnected provider previously froze
+        // the entire Harness window in mkdirat during startup.
+        guard phoneCaptureRefreshTask == nil else { return }
+        phoneCaptureRefreshTask = Task { [weak self] in
+            let rows = await Task.detached(priority: .utility) {
+                Self.loadPhoneArrivalRows()
+            }.value
+            guard let self else { return }
+            self.phoneArrivals = rows
+            self.phoneCaptureRefreshTask = nil
         }
     }
 
@@ -378,19 +383,31 @@ final class MacWorkbenchModel: ObservableObject {
     /// shared pocket and the card leaves the arrivals stack.
     func archivePhoneArrival(_ row: OpportunityBoardRow) {
         let path = row.card.envelope.source
-        guard FileManager.default.fileExists(atPath: path),
-              let dir = Self.phoneCaptureDelegationsDirectory() else { return }
-        let archive = dir.appendingPathComponent("Archive", isDirectory: true)
-        try? FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
-        let destination = archive.appendingPathComponent(URL(fileURLWithPath: path).lastPathComponent)
-        try? FileManager.default.moveItem(at: URL(fileURLWithPath: path), to: destination)
-        refreshOpportunityBoard()
+        Task { [weak self] in
+            let didArchive = await Task.detached(priority: .utility) {
+                guard FileManager.default.fileExists(atPath: path),
+                      let dir = Self.phoneCaptureDelegationsDirectory() else { return false }
+                let archive = dir.appendingPathComponent("Archive", isDirectory: true)
+                do {
+                    try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
+                    let destination = archive.appendingPathComponent(URL(fileURLWithPath: path).lastPathComponent)
+                    try FileManager.default.moveItem(at: URL(fileURLWithPath: path), to: destination)
+                    return true
+                } catch {
+                    return false
+                }
+            }.value
+            if didArchive {
+                self?.refreshOpportunityBoard()
+            }
+        }
     }
 
     /// Documents/Delegations inside the suite's shared iCloud container.
-    /// Resolved once off the main thread (the first ubiquity lookup can
-    /// touch disk); nil when iCloud is signed out or the entitlement
-    /// isn't provisioned yet -- callers treat that as "no phone drops".
+    /// Resolved once by the background phone-capture loader (the first
+    /// ubiquity lookup can touch disk); nil when iCloud is signed out or
+    /// the entitlement isn't provisioned -- callers treat that as "no
+    /// phone drops".
     nonisolated private static let phoneCaptureContainerURL: URL? = {
         FileManager.default.url(forUbiquityContainerIdentifier: "iCloud.com.adamblair.harness")
     }()
@@ -402,6 +419,16 @@ final class MacWorkbenchModel: ObservableObject {
             .appendingPathComponent("Delegations", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
+    }
+
+    nonisolated static func loadPhoneArrivalRows(from directory: URL? = nil) -> [OpportunityBoardRow] {
+        guard let phoneDrop = directory ?? phoneCaptureDelegationsDirectory() else { return [] }
+        downloadUbiquitousFiles(in: phoneDrop)
+        let rows = (try? loadOpportunityBoardRows(from: phoneDrop)) ?? []
+        // The recursive loader also walks Archive/ -- archived captures
+        // stay stored ("I don't delete it. I just archive it") but leave
+        // the canvas.
+        return rows.filter { !$0.card.envelope.source.contains("/Archive/") }
     }
 
     /// iCloud placeholders (.icloud stubs) don't parse -- ask the daemon
@@ -1390,7 +1417,7 @@ final class MacWorkbenchModel: ObservableObject {
     ) -> String {
         let environmentName: String?
         switch backend {
-        case .codex: environmentName = "OPENAI_API_KEY"  // env only — never keychain
+        case .codex: environmentName = nil
         case .grok: environmentName = "XAI_API_KEY"
         case .claude: environmentName = "ANTHROPIC_API_KEY"
         case .hermes: environmentName = nil
@@ -1410,9 +1437,7 @@ final class MacWorkbenchModel: ObservableObject {
             return true
         case .codex, .hermes:
             // Codex runs its tool loop off the ChatGPT `codex login` session —
-            // no keychain key, so selecting it never triggers a keychain
-            // prompt. (An OpenAI API key can still be supplied via the
-            // OPENAI_API_KEY environment variable for anyone who wants it.)
+            // no API key or keychain account is loaded when it is selected.
             return false
         }
     }
@@ -2194,10 +2219,10 @@ struct WorkbenchToolGroup: Identifiable, Equatable {
                     title: "Codex",
                     icon: "terminal",
                     state: .available,
-                    detail: "local CLI",
-                    summary: "Routes model packets to the local Codex CLI on macOS.",
-                    permission: "Uses ChatGPT authorization from the Codex CLI.",
-                    provenance: "Backend metadata records chatgpt-auth-local-cli invocation."
+                    detail: "ChatGPT session",
+                    summary: "Routes model packets through the ChatGPT session proxy.",
+                    permission: "Uses the existing ChatGPT authorization from Codex.",
+                    provenance: "Backend metadata records chatgpt-session-proxy invocation."
                 ),
                 WorkbenchTool(
                     title: "Grok",

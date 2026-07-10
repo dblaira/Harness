@@ -27,7 +27,7 @@ public struct OntologyAuthorityRetriever: AuthorityRetrieving {
     }
 
     public func retrieve(prompt: String, ontology: Ontology, limit: Int = 6) async throws -> [GraphAuthorityHit] {
-        let queryTokens = Self.tokens(prompt)
+        let queryTokens = Self.retrievalTokens(prompt)
         guard !queryTokens.isEmpty else { return [] }
         if let liveHits = try? await liveSparqlHits(queryTokens: queryTokens, limit: limit), !liveHits.isEmpty {
             return liveHits
@@ -104,21 +104,11 @@ public struct OntologyAuthorityRetriever: AuthorityRetrieving {
     }
 
     private func liveSparqlHits(queryTokens: Set<String>, limit: Int) async throws -> [GraphAuthorityHit] {
-        let regex = Array(queryTokens).sorted().map(NSRegularExpression.escapedPattern(for:)).joined(separator: "|")
-        let query = """
-        PREFIX understood: <https://understood.app/ontology#>
-        SELECT ?s ?p ?o WHERE {
-          GRAPH <\(acceptedGraphIRI)> {
-            ?s ?p ?o .
-            FILTER(
-              (isLiteral(?o) && regex(lcase(str(?o)), "\(regex)")) ||
-              regex(lcase(str(?s)), "\(regex)") ||
-              regex(lcase(str(?p)), "\(regex)")
-            )
-          }
-        }
-        LIMIT \(max(limit * 6, limit))
-        """
+        let query = Self.liveQuery(
+            queryTokens: queryTokens,
+            acceptedGraphIRI: acceptedGraphIRI,
+            limit: limit
+        )
         var request = URLRequest(url: sparqlEndpoint)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
@@ -159,6 +149,7 @@ public struct OntologyAuthorityRetriever: AuthorityRetrieving {
 
     static func tokens(_ text: String) -> Set<String> {
         let stop: Set<String> = [
+            "and", "the", "you",
             "about", "after", "again", "before", "being", "could", "first",
             "from", "have", "into", "should", "that", "their", "there",
             "these", "thing", "this", "with", "what", "when", "where", "which",
@@ -169,6 +160,44 @@ public struct OntologyAuthorityRetriever: AuthorityRetrieving {
             .split { !$0.isLetter && !$0.isNumber }
             .map(String.init)
         return Set(raw.filter { $0.count > 2 && !stop.contains($0) })
+    }
+
+    /// Delegation fields are operating metadata, not the subject of the
+    /// user's question. Searching them made generic words such as authority,
+    /// source, and action outrank the actual request.
+    static func retrievalTokens(_ prompt: String) -> Set<String> {
+        tokens(DelegationContext.parsePrompt(prompt).message)
+    }
+
+    /// Rank matches inside Fuseki before applying the result cap. The old
+    /// query limited an unordered match stream and only ranked those first
+    /// rows in Swift, so a newly appended and more relevant accepted claim
+    /// could never reach the model.
+    static func liveQuery(
+        queryTokens: Set<String>,
+        acceptedGraphIRI: String,
+        limit: Int
+    ) -> String {
+        let scoreTerms = queryTokens.sorted().map { token in
+            let literal = token
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+            return "IF(CONTAINS(?searchText, \"\(literal)\"), 1, 0)"
+        }
+        let scoreExpression = scoreTerms.isEmpty ? "0" : scoreTerms.joined(separator: " + ")
+        return """
+        PREFIX understood: <https://understood.app/ontology#>
+        SELECT ?s ?p ?o WHERE {
+          GRAPH <\(acceptedGraphIRI)> {
+            ?s ?p ?o .
+            BIND(lcase(concat(str(?s), " ", str(?p), " ", str(?o))) AS ?searchText)
+            BIND((\(scoreExpression)) AS ?matchScore)
+            FILTER(?matchScore > 0)
+          }
+        }
+        ORDER BY DESC(?matchScore) STR(?s) STR(?p) STR(?o)
+        LIMIT \(max(limit * 6, limit))
+        """
     }
 
     static func score(_ queryTokens: Set<String>, in text: String) -> Double {

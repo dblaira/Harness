@@ -127,10 +127,6 @@ public struct AgentRunner: Sendable {
                 localServerReachable: await hermesReachable()
             )
         case .codex:
-            let openAIEnvKey = ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? ""
-            if keyPresent || !openAIEnvKey.isEmpty {
-                return .live
-            }
             #if os(macOS)
             guard let binary = codexPath else {
                 return BackendReadiness.evaluate(
@@ -181,7 +177,13 @@ public struct AgentRunner: Sendable {
     #if os(macOS)
     private func codexAccountReadiness(binary: String) -> BackendReadiness {
         do {
-            let output = try shell(binary, ["login", "status"], timeout: 5, includeStderrOnSuccess: true)
+            let output = try shell(
+                binary,
+                ["login", "status"],
+                timeout: 5,
+                includeStderrOnSuccess: true,
+                scrubSecretEnvironment: true
+            )
             if output.localizedCaseInsensitiveContains("chatgpt") {
                 return .live
             }
@@ -232,17 +234,9 @@ public struct AgentRunner: Sendable {
         let transcriptPrompt = Self.transcriptPrompt(system: system, history: history, user: user)
         switch backend {
         case .codex:
-            // ChatGPT via the OpenAI API when a key is present; else the
-            // existing ChatGPT session / CLI path. Options stay open.
-            let codexKey = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let hasOpenAIKey = !codexKey.isEmpty
-                || !(ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? "").isEmpty
-            if hasOpenAIKey {
-                return try await OpenAIClient(apiKey: codexKey.isEmpty ? nil : codexKey).send(
-                    messages: Self.openAIMessages(history: history, user: user, images: images),
-                    system: system
-                )
-            }
+            // Codex is subscription-session only. Never let an explicit or
+            // ambient OpenAI API key silently switch this backend to paid API
+            // execution.
             if CodexSessionClient.loadSessionToken() != nil {
                 return try await CodexSessionClient().send(
                     messages: Self.codexMessages(history: history, user: user, images: images),
@@ -254,7 +248,8 @@ public struct AgentRunner: Sendable {
             return try shell(
                 bin,
                 ["exec", "--skip-git-repo-check", "--ignore-user-config", "--ephemeral", transcriptPrompt],
-                timeout: 300
+                timeout: 300,
+                scrubSecretEnvironment: true
             )
             #else
             throw RunError.notFound("codex CLI")
@@ -303,24 +298,35 @@ public struct AgentRunner: Sendable {
 
     /// Whether the backend can run the native tool loop right now.
     /// Claude and Grok via their HTTPS APIs (Anthropic tool_use / OpenAI-
-    /// compatible tool_calls). The Grok session proxy uses the same tool-call
-    /// shape with `grok login` auth. The grok CLI and Codex CLI stay
-    /// single-shot — their tool-disabling safety flags are deliberately
-    /// untouched.
+    /// compatible tool_calls). Grok and Codex session proxies provide the
+    /// same native tool-call capability through subscription authorization.
     public func supportsToolLoop(backend: Backend, apiKey: String? = nil) -> Bool {
+        supportsToolLoop(
+            backend: backend,
+            apiKey: apiKey,
+            environment: ProcessInfo.processInfo.environment,
+            codexSessionToken: CodexSessionClient.loadSessionToken()
+        )
+    }
+
+    func supportsToolLoop(
+        backend: Backend,
+        apiKey: String? = nil,
+        environment: [String: String],
+        codexSessionToken: String?
+    ) -> Bool {
         let key = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         switch backend {
         case .claude:
-            let envKey = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] ?? ""
+            let envKey = environment["ANTHROPIC_API_KEY"] ?? ""
             return !key.isEmpty || !envKey.isEmpty
         case .grok:
-            let envKey = ProcessInfo.processInfo.environment["XAI_API_KEY"] ?? ""
+            let envKey = environment["XAI_API_KEY"] ?? ""
             return !key.isEmpty || !envKey.isEmpty || GrokSessionClient.sessionStatus() == .valid
         case .codex:
-            // ChatGPT is tool-capable via the OpenAI API key OR its `codex
-            // login` subscription session (Responses API function tools).
-            let envKey = ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? ""
-            return !key.isEmpty || !envKey.isEmpty || CodexSessionClient.loadSessionToken() != nil
+            // API keys are intentionally ignored: Codex tools run only through
+            // the ChatGPT `codex login` session proxy.
+            return !(codexSessionToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
         case .hermes:
             return false
         }
@@ -369,17 +375,8 @@ public struct AgentRunner: Sendable {
                 toolTranscript: toolTranscript
             )
         case .codex:
-            let hasOpenAIKey = effectiveKey != nil
-                || !(ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? "").isEmpty
-            if hasOpenAIKey {
-                return try await OpenAIClient(apiKey: effectiveKey).send(
-                    messages: Self.openAIMessages(history: history, user: user, images: images),
-                    system: system,
-                    tools: tools,
-                    toolTranscript: toolTranscript
-                )
-            }
-            // No API key — run tools off the ChatGPT `codex login` session.
+            // Always run Codex tools off the ChatGPT `codex login` session.
+            // Explicit and ambient OpenAI API keys are not a Codex transport.
             return try await CodexSessionClient().send(
                 messages: Self.codexMessages(history: history, user: user, images: images),
                 system: system,
@@ -391,14 +388,34 @@ public struct AgentRunner: Sendable {
         }
     }
 
-    private static func transcriptPrompt(system: String, history: [ConversationTurn], user: String) -> String {
+    static func transcriptPrompt(system: String, history: [ConversationTurn], user: String) -> String {
         var transcript = system + "\n\n---\n"
         for turn in history {
             let speaker = turn.role == .user ? "User" : "Assistant"
             transcript += "\(speaker): \(turn.text)\n\n"
         }
-        transcript += "User: \(user)"
+        transcript += "User: \(user)\n\nAssistant:"
         return transcript
+    }
+
+    static let hermesStopSequences = ["\nUser:", "\n\nUser:", "\n---\nUser:"]
+
+    static func hermesGeneratePayload(
+        system: String,
+        history: [ConversationTurn],
+        user: String
+    ) -> [String: Any] {
+        [
+            "model": "hermes3:8b",
+            "prompt": transcriptPrompt(system: system, history: history, user: user),
+            "stream": false,
+            "options": [
+                "stop": hermesStopSequences,
+                "temperature": 0,
+                "seed": 7_102_026,
+                "num_predict": 800,
+            ],
+        ]
     }
 
     private static func codexMessages(
@@ -410,18 +427,6 @@ public struct AgentRunner: Sendable {
             CodexSessionClient.Message(role: $0.role.rawValue, text: $0.text)
         }
         messages.append(CodexSessionClient.Message(role: "user", text: user, images: images))
-        return messages
-    }
-
-    private static func openAIMessages(
-        history: [ConversationTurn],
-        user: String,
-        images: [ModelImageAttachment]
-    ) -> [OpenAIClient.Message] {
-        var messages = history.map {
-            OpenAIClient.Message(role: $0.role.rawValue, text: $0.text)
-        }
-        messages.append(OpenAIClient.Message(role: "user", text: user, images: images))
         return messages
     }
 
@@ -463,11 +468,13 @@ public struct AgentRunner: Sendable {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: [
-            "model": "hermes3:8b",
-            "prompt": Self.transcriptPrompt(system: system, history: history, user: user),
-            "stream": false,
-        ])
+        request.httpBody = try JSONSerialization.data(
+            withJSONObject: Self.hermesGeneratePayload(
+                system: system,
+                history: history,
+                user: user
+            )
+        )
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw RunError.failed("Ollama not reachable on 127.0.0.1:11434. Is `ollama serve` running?")

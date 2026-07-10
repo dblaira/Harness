@@ -472,12 +472,11 @@ private struct SingleShotBackend: ModelBackendAdapter {
     #expect(!detail.traceEvents.contains { $0.stage == .toolCall })
 }
 
-@Test func toolLoopCapabilityDetectionMatchesBackendAndKey() {
+@Test func APIKeyBackendsAndHermesReportTheirToolCapability() {
     let runner = AgentRunner()
-    // All three API backends are tool-capable once their key is present.
+    // Claude and Grok are tool-capable once their vendor key is present.
     #expect(runner.supportsToolLoop(backend: .claude, apiKey: "test-anthropic-key"))
     #expect(runner.supportsToolLoop(backend: .grok, apiKey: "test-grok-key"))
-    #expect(runner.supportsToolLoop(backend: .codex, apiKey: "test-openai-key"))
     // Local Hermes stays single-shot no matter what — no API tool path.
     #expect(!runner.supportsToolLoop(backend: .hermes, apiKey: "irrelevant"))
 }
@@ -759,14 +758,22 @@ private struct SingleShotBackend: ModelBackendAdapter {
     }
 }
 
-/// The whole point of this change: all three API backends report tool-capable
-/// when their key is present, so none of them silently falls back to a
-/// tool-less single-shot run.
-@Test func allThreeAPIBackendsSupportToolLoopWithAKey() {
+/// Codex is ChatGPT-session only. Neither an explicitly passed key nor an
+/// ambient OPENAI_API_KEY may silently switch it to paid API execution.
+@Test func codexToolLoopRequiresChatGPTSessionNotAPIKey() {
     let runner = AgentRunner()
-    #expect(runner.supportsToolLoop(backend: .claude, apiKey: "test-anthropic-key"))
-    #expect(runner.supportsToolLoop(backend: .grok, apiKey: "test-grok-key"))
-    #expect(runner.supportsToolLoop(backend: .codex, apiKey: "test-openai-key"))
-    // Local Hermes stays single-shot by design.
-    #expect(!runner.supportsToolLoop(backend: .hermes, apiKey: "x"))
+    let paidAPIEnvironment = ["OPENAI_API_KEY": "sk-openai-env"]
+
+    #expect(!runner.supportsToolLoop(
+        backend: .codex,
+        apiKey: "sk-openai-explicit",
+        environment: paidAPIEnvironment,
+        codexSessionToken: nil
+    ))
+    #expect(runner.supportsToolLoop(
+        backend: .codex,
+        apiKey: nil,
+        environment: [:],
+        codexSessionToken: "chatgpt-session-token"
+    ))
 }

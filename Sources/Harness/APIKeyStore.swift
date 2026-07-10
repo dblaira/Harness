@@ -131,7 +131,6 @@ enum APIKeyStore {
         switch backend {
         case .codex:
             // No keychain account: Codex runs off its `codex login` session,
-            // and any OpenAI API key comes from the OPENAI_API_KEY env var —
             // so selecting Codex never queries the keychain or prompts.
             return nil
         case .grok:
