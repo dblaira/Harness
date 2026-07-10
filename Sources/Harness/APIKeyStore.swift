@@ -48,6 +48,14 @@ enum APIKeyStore {
     }
 
     private static func loadKey(account: String) -> String? {
+        // Secrets live in local .env only (the law). The env file answers
+        // without ever touching the keychain, so rebuilds never re-prompt —
+        // keychain ACLs die with every new build signature; a file doesn't.
+        // An empty value in the file means "parked": treat as no key and
+        // still never query the keychain.
+        if let fileKey = envFileKey(account: account) {
+            return fileKey.isEmpty ? nil : fileKey
+        }
         var query = baseQuery(account: account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -61,6 +69,32 @@ enum APIKeyStore {
             return nil
         }
         return key
+    }
+
+    private static func envFileKey(account: String) -> String? {
+        let varName: String
+        switch account {
+        case claudeAccount: varName = "ANTHROPIC_API_KEY"
+        case xAIAccount: varName = "XAI_API_KEY"
+        case firecrawlAccount: varName = "FIRECRAWL_API_KEY"
+        default: return nil
+        }
+        let home = NSHomeDirectory()
+        for path in [home + "/Developer/GitHub/Harness/.env", home + "/.harness.env"] {
+            guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+            for rawLine in text.split(separator: "\n") {
+                let line = rawLine.trimmingCharacters(in: .whitespaces)
+                if line.hasPrefix("#") { continue }
+                guard let eq = line.firstIndex(of: "=") else { continue }
+                let name = line[..<eq].trimmingCharacters(in: .whitespaces)
+                guard name == varName else { continue }
+                let value = line[line.index(after: eq)...]
+                    .trimmingCharacters(in: .whitespaces)
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+                return value
+            }
+        }
+        return nil
     }
 
     private static func saveKey(_ key: String, account: String) throws {
