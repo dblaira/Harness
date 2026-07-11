@@ -26,3 +26,9 @@ import Testing
     )
     #expect(packet.system.contains("DELEGATION CONTEXT RULE"))
 }
+
+@Test func delegationContextPreservesIntentionalMessageWhitespace() {
+    let prompt = "DELEGATION CONTEXT\nPriority: High\n\n---\n\n  Preserve this padding  \n"
+    let parsed = DelegationContext.parsePrompt(prompt)
+    #expect(parsed.message == "  Preserve this padding  ")
+}

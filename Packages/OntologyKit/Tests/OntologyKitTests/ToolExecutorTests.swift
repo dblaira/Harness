@@ -408,6 +408,7 @@ private struct StubSearcher: SessionSearching {
 @Test func secretEnvironmentIsScrubbed() {
     #expect(AgentRunner.isSecretEnvironmentName("XAI_API_KEY"))
     #expect(AgentRunner.isSecretEnvironmentName("ANTHROPIC_API_KEY"))
+    #expect(AgentRunner.isSecretEnvironmentName("OPENAI_API_KEY"))
     #expect(AgentRunner.isSecretEnvironmentName("GITHUB_TOKEN"))
     #expect(AgentRunner.isSecretEnvironmentName("MY_APP_SECRET"))
     #expect(!AgentRunner.isSecretEnvironmentName("PATH"))
@@ -417,10 +418,12 @@ private struct StubSearcher: SessionSearching {
         "PATH": "/usr/bin",
         "XAI_API_KEY": "test-grok-value",
         "ANTHROPIC_API_KEY": "test-anthropic-value",
+        "OPENAI_API_KEY": "test-openai-value",
         "HOME": "/Users/adam",
     ])
     #expect(scrubbed["PATH"] == "/usr/bin")
     #expect(scrubbed["HOME"] == "/Users/adam")
     #expect(scrubbed["XAI_API_KEY"] == nil)
+    #expect(scrubbed["OPENAI_API_KEY"] == nil)
     #expect(scrubbed["ANTHROPIC_API_KEY"] == nil)
 }

@@ -37,8 +37,8 @@ import Testing
     #expect(readiness == .pending(action: "install codex CLI and run codex login --device-auth"))
 }
 
-@Test func codexUsesChatGPTAuthenticatedCLIInvocation() {
-    #expect(Backend.codex.invocationMethod == "chatgpt-auth-local-cli")
+@Test func codexUsesChatGPTSessionProxyInvocation() {
+    #expect(Backend.codex.invocationMethod == "chatgpt-session-proxy")
 }
 
 @Test func grokWithoutKeyOrCLINamesBothOptions() {

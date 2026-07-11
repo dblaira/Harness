@@ -73,6 +73,16 @@ import OntologyKit
     #expect(tools.contains { $0.title == "NotebookLM" })
 }
 
+@Test func codexWorkbenchToolMatchesSessionProxyBackendMetadata() throws {
+    let tools = WorkbenchToolGroup.defaults.flatMap(\.tools)
+    let codex = try #require(tools.first { $0.title == "Codex" })
+
+    #expect(codex.detail == "ChatGPT session")
+    #expect(codex.summary == "Routes model packets through the ChatGPT session proxy.")
+    #expect(codex.permission == "Uses the existing ChatGPT authorization from Codex.")
+    #expect(codex.provenance == "Backend metadata records \(Backend.codex.invocationMethod) invocation.")
+}
+
 @Test func communicationWorkbenchToolsSurfaceAdamSkills() {
     let capabilities = HarnessCapabilityRegistry.defaultCapabilities()
     let group = WorkbenchToolGroup.communicationSkills(from: capabilities)
@@ -144,6 +154,46 @@ import OntologyKit
     #expect(WorkbenchCenterView.allCases.map(\.rawValue) == ["delegation", "chat"])
     #expect(WorkbenchCenterView.delegation.label == "Delegation")
     #expect(WorkbenchCenterView.chat.label == "Chat")
+}
+
+@Test func phoneArrivalLoaderKeepsArchivedCapturesOffTheCanvas() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let archive = root.appendingPathComponent("Archive", isDirectory: true)
+    try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    try """
+    ---
+    type: opportunity
+    opp_id: PHONE-ACTIVE
+    title: Active phone capture
+    resource: https://example.com/active
+    fit: 0.9
+    rules_hit: [R-01]
+    app: Understood
+    sources: 1
+    ---
+    Active phone capture.
+    """.write(to: root.appendingPathComponent("PHONE-ACTIVE.md"), atomically: true, encoding: .utf8)
+
+    try """
+    ---
+    type: opportunity
+    opp_id: PHONE-ARCHIVED
+    title: Archived phone capture
+    resource: https://example.com/archived
+    fit: 0.9
+    rules_hit: [R-01]
+    app: Understood
+    sources: 1
+    ---
+    Archived phone capture.
+    """.write(to: archive.appendingPathComponent("PHONE-ARCHIVED.md"), atomically: true, encoding: .utf8)
+
+    let rows = MacWorkbenchModel.loadPhoneArrivalRows(from: root)
+
+    #expect(rows.map(\.id) == ["PHONE-ACTIVE"])
 }
 
 @Test func delegationQueueActionRecordsShareBatchForMultiSelect() {
