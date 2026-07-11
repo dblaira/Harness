@@ -65,6 +65,10 @@ final class MacWorkbenchModel: ObservableObject {
     /// (Adam, design-brief-ios-workbench.md) -- his words or verbatim
     /// quoted sources only, sourced from watched .md files.
     @Published var fascinationCards: [FascinationCard] = []
+    @Published private(set) var fascinationLoadIssue: String?
+    private static let harnessDocumentsBookmarkDefaultsKey = "Harness.documentsDirectoryBookmark"
+    private static var scopedHarnessDocumentsURL: URL?
+    private static var harnessDocumentsAccessPanelOpen = false
     @Published var connectors: [HarnessConnector] = HarnessConnectorRegistry.defaultConnectors()
     @Published var capabilities: [HarnessCapability] = HarnessCapabilityRegistry.defaultCapabilities()
     @Published var routePlan = HarnessExecutionRoutePlan(prompt: "", steps: [])
@@ -120,6 +124,7 @@ final class MacWorkbenchModel: ObservableObject {
         self.hasFirecrawlAPIKey = Self.loadFirecrawlAPIKey() != nil
         loadAPIKey(for: backend)
         refreshReadiness(for: backend)
+        Self.restoreHarnessDocumentsDirectoryAccess()
         Task {
             await refreshRuns()
             await restoreMostRecentSession()
@@ -356,12 +361,15 @@ final class MacWorkbenchModel: ObservableObject {
     @Published private(set) var phoneArrivals: [OpportunityBoardRow] = []
 
     func refreshOpportunityBoard() {
+        let directory = Self.authorizedOpportunityBoardDirectory()
         do {
-            opportunityBoardRows = try Self.loadOpportunityBoardRows(from: Self.defaultOpportunityBoardDirectory())
+            opportunityBoardRows = try Self.loadOpportunityBoardRows(from: directory)
             opportunityBoardLoadIssue = nil
         } catch {
-            opportunityBoardRows = []
             opportunityBoardLoadIssue = error.localizedDescription
+            if Self.isHarnessDocumentsAccessError(error) {
+                requestHarnessDocumentsDirectoryAccess()
+            }
         }
 
         // Ubiquity container resolution, directory creation, and placeholder
@@ -448,9 +456,12 @@ final class MacWorkbenchModel: ObservableObject {
     }
 
     nonisolated static func defaultOpportunityBoardDirectory() -> URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Documents", isDirectory: true)
-            .appendingPathComponent("Harness", isDirectory: true)
+        defaultHarnessDocumentsDirectory()
+            .appendingPathComponent("Delegations", isDirectory: true)
+    }
+
+    private static func authorizedOpportunityBoardDirectory() -> URL {
+        (scopedHarnessDocumentsURL ?? defaultHarnessDocumentsDirectory())
             .appendingPathComponent("Delegations", isDirectory: true)
     }
 
@@ -458,29 +469,51 @@ final class MacWorkbenchModel: ObservableObject {
         from directory: URL,
         fileManager: FileManager = .default
     ) throws -> [OpportunityBoardRow] {
-        guard fileManager.fileExists(atPath: directory.path) else {
-            return []
-        }
+        _ = try fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        )
         guard let enumerator = fileManager.enumerator(
             at: directory,
             includingPropertiesForKeys: [.isRegularFileKey],
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
         ) else {
-            return []
+            throw CocoaError(.fileReadUnknown)
         }
 
         let parser = OpportunityCardParser()
         let validator = OpportunityCardValidator()
         var cards: [OpportunityCard] = []
+        var readableMarkdownCount = 0
+        var firstMarkdownReadError: Error?
 
         for case let file as URL in enumerator {
             guard file.pathExtension.lowercased() == "md" else { continue }
-            guard (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
-            let markdown = try String(contentsOf: file, encoding: .utf8)
+            let isRegularFile: Bool
+            do {
+                isRegularFile = try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true
+            } catch {
+                firstMarkdownReadError = firstMarkdownReadError ?? error
+                continue
+            }
+            guard isRegularFile else { continue }
+            let markdown: String
+            do {
+                markdown = try String(contentsOf: file, encoding: .utf8)
+                readableMarkdownCount += 1
+            } catch {
+                firstMarkdownReadError = firstMarkdownReadError ?? error
+                continue
+            }
             guard case let .opportunity(card) = try? parser.parse(markdown: markdown, source: file.path),
                   validator.validate(card).passed
             else { continue }
             cards.append(card)
+        }
+
+        if readableMarkdownCount == 0, let firstMarkdownReadError {
+            throw firstMarkdownReadError
         }
 
         return OpportunityBoardDeduper().deduplicate(cards)
@@ -490,9 +523,11 @@ final class MacWorkbenchModel: ObservableObject {
 
     func refreshSourcePool() {
         do {
-            sourcePoolCards = try Self.loadSourcePoolCards(from: Self.defaultOpportunityBoardDirectory())
+            sourcePoolCards = try Self.loadSourcePoolCards(from: Self.authorizedOpportunityBoardDirectory())
         } catch {
-            sourcePoolCards = []
+            if Self.isHarnessDocumentsAccessError(error) {
+                requestHarnessDocumentsDirectoryAccess()
+            }
         }
     }
 
@@ -504,25 +539,49 @@ final class MacWorkbenchModel: ObservableObject {
         from directory: URL,
         fileManager: FileManager = .default
     ) throws -> [OpportunitySourceCard] {
-        guard fileManager.fileExists(atPath: directory.path) else { return [] }
+        _ = try fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        )
         guard let enumerator = fileManager.enumerator(
             at: directory,
             includingPropertiesForKeys: [.isRegularFileKey],
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
-        ) else { return [] }
+        ) else { throw CocoaError(.fileReadUnknown) }
 
         let parser = OpportunityCardParser()
         let validator = OpportunityCardValidator()
         var cards: [OpportunitySourceCard] = []
+        var readableMarkdownCount = 0
+        var firstMarkdownReadError: Error?
 
         for case let file as URL in enumerator {
             guard file.pathExtension.lowercased() == "md" else { continue }
-            guard (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
-            let markdown = try String(contentsOf: file, encoding: .utf8)
+            let isRegularFile: Bool
+            do {
+                isRegularFile = try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true
+            } catch {
+                firstMarkdownReadError = firstMarkdownReadError ?? error
+                continue
+            }
+            guard isRegularFile else { continue }
+            let markdown: String
+            do {
+                markdown = try String(contentsOf: file, encoding: .utf8)
+                readableMarkdownCount += 1
+            } catch {
+                firstMarkdownReadError = firstMarkdownReadError ?? error
+                continue
+            }
             guard case let .sourceCard(card) = try? parser.parse(markdown: markdown, source: file.path),
                   validator.validate(card).passed
             else { continue }
             cards.append(card)
+        }
+
+        if readableMarkdownCount == 0, let firstMarkdownReadError {
+            throw firstMarkdownReadError
         }
 
         return cards
@@ -563,7 +622,7 @@ final class MacWorkbenchModel: ObservableObject {
     /// folder so the capture survives even if the original moves, then
     /// writes the source_card pointing at the copy.
     func captureSourcePoolFile(_ localURL: URL) {
-        let assetsDirectory = Self.defaultOpportunityBoardDirectory().appendingPathComponent("pool-assets", isDirectory: true)
+        let assetsDirectory = Self.authorizedOpportunityBoardDirectory().appendingPathComponent("pool-assets", isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: assetsDirectory, withIntermediateDirectories: true)
             let ext = localURL.pathExtension.isEmpty ? "bin" : localURL.pathExtension
@@ -576,7 +635,7 @@ final class MacWorkbenchModel: ObservableObject {
     }
 
     private func writeSourcePoolCard(resource: String, retrievedBy: String) {
-        let directory = Self.defaultOpportunityBoardDirectory()
+        let directory = Self.authorizedOpportunityBoardDirectory()
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let contentHash = Self.sha256Hex(resource)
@@ -606,17 +665,134 @@ final class MacWorkbenchModel: ObservableObject {
     // MARK: - FASCINATION carousel (WO-I)
 
     func refreshFascinationCards() {
+        let directory = Self.authorizedFascinationsDirectory()
         do {
-            fascinationCards = try Self.loadFascinationCards(from: Self.defaultFascinationsDirectory())
+            let cards = try Self.loadFascinationCards(from: directory)
+            fascinationCards = cards
+            fascinationLoadIssue = nil
         } catch {
-            fascinationCards = []
+            fascinationLoadIssue = error.localizedDescription
+            if Self.isHarnessDocumentsAccessError(error) {
+                requestHarnessDocumentsDirectoryAccess()
+            }
         }
     }
 
-    nonisolated static func defaultFascinationsDirectory() -> URL {
+    /// One user-selected grant owns the existing Harness folder for the
+    /// process lifetime. Both the original carousel and original Mind Map
+    /// are children of this folder; asking twice would create competing
+    /// panels and two independent pieces of permission state.
+    private static func restoreHarnessDocumentsDirectoryAccess(
+        defaults: UserDefaults = .standard
+    ) {
+        guard scopedHarnessDocumentsURL == nil,
+              let bookmark = defaults.data(forKey: harnessDocumentsBookmarkDefaultsKey)
+        else { return }
+        var stale = false
+        do {
+            let url = try URL(
+                resolvingBookmarkData: bookmark,
+                options: [.withSecurityScope],
+                relativeTo: nil,
+                bookmarkDataIsStale: &stale
+            )
+            guard harnessDocumentsDirectoryURLsReferToSameResource(
+                url,
+                defaultHarnessDocumentsDirectory()
+            ),
+                  url.startAccessingSecurityScopedResource() else { return }
+            scopedHarnessDocumentsURL = url
+            if stale {
+                let refreshed = try url.bookmarkData(
+                    options: [.withSecurityScope],
+                    includingResourceValuesForKeys: nil,
+                    relativeTo: nil
+                )
+                defaults.set(refreshed, forKey: harnessDocumentsBookmarkDefaultsKey)
+            }
+        } catch {
+            defaults.removeObject(forKey: harnessDocumentsBookmarkDefaultsKey)
+        }
+    }
+
+    private func requestHarnessDocumentsDirectoryAccess() {
+        guard !Self.harnessDocumentsAccessPanelOpen else { return }
+        Self.harnessDocumentsAccessPanelOpen = true
+        let expected = Self.defaultHarnessDocumentsDirectory().standardizedFileURL
+        let panel = NSOpenPanel()
+        panel.title = "Give Harness access to its existing folder"
+        panel.message = "Select this Harness folder so the original carousel and Mind Map can keep reading their cards."
+        panel.prompt = "Give Access"
+        panel.directoryURL = expected
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        panel.begin { [weak self] response in
+            Task { @MainActor in
+                Self.harnessDocumentsAccessPanelOpen = false
+                guard let self else { return }
+                guard response == .OK, let selected = panel.url?.standardizedFileURL else {
+                    self.fascinationLoadIssue = "Folder access is required to show the original carousel."
+                    self.opportunityBoardLoadIssue = "Folder access is required to show the original Mind Map."
+                    return
+                }
+                guard Self.harnessDocumentsDirectoryURLsReferToSameResource(selected, expected) else {
+                    self.fascinationLoadIssue = "Choose the existing Documents/Harness folder."
+                    self.opportunityBoardLoadIssue = "Choose the existing Documents/Harness folder."
+                    return
+                }
+                do {
+                    let bookmark = try selected.bookmarkData(
+                        options: [.withSecurityScope],
+                        includingResourceValuesForKeys: nil,
+                        relativeTo: nil
+                    )
+                    UserDefaults.standard.set(bookmark, forKey: Self.harnessDocumentsBookmarkDefaultsKey)
+                    guard selected.startAccessingSecurityScopedResource() else {
+                        throw CocoaError(.fileReadNoPermission)
+                    }
+                    Self.scopedHarnessDocumentsURL = selected
+                    self.refreshFascinationCards()
+                    self.refreshOpportunityBoard()
+                    self.refreshSourcePool()
+                } catch {
+                    self.fascinationLoadIssue = "Harness folder access failed: \(error.localizedDescription)"
+                    self.opportunityBoardLoadIssue = "Harness folder access failed: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private static func isHarnessDocumentsAccessError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == NSCocoaErrorDomain && [
+            CocoaError.fileReadNoPermission.rawValue,
+            CocoaError.fileNoSuchFile.rawValue,
+        ].contains(nsError.code)
+    }
+
+    nonisolated static func harnessDocumentsDirectoryURLsReferToSameResource(
+        _ lhs: URL,
+        _ rhs: URL
+    ) -> Bool {
+        lhs.resolvingSymlinksInPath().standardizedFileURL
+            == rhs.resolvingSymlinksInPath().standardizedFileURL
+    }
+
+    nonisolated static func defaultHarnessDocumentsDirectory() -> URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Documents", isDirectory: true)
             .appendingPathComponent("Harness", isDirectory: true)
+    }
+
+    nonisolated static func defaultFascinationsDirectory() -> URL {
+        defaultHarnessDocumentsDirectory()
+            .appendingPathComponent("Fascinations", isDirectory: true)
+    }
+
+    private static func authorizedFascinationsDirectory() -> URL {
+        (scopedHarnessDocumentsURL ?? defaultHarnessDocumentsDirectory())
             .appendingPathComponent("Fascinations", isDirectory: true)
     }
 
@@ -628,18 +804,41 @@ final class MacWorkbenchModel: ObservableObject {
         from directory: URL,
         fileManager: FileManager = .default
     ) throws -> [FascinationCard] {
-        guard fileManager.fileExists(atPath: directory.path) else { return [] }
+        // FileManager.enumerator can return a non-nil enumerator that yields
+        // no files when macOS denies Documents access. Force a throwing read
+        // first so permission loss cannot masquerade as an empty carousel.
+        _ = try fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        )
         guard let enumerator = fileManager.enumerator(
             at: directory,
             includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
-        ) else { return [] }
+        ) else { throw CocoaError(.fileReadUnknown) }
 
         var cards: [FascinationCard] = []
+        var readableMarkdownCount = 0
+        var firstMarkdownReadError: Error?
         for case let file as URL in enumerator {
             guard file.pathExtension.lowercased() == "md" else { continue }
-            guard (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
-            let markdown = try String(contentsOf: file, encoding: .utf8)
+            let isRegularFile: Bool
+            do {
+                isRegularFile = try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true
+            } catch {
+                firstMarkdownReadError = firstMarkdownReadError ?? error
+                continue
+            }
+            guard isRegularFile else { continue }
+            let markdown: String
+            do {
+                markdown = try String(contentsOf: file, encoding: .utf8)
+                readableMarkdownCount += 1
+            } catch {
+                firstMarkdownReadError = firstMarkdownReadError ?? error
+                continue
+            }
             let (frontmatter, body) = Self.splitFrontmatter(markdown)
             let quote = body.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !quote.isEmpty else { continue }
@@ -653,6 +852,9 @@ final class MacWorkbenchModel: ObservableObject {
                 attribution: (attribution?.isEmpty == false ? attribution! : nil) ?? "ADAM",
                 date: date
             ))
+        }
+        if readableMarkdownCount == 0, let firstMarkdownReadError {
+            throw firstMarkdownReadError
         }
         return cards.sorted { $0.date > $1.date }
     }
@@ -739,7 +941,7 @@ final class MacWorkbenchModel: ObservableObject {
             : draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let ontology = ontology
         let ledger = ledger
-        let outputDirectory = Self.defaultOpportunityBoardDirectory()
+        let outputDirectory = Self.authorizedOpportunityBoardDirectory()
         let backend = backend
         let apiKey = apiKey
         let killSwitch = DelegationAgentKillSwitch(
