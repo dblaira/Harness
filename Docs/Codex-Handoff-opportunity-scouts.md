@@ -1,6 +1,6 @@
 > ⚠️ SUPERSEDED: vocabulary in this handoff is outdated as of `dc9b893`. Current contract: `Docs/SPEC-delegation-agents-v1.2.md`. Kept for history.
 
-# Codex Handoff — Opportunity Scouts v1.1, Phase 1
+# Codex Handoff — Opportunity Scouts v1.1, Initial Scope
 
 Date: 2026-07-04
 Repo: `/Users/blairstudio/GitHub/Harness` · GitHub: `https://github.com/dblaira/Harness` · branch `main`
@@ -12,7 +12,7 @@ Harness is Adam Blair's native macOS/iOS agent workbench (Swift/SwiftUI, XcodeGe
 
 **What you are building:** Opportunity Scouts — agents that fetch external signals via Firecrawl, triage them against Adam's accepted Discernment Rules (R-IDs in `/accepted`), and emit them as envelope-conformant markdown cards onto a dense sortable **Board**. Adam's eye does recognition; the machine holds all structure. No agent ever executes, spends, trades, contacts, or commits to anything.
 
-## Scope: Phase 1 = P0 items 2–7 of the spec
+## Scope: P0 items 2–7 of the spec
 
 (Item 1 — Discernment Rules through the queue — is Adam's job, not yours. Do not seed rules.)
 
@@ -106,7 +106,7 @@ Scraped markdown body lives here, provenance-labeled, lowest trust tier.
 - Board home: Harness-native table is primary; optional Notion mirror is P1, skip for now.
 - Hold-resurface condition storage: frontmatter vs. ledger vs. graph.
 
-## Adam's acceptance test (Phase 1 done means exactly this)
+## Adam's acceptance test (done means exactly this)
 
 Press "Run scout" → rows appear on the Board, deduped by resource, every row citing R-IDs and ≥1 source → sort by Priority, sweep-Pass a batch, Pursue one → Pursue wrote a single itemized ledger entry, Pass wrote batch entries → a file declaring `trust_level: accepted` displays as supporting memory with "self-declared label ignored" → Trace shows queries, spend, and rows emitted. Zero external side effects from any verb.
 

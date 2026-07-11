@@ -36,7 +36,7 @@ trust_level: proposal — nothing here enters /accepted without the queue
 6. **New Clear Sign:** one hour on the Board → ≥1 Pursue you'd never
    have found manually. Your sentence, made observable.
 
-**Your test when Codex says Phase 1 is done:** press "Run scout" → rows
+**Your test when Codex says the initial build is done:** press "Run scout" → rows
 appear on the Board, deduped by resource, every row citing R-IDs and ≥1
 source → sort by Priority, sweep-Pass a batch, Pursue one → Pursue wrote
 a single itemized ledger entry, Pass wrote batch entries → a file
@@ -77,7 +77,7 @@ v1.1 uncaps data and keeps authority itemized.
 1. **Taste as authority.** ≥10 Discernment Rules through the queue into
    `/accepted` within 7 days, citable as R-01…R-n.
 2. **Board live.** Scout #1 emitting deduped, rule-cited rows to the
-   Board within 14 days of Phase 1 start.
+   Board within 14 days of the initial build start.
 3. **The Clear Sign.** One hour of Board scanning yields ≥1 Pursue Adam
    judges he would not have found manually. First fire within 30 days.
 4. **Zero authority leaks.** 0 rows enter `/accepted`, 0 external
@@ -240,10 +240,10 @@ card verbs also available on Board rows.
 - **Phase 0 — no code.** Rules through the queue. Watchlist sentence
   in force (default above). Codex drafts both SHACL shapes against the
   golden fixtures.
-- **Phase 1 — Codex build.** P0 items 2–7. Tests green, committed per
+- **Initial Codex build.** P0 items 2–7. Tests green, committed per
   slice. Acceptance = the FOR ADAM test above.
-- **Phase 2.** P1 items 8–12.
-- **Phase 3 — after the Clear Sign fires.** Fleet: conformance-gated
+- **Next expansion.** P1 items 8–12.
+- **After the Clear Sign fires.** Fleet: conformance-gated
   entry, precision-pruned exit. If precision is bad, fix rules — never
   volume.
 

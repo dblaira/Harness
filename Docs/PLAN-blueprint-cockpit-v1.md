@@ -85,7 +85,7 @@ real graph state from day one.*
   *Test: Fuseki stopped → gate reads LOCKED; local file present with
   four ≥7 ratings → gate reads OPEN.*
 
-## Phase 1 — Shell, rail, and the visual language
+## Foundation — Shell, rail, and the visual language
 
 - **WO-F — MacBlueprintView shell.** `case blueprint` in
   `WorkbenchCenterView` (`MacChatView.swift:3235`), branches in
@@ -116,7 +116,7 @@ real graph state from day one.*
   *Test: drop a quote .md in the folder → card appears with Adam's
   words verbatim.*
 
-## Phase 2 — Composer, decisions, ledger
+## Buildout — Composer, decisions, ledger
 
 - **WO-J — Three editable fields.** Placeholders already exist
   verbatim (`MacDelegateFormView.swift:155`, `MacChatView.swift:552-556`);
@@ -199,9 +199,9 @@ real graph state from day one.*
 
 ## Verification of the whole plan
 
-The requirement is the test: after Phase 1, Adam rates four cells and
+The requirement is the test: after the foundation is complete, Adam rates four cells and
 watches 5–8 unlock — then we stop Fuseki and watch them lock again.
-That single demo proves the design's soul is real. After Phase 4's
+That single demo proves the design's soul is real. After the final build's
 spike, one delegation ends with a genuine simulator screenshot on its
 evidence card. Everything else is recombination of code that already
 passes tests in this repo.

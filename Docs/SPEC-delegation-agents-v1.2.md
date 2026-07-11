@@ -37,7 +37,7 @@ by maturity: News Calm (mild curiosity, unfamiliar domains) → Notorious
 Recall (crossed threshold, research questions, delegations) → Understood
 (understood enough to act) → SAVY (mature, leveraged, compounding).
 
-**Your test when the build says Phase 1 is done:** press "Run agent" →
+**Your test when the initial build is done:** press "Run agent" →
 delegations appear in the Queue, deduped by resource, every one citing
 R-IDs and ≥1 source → sort by Priority, sweep-Pass a batch, Pursue one →
 Pursue wrote a single itemized ledger entry, Pass wrote batch entries →
@@ -218,13 +218,13 @@ precision stats.
 - Triage LLM: Hermes local vs. Claude API (~50 docs/run).
 - Hold return condition storage: frontmatter vs. ledger vs. graph.
 
-## Phasing
+## Delivery progression
 
-- **Phase 1 (in progress).** P0 items 2–7 are built. Remaining open
+- **Current build (in progress).** P0 items 2–7 are built. Remaining open
   details: Adam's 10 accepted rules and Hold return condition.
   Acceptance = the FOR ADAM test.
-- **Phase 2.** P1 items 8–12.
-- **Phase 3 — after the Clear Sign of Success fires.** The fleet:
+- **Next expansion.** P1 items 8–12.
+- **After the Clear Sign of Success fires.** The fleet:
   conformance-gated entry, precision-pruned exit. If precision is bad,
   fix rules — never volume.
 

@@ -55,20 +55,20 @@ Describe effort in observable units, or drop the sizing entirely:
 - clicks ("three clicks in the existing queue")
 - files ("one file, no code")
 - decisions ("one blocking decision, two non-blocking")
-- dependency/sequence ("before Codex starts," "blocks Phase 1,"
+- dependency/sequence ("before Codex starts," "blocks the initial build,"
   "after the Clear Sign fires")
 
 ## Rewrites (bad → good)
 
 - "Import it and see the note with your own eyes. One minute, no
   code." → "Import it and see the note with your own eyes. No code."
-- "Two inputs still gate Phase 1, both under ten minutes." → "Two
-  inputs still gate Phase 1: one sentence, one review pass."
+- "Two inputs still gate the initial build, both under ten minutes." → "Two
+  inputs still gate the initial build: one sentence, one review pass."
 - "The connector becomes a weekend job instead of a bet." → "The
   connector becomes a bounded slice instead of a bet."
 - "Rotate the key this weekend; five-minute job, no urgency." →
   "Rotate the key; one console action, nothing depends on it."
-- "Phase 1 — first Codex day." → "Phase 1 — first Codex slice;
+- "First Codex day." → "First Codex slice;
   acceptance criteria define done."
 
 ## Harness eval: `no-time-estimates`
