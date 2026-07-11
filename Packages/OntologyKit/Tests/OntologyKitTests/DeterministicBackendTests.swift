@@ -3,12 +3,13 @@ import Testing
 @testable import OntologyKit
 
 @Test func hermesLocalBackendRunsAgainstOllamaWhenReachable() async throws {
-    // Live integration check, not a mock: skips cleanly if `ollama serve` isn't
-    // up (e.g. CI), but proves the real Backend.hermes code path against the
-    // real local model when it is.
+    // Live integration check, not a mock: skips cleanly if `ollama serve` or
+    // the required local model is unavailable (e.g. CI), but proves the real
+    // Backend.hermes code path when both are present.
     guard let url = URL(string: "http://127.0.0.1:11434/api/tags"),
-          let (_, response) = try? await URLSession.shared.data(from: url),
-          (response as? HTTPURLResponse)?.statusCode == 200 else {
+          let (data, response) = try? await URLSession.shared.data(from: url),
+          (response as? HTTPURLResponse)?.statusCode == 200,
+          String(data: data, encoding: .utf8)?.contains("\"name\":\"hermes3:8b\"") == true else {
         return
     }
     let runner = AgentRunner()
