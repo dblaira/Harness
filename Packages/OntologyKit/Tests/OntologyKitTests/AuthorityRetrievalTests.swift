@@ -2,6 +2,14 @@ import Foundation
 import Testing
 @testable import OntologyKit
 
+private struct StaticAuthorityRetriever: AuthorityRetrieving {
+    let hits: [GraphAuthorityHit]
+
+    func retrieve(prompt: String, ontology: Ontology, limit: Int) async throws -> [GraphAuthorityHit] {
+        Array(hits.prefix(limit))
+    }
+}
+
 @Test func acceptedGraphQueryRanksMatchesBeforeApplyingItsLimit() throws {
     let query = OntologyAuthorityRetriever.liveQuery(
         queryTokens: ["adam", "just", "says"],
@@ -187,4 +195,81 @@ import Testing
 
     #expect(hits.first?.object == "Adam prefers Palantir and knowledge graph news in a brief tone")
     #expect(hits.first?.source.contains("canonical local accepted graph") == true)
+}
+
+@Test func canonicalAcceptedGraphPreservesLiveFusekiProvenanceForDuplicateAcceptedFact() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("canonical-live-provenance-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let graphURL = root.appendingPathComponent("accepted-graph.ttl")
+    let subject = "https://understood.app/ontology/connection/conn-capture"
+    let label = "Capture first, structure later"
+    let prompt = "Why capture first?"
+    try """
+    @prefix understood: <https://understood.app/ontology#> .
+
+    <\(subject)> a understood:Connection ;
+      understood:label "\(label)" ;
+      understood:connectionType "stated_practice" ;
+      .
+    """.write(to: graphURL, atomically: true, encoding: .utf8)
+    let liveHit = GraphAuthorityHit(
+        subject: subject,
+        predicate: "understood:label",
+        object: label,
+        source: "Fuseki /accepted named graph",
+        queryTrace: "live fixture",
+        authorityLevel: .accepted,
+        score: OntologyAuthorityRetriever.score(
+            OntologyAuthorityRetriever.retrievalTokens(prompt),
+            in: "\(subject) understood:label \(label)"
+        )
+    )
+    let retriever = CanonicalAcceptedGraphAuthorityRetriever(
+        base: StaticAuthorityRetriever(hits: [liveHit]),
+        acceptedGraphURL: graphURL
+    )
+
+    let hits = try await retriever.retrieve(
+        prompt: prompt,
+        ontology: .empty,
+        limit: 6
+    )
+
+    #expect(hits.count == 1)
+    #expect(hits.first?.source == "Fuseki /accepted named graph")
+}
+
+@Test func canonicalAcceptedGraphKeepsLiveProvenanceWhenRicherLocalHitsFillTheLimit() {
+    let liveHit = GraphAuthorityHit(
+        subject: "https://understood.app/ontology/connection/live-capture",
+        predicate: "understood:label",
+        object: "Live capture fact",
+        source: "Fuseki /accepted named graph",
+        queryTrace: "live fixture",
+        authorityLevel: .accepted,
+        score: 0.1
+    )
+    let canonicalHits = (1...6).map { index in
+        GraphAuthorityHit(
+            subject: "https://understood.app/ontology/connection/local-\(index)",
+            predicate: "understood:label",
+            object: "Richer local fact \(index)",
+            source: "canonical local accepted graph: fixture",
+            queryTrace: "local fixture",
+            authorityLevel: .accepted,
+            score: 1
+        )
+    }
+
+    let hits = CanonicalAcceptedGraphAuthorityRetriever.mergeAcceptedShelfHits(
+        baseHits: [liveHit],
+        canonicalHits: canonicalHits,
+        limit: 6
+    )
+
+    #expect(hits.count == 6)
+    #expect(hits.contains { $0.source == "Fuseki /accepted named graph" })
+    #expect(hits.contains { $0.source.hasPrefix("canonical local accepted graph") })
 }

@@ -28,7 +28,11 @@ private func requiredLiveEvidenceErrors(
         errors.append("accepted Fuseki named graph is not healthy: \(health.status.rawValue)")
     }
     if !authorityHits.contains(where: { $0.source == "Fuseki /accepted named graph" }) {
-        errors.append("answer has no relevant authority hit sourced from the live Fuseki accepted graph")
+        let observedSources = Set(authorityHits.map(\.source)).sorted().joined(separator: ", ")
+        errors.append(
+            "answer has no relevant authority hit sourced from the live Fuseki accepted graph; "
+                + "observed sources: \(observedSources.isEmpty ? "none" : observedSources)"
+        )
     }
     return errors
 }
