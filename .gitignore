@@ -14,6 +14,7 @@ Harness.xcodeproj/
 
 # Local recovered duplicates and machine-only scratch files
 .local-artifacts/
+output/satisfaction-gate/
 accepted-graph.ttl
 decision-ledger.json
 queue.json
