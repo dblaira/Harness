@@ -42,7 +42,9 @@ SCREENSHOT="$OUTPUT_DIR/visible-result.png"
 FINAL_SCREENSHOT="$OUTPUT_DIR/final-relaunch-visible-result.png"
 FINAL_UI_SCREENSHOT="$OUTPUT_DIR/final-relaunch-xcuitest-result.png"
 RUNNING_APP_PROOF="$OUTPUT_DIR/final-running-app.json"
+INITIAL_RUNNING_APP_PROOF="$OUTPUT_DIR/recorded-running-app.json"
 MEDIA_PROOF="$OUTPUT_DIR/media-proof.json"
+TEST_INVENTORY="$OUTPUT_DIR/protected-test-inventory.json"
 VIDEO="$OUTPUT_DIR/visible-requirement.mov"
 SATISFACTION_DIR="$OUTPUT_DIR/satisfaction-gate"
 APP_BUNDLE="$ROOT_DIR/.build/HarnessCandidateDerivedData/Build/Products/Debug/Harness.app"
@@ -51,7 +53,7 @@ CANDIDATE_DERIVED_DATA="$ROOT_DIR/.build/HarnessCandidateDerivedData"
 UNIT_DERIVED_DATA="$ROOT_DIR/.build/HarnessUnitDerivedData"
 mkdir -p "$OUTPUT_DIR"
 rm -rf "$UNIT_RESULT_BUNDLE" "$UI_RESULT_BUNDLE" "$FINAL_UI_RESULT_BUNDLE" "$SATISFACTION_DIR"
-rm -f "$SCREENSHOT" "$FINAL_SCREENSHOT" "$FINAL_UI_SCREENSHOT" "$RUNNING_APP_PROOF" "$MEDIA_PROOF" "$VIDEO"
+rm -f "$SCREENSHOT" "$FINAL_SCREENSHOT" "$FINAL_UI_SCREENSHOT" "$RUNNING_APP_PROOF" "$INITIAL_RUNNING_APP_PROOF" "$MEDIA_PROOF" "$TEST_INVENTORY" "$VIDEO"
 mkdir -p "$SATISFACTION_DIR"
 
 REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
@@ -115,6 +117,8 @@ SOL_URL="$(gh api "repos/$REPO/commits/$SHA/status" | python3 "$CONTROL_DIR/scri
 xcrun swift "$CONTROL_DIR/scripts/preflight_tcc.swift"
 command -v ffmpeg >/dev/null
 command -v ffprobe >/dev/null
+python3 "$CONTROL_DIR/scripts/swift_test_inventory.py" \
+  --git-ref "$BASE_SHA" --repo-root "$ROOT_DIR" --output "$TEST_INVENTORY"
 
 HARNESS_EXPECTED_PID=0 HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER=UNSET HARNESS_ATTACH_EXISTING_APP=0 xcodegen generate
 xcodebuild build-for-testing \
@@ -149,7 +153,8 @@ xcodebuild test \
   -only-testing:HarnessTests
 python3 "$CONTROL_DIR/scripts/validate_xcresult.py" \
   --xcresult "$UNIT_RESULT_BUNDLE" \
-  --required-bundle HarnessTests
+  --required-bundle HarnessTests \
+  --required-test-list "$TEST_INVENTORY"
 
 HARNESS_REQUIRE_LIVE_SATISFACTION=1 \
 HARNESS_SATISFACTION_OUTPUT_DIR="$SATISFACTION_DIR" \
@@ -164,7 +169,40 @@ SATISFACTION_COUNT="$(find "$SATISFACTION_DIR" -type f -name 'gate-*.md' | wc -l
 }
 SATISFACTION_ARTIFACT="$(find "$SATISFACTION_DIR" -type f -name 'gate-*.md' -print -quit)"
 
-/usr/sbin/screencapture -v -V120 -m -x -k "$VIDEO" &
+pkill -x Harness >/dev/null 2>&1 || true
+/usr/bin/open -n "$APP_BUNDLE"
+RECORDED_PID=""
+for _ in {1..30}; do
+  while IFS= read -r CANDIDATE_PID; do
+    [[ -n "$CANDIDATE_PID" ]] || continue
+    CANDIDATE_COMMAND="$(ps -p "$CANDIDATE_PID" -o command= 2>/dev/null || true)"
+    if [[ "$CANDIDATE_COMMAND" == "$APP_BUNDLE/Contents/MacOS/Harness"* ]]; then
+      RECORDED_PID="$CANDIDATE_PID"
+      break
+    fi
+  done < <(pgrep -x Harness || true)
+  [[ -n "$RECORDED_PID" ]] && break
+  sleep 0.2
+done
+[[ -n "$RECORDED_PID" ]] || { echo "Signed Harness app did not launch for window-bound recording." >&2; exit 1; }
+RECORDED_PROOF_PASS=0
+for _ in {1..30}; do
+  if xcrun swift "$CONTROL_DIR/scripts/verify_running_app.swift" \
+    --pid "$RECORDED_PID" \
+    --executable "$APP_BUNDLE/Contents/MacOS/Harness" \
+    --identifier "$FINAL_ACCESSIBILITY_IDENTIFIER" \
+    --output "$INITIAL_RUNNING_APP_PROOF"; then
+    RECORDED_PROOF_PASS=1
+    break
+  fi
+  sleep 0.25
+done
+[[ "$RECORDED_PROOF_PASS" == 1 ]] || { echo "Recorded candidate window never exposed the contracted identifier." >&2; exit 1; }
+RECORDED_WINDOW_ID="$(jq -r .window_id "$INITIAL_RUNNING_APP_PROOF")"
+[[ "$RECORDED_WINDOW_ID" =~ ^[0-9]+$ ]] || { echo "Recorded candidate window lacks a CGWindowID." >&2; exit 1; }
+HARNESS_EXPECTED_PID="$RECORDED_PID" HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER="$FINAL_ACCESSIBILITY_IDENTIFIER" HARNESS_ATTACH_EXISTING_APP=1 xcodegen generate
+
+/usr/sbin/screencapture -v -V120 -l"$RECORDED_WINDOW_ID" -x -k "$VIDEO" &
 VIDEO_PID=$!
 video_cleanup() {
   if kill -0 "$VIDEO_PID" 2>/dev/null; then
@@ -274,6 +312,11 @@ python3 "$CONTROL_DIR/scripts/validate_media.py" \
   --video "$VIDEO" \
   --output "$MEDIA_PROOF"
 
+# Proposal code has finished. Rebuild the inventory from the protected base so
+# the release validator cannot consume an inventory modified by the candidate.
+python3 "$CONTROL_DIR/scripts/swift_test_inventory.py" \
+  --git-ref "$BASE_SHA" --repo-root "$ROOT_DIR" --output "$TEST_INVENTORY"
+
 MID_PR_HEAD="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .head.sha)"
 [[ "$MID_PR_HEAD" == "$SHA" ]] || {
   echo "The pull request head advanced during handoff; no stale manifest will be published." >&2
@@ -285,7 +328,9 @@ VERIFIER="$VERIFIER" SHA="$SHA" OUTPUT_DIR="$OUTPUT_DIR" UNIT_RESULT_BUNDLE="$UN
 UI_RESULT_BUNDLE="$UI_RESULT_BUNDLE" FINAL_UI_RESULT_BUNDLE="$FINAL_UI_RESULT_BUNDLE" \
 FINAL_SCREENSHOT="$FINAL_SCREENSHOT" SATISFACTION_ARTIFACT="$SATISFACTION_ARTIFACT" \
 FINAL_UI_SCREENSHOT="$FINAL_UI_SCREENSHOT" RUNNING_APP_PROOF="$RUNNING_APP_PROOF" \
+INITIAL_RUNNING_APP_PROOF="$INITIAL_RUNNING_APP_PROOF" RECORDED_WINDOW_ID="$RECORDED_WINDOW_ID" \
 MEDIA_PROOF="$MEDIA_PROOF" \
+TEST_INVENTORY="$TEST_INVENTORY" \
 APP_BUNDLE="$APP_BUNDLE" PID="$PID" SOL_URL="$SOL_URL" HOSTED_URL="$HOSTED_URL" ACTUAL_UI_TEST="$UI_TEST" \
 FINAL_ATTACH_TEST="$UI_TEST" FINAL_ACCESSIBILITY_IDENTIFIER="$FINAL_ACCESSIBILITY_IDENTIFIER" \
 APP_IDENTITY="$APP_IDENTITY" \
@@ -323,7 +368,9 @@ artifacts = {
     "final_ui_screenshot": os.environ["FINAL_UI_SCREENSHOT"],
     "final_ui_xcresult": os.environ["FINAL_UI_RESULT_BUNDLE"],
     "running_app_proof": os.environ["RUNNING_APP_PROOF"],
+    "recorded_running_app_proof": os.environ["INITIAL_RUNNING_APP_PROOF"],
     "media_proof": os.environ["MEDIA_PROOF"],
+    "protected_test_inventory": os.environ["TEST_INVENTORY"],
     "satisfaction_artifact": os.environ["SATISFACTION_ARTIFACT"],
     "app_bundle": os.environ["APP_BUNDLE"],
     "app_identity": os.environ["APP_IDENTITY"],
@@ -347,6 +394,7 @@ manifest = {
     "observed_visible_result": observed,
     "app_bundle": os.environ["APP_BUNDLE"],
     "app_pid": int(os.environ["PID"]),
+    "recording_window_id": int(os.environ["RECORDED_WINDOW_ID"]),
     "codesign_verified": True,
     "app_cdhash": os.environ["CDHASH"],
     "app_team_identifier": os.environ["TEAM_IDENTIFIER"],

@@ -36,6 +36,7 @@ PROTECTED_CONTROL_PATHS = (
     "scripts/run_with_timeout.py",
     "scripts/sanitize_review_bundle.py",
     "scripts/select_pull_request.py",
+    "scripts/swift_test_inventory.py",
     "scripts/validate_acceptance_contract.py",
     "scripts/validate_gate_test_report.py",
     "scripts/validate_media.py",

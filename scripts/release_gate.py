@@ -72,7 +72,9 @@ FILE_ARTIFACTS = {
     "satisfaction_artifact",
     "app_identity",
     "running_app_proof",
+    "recorded_running_app_proof",
     "media_proof",
+    "protected_test_inventory",
 }
 DIRECTORY_ARTIFACTS = {
     "unit_xcresult",
@@ -195,12 +197,16 @@ def validate_xcresult(
     *,
     required_test: str | None = None,
     required_bundle: str | None = None,
+    required_test_list: Path | None = None,
     expected_screenshot: Path | None = None,
 ) -> list[str]:
     validator = Path(__file__).with_name("validate_xcresult.py")
     args = [sys.executable, str(validator), "--xcresult", str(path)]
     if required_bundle:
         args.extend(("--required-bundle", required_bundle))
+        if required_test_list is None:
+            return ["trusted xcresult validation lacks the protected test inventory"]
+        args.extend(("--required-test-list", str(required_test_list)))
         result = run_command(*args)
         return [] if result.returncode == 0 else [result.stderr.strip() or result.stdout.strip()]
     if not required_test or expected_screenshot is None:
@@ -356,7 +362,9 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
         "final_ui_screenshot",
         "final_ui_xcresult",
         "running_app_proof",
+        "recorded_running_app_proof",
         "media_proof",
+        "protected_test_inventory",
         "satisfaction_artifact",
         "app_bundle",
         "app_identity",
@@ -384,7 +392,9 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
     app_bundle = resolve_artifact(root, artifacts.get("app_bundle"))
     app_identity = resolve_artifact(root, artifacts.get("app_identity"))
     running_app_proof = resolve_artifact(root, artifacts.get("running_app_proof"))
+    recorded_running_app_proof = resolve_artifact(root, artifacts.get("recorded_running_app_proof"))
     media_proof = resolve_artifact(root, artifacts.get("media_proof"))
+    test_inventory = resolve_artifact(root, artifacts.get("protected_test_inventory"))
     if screenshot and screenshot.is_file():
         errors.extend(validate_png(screenshot))
     if final_screenshot and final_screenshot.is_file():
@@ -416,8 +426,8 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
                 errors.append(media_result.stderr.strip() or media_result.stdout.strip())
             elif sha256_path(fresh_media_proof) != sha256_path(media_proof):
                 errors.append("decoded media proof does not match the current screenshots and recording")
-    if unit_xcresult and unit_xcresult.is_dir():
-        errors.extend(validate_xcresult(unit_xcresult, required_bundle="HarnessTests"))
+    if unit_xcresult and unit_xcresult.is_dir() and test_inventory and test_inventory.is_file():
+        errors.extend(validate_xcresult(unit_xcresult, required_bundle="HarnessTests", required_test_list=test_inventory))
     if ui_xcresult and ui_xcresult.is_dir() and screenshot and screenshot.is_file():
         errors.extend(validate_xcresult(ui_xcresult, required_test=ui_test_identifier, expected_screenshot=screenshot))
     if final_ui_xcresult and final_ui_xcresult.is_dir() and final_ui_screenshot and final_ui_screenshot.is_file():
@@ -469,6 +479,20 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
                 elif sha256_path(fresh_proof) != sha256_path(app_identity):
                     errors.append("app identity proof does not match current signature and entitlements")
     pid = manifest.get("app_pid")
+    if recorded_running_app_proof and recorded_running_app_proof.is_file() and app_bundle:
+        try:
+            recorded_proof = json.loads(recorded_running_app_proof.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            recorded_proof = {}
+        if (
+            recorded_proof.get("status") != "PASS"
+            or recorded_proof.get("bundle_identifier") != "com.adamblair.Harness"
+            or recorded_proof.get("executable") != str(app_bundle / "Contents" / "MacOS" / "Harness")
+            or recorded_proof.get("accessibility_identifier") != manifest.get("final_accessibility_identifier")
+            or recorded_proof.get("window_id") != manifest.get("recording_window_id")
+            or not isinstance(recorded_proof.get("window_bounds"), dict)
+        ):
+            errors.append("recording is not bound to the exact candidate window containing the requirement identifier")
     if isinstance(pid, int) and pid > 0 and app_bundle:
         process = run_command("/bin/ps", "-p", str(pid), "-o", "command=")
         expected_command = str(app_bundle / "Contents" / "MacOS" / "Harness")

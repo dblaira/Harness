@@ -56,7 +56,11 @@ def validate_test_tree(
     return []
 
 
-def validate_bundle_tree(tree: dict[str, Any], required_bundle: str) -> list[str]:
+def validate_bundle_tree(
+    tree: dict[str, Any],
+    required_bundle: str,
+    required_tests: set[str] | None = None,
+) -> list[str]:
     bundles = [
         node for node in objects(tree)
         if node.get("name") == required_bundle
@@ -71,6 +75,11 @@ def validate_bundle_tree(tree: dict[str, Any], required_bundle: str) -> list[str
     skipped = [node for node in cases if node.get("result") == "Skipped"]
     if skipped:
         errors.append(f"required test bundle {required_bundle} skipped {len(skipped)} test(s)")
+    if required_tests is not None:
+        executed = {normalized_test_id(str(node.get("nodeIdentifier", ""))).split("/")[-1] for node in cases}
+        missing = sorted(required_tests - executed)
+        if missing:
+            errors.append(f"required test bundle omitted {len(missing)} protected test(s): {', '.join(missing)}")
     return errors
 
 
@@ -86,6 +95,7 @@ def main() -> int:
     required.add_argument("--required-bundle")
     parser.add_argument("--screenshot-output", type=Path)
     parser.add_argument("--max-duration", type=float)
+    parser.add_argument("--required-test-list", type=Path)
     args = parser.parse_args()
 
     result = run(
@@ -100,10 +110,23 @@ def main() -> int:
     except json.JSONDecodeError as error:
         print(f"Invalid xcresult test tree: {error}", file=sys.stderr)
         return 1
+    required_tests = None
+    if args.required_test_list:
+        try:
+            inventory = json.loads(args.required_test_list.read_text(encoding="utf-8"))
+            if not isinstance(inventory, list) or not inventory or not all(isinstance(item, str) for item in inventory):
+                raise ValueError("inventory must be a nonempty string list")
+            required_tests = set(inventory)
+        except (OSError, json.JSONDecodeError, ValueError) as error:
+            print(f"Invalid protected test inventory: {error}", file=sys.stderr)
+            return 1
+    if args.required_bundle and required_tests is None:
+        print("--required-test-list is mandatory with --required-bundle", file=sys.stderr)
+        return 2
     errors = (
         validate_test_tree(tree, args.required_test, args.max_duration)
         if args.required_test
-        else validate_bundle_tree(tree, args.required_bundle)
+        else validate_bundle_tree(tree, args.required_bundle, required_tests)
     )
     if errors:
         for error in errors:

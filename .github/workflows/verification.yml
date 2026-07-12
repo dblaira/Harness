@@ -97,6 +97,7 @@ jobs:
           cp trusted-base/scripts/lint_changed_swift.sh "$RUNNER_TEMP/gate-controls/"
           cp trusted-base/scripts/periphery_changed_gate.py "$RUNNER_TEMP/gate-controls/"
           cp trusted-base/scripts/validate_xcresult.py "$RUNNER_TEMP/gate-controls/"
+          cp trusted-base/scripts/verify_running_app.swift "$RUNNER_TEMP/gate-controls/"
           cp trusted-base/.swiftlint.yml "$RUNNER_TEMP/gate-controls/swiftlint.yml"
           cp trusted-base/.periphery.yml "$RUNNER_TEMP/gate-controls/periphery.yml"
       - name: Check out exact proposed revision
@@ -111,6 +112,8 @@ jobs:
       - name: Generate project
         working-directory: proposed
         run: xcodegen generate
+      - name: Prove accessibility element and window stay bound
+        run: xcrun swift "$RUNNER_TEMP/gate-controls/verify_running_app.swift" --self-test-window-binding
       - name: SwiftLint changed Swift files
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -138,6 +141,9 @@ jobs:
       - name: Harness macOS unit tests
         working-directory: proposed
         run: |
+          python3 ../trusted-base/scripts/swift_test_inventory.py \
+            --source-root ../trusted-base/Tests/HarnessTests \
+            --output "$RUNNER_TEMP/protected-test-inventory.json"
           xcodebuild test \
             -project Harness.xcodeproj \
             -scheme HarnessUnitVerification \
@@ -151,6 +157,7 @@ jobs:
           python3 "$RUNNER_TEMP/gate-controls/validate_xcresult.py"
           --xcresult "$RUNNER_TEMP/HarnessTests.xcresult"
           --required-bundle HarnessTests
+          --required-test-list "$RUNNER_TEMP/protected-test-inventory.json"
       - name: Preserve test and static-analysis evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -159,6 +166,7 @@ jobs:
           path: |
             ${{ runner.temp }}/HarnessTests.xcresult
             ${{ runner.temp }}/periphery.json
+            ${{ runner.temp }}/protected-test-inventory.json
   validate-macos-evidence:
     name: Fresh protected macOS evidence verifier
     if: always() && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
@@ -175,9 +183,13 @@ jobs:
           path: ${{ runner.temp }}/macos-evidence
       - name: Validate raw evidence with fresh protected controls
         run: |
+          python3 scripts/swift_test_inventory.py \
+            --source-root Tests/HarnessTests \
+            --output "$RUNNER_TEMP/fresh-protected-test-inventory.json"
           python3 scripts/validate_xcresult.py \
             --xcresult "$RUNNER_TEMP/macos-evidence/HarnessTests.xcresult" \
-            --required-bundle HarnessTests
+            --required-bundle HarnessTests \
+            --required-test-list "$RUNNER_TEMP/fresh-protected-test-inventory.json"
           python3 scripts/validate_periphery_report.py \
             --report "$RUNNER_TEMP/macos-evidence/periphery.json"
   publish-macos-verdict:

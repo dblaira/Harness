@@ -61,14 +61,36 @@ func hasIdentifier(
     }
 }
 
-func frontWindowID(for pid: pid_t) -> CGWindowID? {
+struct WindowDescriptor {
+    let id: CGWindowID
+    let bounds: CGRect
+}
+
+func approximatelyEqual(_ lhs: CGRect, _ rhs: CGRect, tolerance: CGFloat = 4) -> Bool {
+    abs(lhs.minX - rhs.minX) <= tolerance
+        && abs(lhs.minY - rhs.minY) <= tolerance
+        && abs(lhs.width - rhs.width) <= tolerance
+        && abs(lhs.height - rhs.height) <= tolerance
+}
+
+func boundWindowID(
+    visibleWindows: [WindowDescriptor],
+    identifierWindowBounds: [CGRect]
+) -> CGWindowID? {
+    let matches = visibleWindows.filter { candidate in
+        identifierWindowBounds.contains { approximatelyEqual(candidate.bounds, $0) }
+    }
+    return matches.count == 1 ? matches[0].id : nil
+}
+
+func visibleWindows(for pid: pid_t) -> [WindowDescriptor] {
     guard let windows = CGWindowListCopyWindowInfo(
         [.optionOnScreenOnly, .excludeDesktopElements],
         kCGNullWindowID
     ) as? [[String: Any]] else {
-        return nil
+        return []
     }
-    for window in windows {
+    return windows.compactMap { window in
         guard
             (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid,
             (window[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
@@ -78,14 +100,78 @@ func frontWindowID(for pid: pid_t) -> CGWindowID? {
             bounds.width >= 200,
             bounds.height >= 120
         else {
-            continue
+            return nil
         }
-        return windowID
+        return WindowDescriptor(id: windowID, bounds: bounds)
     }
-    return nil
+}
+
+func pointAttribute(_ element: AXUIElement, _ attribute: CFString) -> CGPoint? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
+          let value,
+          CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+    let axValue = unsafeBitCast(value, to: AXValue.self)
+    guard
+          AXValueGetType(axValue) == .cgPoint else { return nil }
+    var point = CGPoint.zero
+    return AXValueGetValue(axValue, .cgPoint, &point) ? point : nil
+}
+
+func sizeAttribute(_ element: AXUIElement, _ attribute: CFString) -> CGSize? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
+          let value,
+          CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+    let axValue = unsafeBitCast(value, to: AXValue.self)
+    guard
+          AXValueGetType(axValue) == .cgSize else { return nil }
+    var size = CGSize.zero
+    return AXValueGetValue(axValue, .cgSize, &size) ? size : nil
+}
+
+func identifierWindowBounds(
+    application: AXUIElement,
+    identifier: String
+) -> [CGRect] {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &value) == .success,
+          let windows = value as? [AXUIElement] else { return [] }
+    return windows.compactMap { window in
+        var budget = 10_000
+        guard hasIdentifier(window, expected: identifier, remaining: &budget),
+              let position = pointAttribute(window, kAXPositionAttribute as CFString),
+              let size = sizeAttribute(window, kAXSizeAttribute as CFString),
+              size.width >= 200,
+              size.height >= 120 else { return nil }
+        return CGRect(origin: position, size: size)
+    }
 }
 
 do {
+    if CommandLine.arguments.contains("--self-test-window-binding") {
+        let front = WindowDescriptor(id: 1, bounds: CGRect(x: 0, y: 0, width: 800, height: 600))
+        let identified = WindowDescriptor(id: 2, bounds: CGRect(x: 900, y: 0, width: 700, height: 500))
+        guard boundWindowID(
+            visibleWindows: [front, identified],
+            identifierWindowBounds: [identified.bounds]
+        ) == identified.id else {
+            throw NSError(domain: "HarnessRunningAppVerifier", code: 99, userInfo: [
+                NSLocalizedDescriptionKey: "two-window binding regression failed"
+            ])
+        }
+        let ambiguous = WindowDescriptor(id: 3, bounds: identified.bounds)
+        guard boundWindowID(
+            visibleWindows: [front, identified, ambiguous],
+            identifierWindowBounds: [identified.bounds]
+        ) == nil else {
+            throw NSError(domain: "HarnessRunningAppVerifier", code: 100, userInfo: [
+                NSLocalizedDescriptionKey: "ambiguous window binding did not fail closed"
+            ])
+        }
+        print("Two-window accessibility binding self-test passed.")
+        exit(0)
+    }
     let options = try parseOptions()
     guard let running = NSRunningApplication(processIdentifier: options.pid) else {
         throw NSError(domain: "HarnessRunningAppVerifier", code: 3, userInfo: [
@@ -112,15 +198,24 @@ do {
             NSLocalizedDescriptionKey: "Accessibility application PID does not match the candidate PID"
         ])
     }
-    var budget = 10_000
-    guard hasIdentifier(application, expected: options.identifier, remaining: &budget) else {
+    let identifierBounds = identifierWindowBounds(application: application, identifier: options.identifier)
+    guard !identifierBounds.isEmpty else {
         throw NSError(domain: "HarnessRunningAppVerifier", code: 7, userInfo: [
             NSLocalizedDescriptionKey: "candidate PID does not expose the contracted accessibility identifier"
         ])
     }
-    guard let windowID = frontWindowID(for: options.pid) else {
+    let candidateWindows = visibleWindows(for: options.pid)
+    guard let windowID = boundWindowID(
+        visibleWindows: candidateWindows,
+        identifierWindowBounds: identifierBounds
+    ) else {
         throw NSError(domain: "HarnessRunningAppVerifier", code: 8, userInfo: [
-            NSLocalizedDescriptionKey: "candidate PID has no visible application window"
+            NSLocalizedDescriptionKey: "no unique visible candidate window contains the contracted accessibility identifier"
+        ])
+    }
+    guard let boundWindow = candidateWindows.first(where: { $0.id == windowID }) else {
+        throw NSError(domain: "HarnessRunningAppVerifier", code: 9, userInfo: [
+            NSLocalizedDescriptionKey: "bound candidate window disappeared during verification"
         ])
     }
 
@@ -132,6 +227,12 @@ do {
         "executable": actualExecutable ?? "",
         "accessibility_identifier": options.identifier,
         "window_id": Int(windowID),
+        "window_bounds": [
+            "x": boundWindow.bounds.origin.x,
+            "y": boundWindow.bounds.origin.y,
+            "width": boundWindow.bounds.size.width,
+            "height": boundWindow.bounds.size.height,
+        ],
     ]
     let data = try JSONSerialization.data(withJSONObject: proof, options: [.prettyPrinted, .sortedKeys])
     try data.write(to: URL(fileURLWithPath: options.output), options: .atomic)

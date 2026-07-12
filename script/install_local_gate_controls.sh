@@ -26,6 +26,7 @@ install -m 0755 \
   scripts/evidence_binding.py \
   scripts/select_pull_request.py \
   scripts/sanitize_review_bundle.py \
+  scripts/swift_test_inventory.py \
   scripts/render_sol_review.py \
   scripts/require_latest_status.py \
   scripts/run_with_timeout.py \

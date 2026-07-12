@@ -21,6 +21,10 @@ python3 "$CONTROL_DIR/scripts/verify_control_bundle.py" --manifest "$CONTROL_DIR
   --control-dir "$CONTROL_DIR" --repo-root "$ROOT_DIR" --base-sha "$BASE_SHA"
 CONTRACT_DIGEST="$(python3 -c 'import json,sys;sys.path.insert(0,sys.argv[1]);import validate_acceptance_contract as v;print(v.contract_digest(json.load(open(sys.argv[2]))))' "$CONTROL_DIR/scripts" .github/acceptance-contract.json)"
 BINDING="$(python3 "$CONTROL_DIR/scripts/evidence_binding.py" --repo "$REPO" --pr-number "$PR_NUMBER" --base-sha "$BASE_SHA" --head-sha "$SHA" --contract-digest "$CONTRACT_DIGEST")"
+if ! "$CONTROL_DIR/script/hosted_verification_gate.sh"; then
+  echo "Fresh hosted evidence verification failed; merge authority was not evaluated." >&2
+  exit 1
+fi
 gh api "repos/$REPO/commits/$SHA/statuses?per_page=100" | \
   python3 "$CONTROL_DIR/scripts/verify_merge_authority.py" --marker "pr:$PR_NUMBER binding:${BINDING:0:24}"
 gh pr merge "$PR_NUMBER" --repo "$REPO" --merge --delete-branch --match-head-commit "$SHA"

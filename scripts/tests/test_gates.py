@@ -21,6 +21,7 @@ import resolve_harness_repo  # noqa: E402
 import route_stop_gate  # noqa: E402
 import run_gate_script_tests  # noqa: E402
 import sanitize_review_bundle  # noqa: E402
+import swift_test_inventory  # noqa: E402
 import select_pull_request  # noqa: E402
 import require_latest_status  # noqa: E402
 import validate_acceptance_contract  # noqa: E402
@@ -367,6 +368,21 @@ class XCResultGateTests(unittest.TestCase):
             "required test bundle HarnessTests skipped 1 test(s)",
             validate_xcresult.validate_bundle_tree(tree, "HarnessTests"),
         )
+
+    def test_unit_bundle_requires_every_protected_test(self) -> None:
+        tree = {"children": [
+            {"name": "HarnessTests", "nodeType": "Unit test bundle", "result": "Passed"},
+            {"name": "testOne()", "nodeType": "Test Case", "nodeIdentifier": "testOne()", "result": "Passed"},
+        ]}
+        errors = validate_xcresult.validate_bundle_tree(
+            tree, "HarnessTests", {"testOne", "testTwo"}
+        )
+        self.assertIn("required test bundle omitted 1 protected test(s): testTwo", errors)
+
+    def test_protected_swift_inventory_finds_the_complete_harness_suite(self) -> None:
+        inventory = swift_test_inventory.from_source_root(Path.cwd() / "Tests/HarnessTests")
+        self.assertEqual(len(inventory), 53)
+        self.assertIn("answerWindowMakesTheAnswerAPrimaryReadingSurface", inventory)
 
 
 class CommitStatusTests(unittest.TestCase):
@@ -809,6 +825,31 @@ class GateStructureTests(unittest.TestCase):
         self.assertGreaterEqual(handoff.count("--jq .head.sha"), 1)
         self.assertIn("FINAL_PR_HEAD=", handoff)
         self.assertLess(handoff.index("preflight_tcc.swift"), handoff.index("xcodegen generate"))
+
+    def test_merge_revalidates_hosted_evidence_immediately_before_status_authority(self) -> None:
+        merger = (Path.cwd() / "script/merge_verified_pr.sh").read_text(encoding="utf-8")
+        rerun = merger.index('if ! "$CONTROL_DIR/script/hosted_verification_gate.sh"')
+        failure_exit = merger.index('Fresh hosted evidence verification failed')
+        status_read = merger.index('gh api "repos/$REPO/commits/$SHA/statuses?per_page=100"')
+        merge = merger.index('gh pr merge')
+        self.assertLess(rerun, failure_exit)
+        self.assertLess(failure_exit, status_read)
+        self.assertLess(rerun, status_read)
+        self.assertLess(status_read, merge)
+
+    def test_video_is_bound_to_the_verified_candidate_window_not_main_display(self) -> None:
+        handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
+        self.assertIn('-l"$RECORDED_WINDOW_ID"', handoff)
+        self.assertNotIn("screencapture -v -V120 -m", handoff)
+        self.assertIn("recorded_running_app_proof", handoff)
+
+    def test_protected_test_inventory_is_rebuilt_after_proposal_execution(self) -> None:
+        handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
+        final_inventory = handoff.rindex('swift_test_inventory.py"')
+        final_app_test = handoff.rindex('validate_media.py"')
+        manifest = handoff.index("MID_PR_HEAD=")
+        self.assertLess(final_app_test, final_inventory)
+        self.assertLess(final_inventory, manifest)
 
     def test_signature_identity_precedes_first_app_test_or_launch(self) -> None:
         handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
