@@ -9,7 +9,6 @@ DERIVED_DATA="$ROOT_DIR/.build/HarnessDerivedData"
 APP_BUNDLE="$DERIVED_DATA/Build/Products/Debug/$APP_NAME.app"
 APP_BINARY="$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 PROJECT_PATH="$ROOT_DIR/Harness.xcodeproj"
-CODE_SIGNING_ALLOWED="${HARNESS_CODE_SIGNING_ALLOWED:-NO}"
 
 if [[ ! -d "$PROJECT_PATH" ]]; then
   command -v xcodegen >/dev/null 2>&1 || {
@@ -27,7 +26,6 @@ xcodebuild \
   -configuration Debug \
   -destination 'platform=macOS' \
   -derivedDataPath "$DERIVED_DATA" \
-  CODE_SIGNING_ALLOWED="$CODE_SIGNING_ALLOWED" \
   build
 
 if [[ ! -d "$APP_BUNDLE" ]]; then

@@ -13,8 +13,6 @@ private let suiteCaptureLogger = Logger(
 
 @MainActor
 final class MacWorkbenchModel: ObservableObject {
-    private static let ontologyBookmarkDefaultsKey = "Harness.ontologyDirectoryBookmark"
-    private static var scopedOntologyURL: URL?
     @Published var ontology: Ontology = .empty
     @Published var runs: [HarnessRun] = []
     @Published var selectedDetail: HarnessRunDetail?
@@ -131,8 +129,6 @@ final class MacWorkbenchModel: ObservableObject {
     private var responseDeadlineTask: Task<Void, Never>?
     private weak var responseDeadlinePresentedMonitor: ToolLoopMonitor?
     private var approvalToastTask: Task<Void, Never>?
-    private var ontologyAccessPanelOpen = false
-
     private let patternEvidenceStore = PatternEvidenceStore()
     private let patternGateChecker = PatternGateChecker()
     /// One ongoing build for v1 -- no build picker exists yet (cut from
@@ -141,7 +137,6 @@ final class MacWorkbenchModel: ObservableObject {
     private let buildScreenshotService = BuildScreenshotService()
 
     init() {
-        Self.restoreOntologyDirectoryAccess()
         let store: RunLedgerStore
         do {
             store = try RunLedgerStore.applicationDefault()
@@ -422,98 +417,7 @@ final class MacWorkbenchModel: ObservableObject {
         } catch {
             reviewQueueCandidates = []
             status = "Candidates unavailable: \(error.localizedDescription)"
-            if Self.isFilePermissionError(error) {
-                requestOntologyDirectoryAccess()
-            }
         }
-    }
-
-    /// macOS protects iCloud Drive independently of POSIX file permissions.
-    /// Keep a security-scoped bookmark so every fresh signed build can reach
-    /// the canonical queue and accepted graph after Adam grants the folder
-    /// once in the standard system picker.
-    private static func restoreOntologyDirectoryAccess(
-        defaults: UserDefaults = .standard
-    ) {
-        guard let bookmark = defaults.data(forKey: ontologyBookmarkDefaultsKey) else { return }
-        var stale = false
-        do {
-            let url = try URL(
-                resolvingBookmarkData: bookmark,
-                options: [.withSecurityScope],
-                relativeTo: nil,
-                bookmarkDataIsStale: &stale
-            )
-            guard Self.ontologyDirectoryURLsReferToSameResource(
-                url,
-                ReviewQueueStore.defaultOntologyRoot()
-            ),
-                  url.startAccessingSecurityScopedResource() else { return }
-            scopedOntologyURL = url
-            if stale {
-                let refreshed = try url.bookmarkData(
-                    options: [.withSecurityScope],
-                    includingResourceValuesForKeys: nil,
-                    relativeTo: nil
-                )
-                defaults.set(refreshed, forKey: ontologyBookmarkDefaultsKey)
-            }
-        } catch {
-            defaults.removeObject(forKey: ontologyBookmarkDefaultsKey)
-        }
-    }
-
-    private func requestOntologyDirectoryAccess() {
-        guard !ontologyAccessPanelOpen else { return }
-        ontologyAccessPanelOpen = true
-        let expected = ReviewQueueStore.defaultOntologyRoot().standardizedFileURL
-        let panel = NSOpenPanel()
-        panel.title = "Give Harness access to the canonical Ontology folder"
-        panel.message = "Select this Ontology folder so Harness can show its proposals and keep Adam as the approval boundary."
-        panel.prompt = "Give Access"
-        panel.directoryURL = expected
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.canCreateDirectories = false
-        panel.begin { [weak self] response in
-            Task { @MainActor in
-                guard let self else { return }
-                self.ontologyAccessPanelOpen = false
-                guard response == .OK, let selected = panel.url?.standardizedFileURL else {
-                    self.status = "Ontology folder access is required before Harness can show and promote its own proposals."
-                    return
-                }
-                guard Self.ontologyDirectoryURLsReferToSameResource(selected, expected) else {
-                    self.status = "Choose the canonical Main/Ontology folder; no other folder was granted access."
-                    return
-                }
-                do {
-                    let bookmark = try selected.bookmarkData(
-                        options: [.withSecurityScope],
-                        includingResourceValuesForKeys: nil,
-                        relativeTo: nil
-                    )
-                    UserDefaults.standard.set(bookmark, forKey: Self.ontologyBookmarkDefaultsKey)
-                    guard selected.startAccessingSecurityScopedResource() else {
-                        throw CocoaError(.fileReadNoPermission)
-                    }
-                    Self.scopedOntologyURL = selected
-                    await self.refreshReviewQueue()
-                    self.refreshSuiteCaptureInbox()
-                } catch {
-                    self.status = "Ontology folder access failed: \(error.localizedDescription)"
-                }
-            }
-        }
-    }
-
-    private static func isFilePermissionError(_ error: Error) -> Bool {
-        let nsError = error as NSError
-        return nsError.domain == NSCocoaErrorDomain && [
-            CocoaError.fileReadNoPermission.rawValue,
-            CocoaError.fileWriteNoPermission.rawValue,
-        ].contains(nsError.code)
     }
 
     nonisolated static func ontologyDirectoryURLsReferToSameResource(

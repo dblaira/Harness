@@ -1,0 +1,12 @@
+---
+description: Harness never asks Adam to approve file or folder access
+alwaysApply: true
+---
+
+# No Harness file-permission prompts
+
+- Harness must remain usable when protected folders are unavailable.
+- Never open `NSOpenPanel` automatically in response to a background read, launch refresh, or permission error.
+- A denied file read becomes unavailable data and a plain in-app status; it never becomes an approval task for Adam.
+- Never launch the macOS Harness app with `CODE_SIGNING_ALLOWED=NO`. The project-local runner must preserve the stable Apple Development identity from `project.yml`.
+- Verify every Harness build with `codesign` and inspect the live app for permission dialogs before claiming this bug is fixed.
