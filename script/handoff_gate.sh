@@ -42,6 +42,7 @@ SCREENSHOT="$OUTPUT_DIR/visible-result.png"
 FINAL_SCREENSHOT="$OUTPUT_DIR/final-relaunch-visible-result.png"
 FINAL_UI_SCREENSHOT="$OUTPUT_DIR/final-relaunch-xcuitest-result.png"
 RUNNING_APP_PROOF="$OUTPUT_DIR/final-running-app.json"
+MEDIA_PROOF="$OUTPUT_DIR/media-proof.json"
 VIDEO="$OUTPUT_DIR/visible-requirement.mov"
 SATISFACTION_DIR="$OUTPUT_DIR/satisfaction-gate"
 APP_BUNDLE="$ROOT_DIR/.build/HarnessCandidateDerivedData/Build/Products/Debug/Harness.app"
@@ -50,32 +51,28 @@ CANDIDATE_DERIVED_DATA="$ROOT_DIR/.build/HarnessCandidateDerivedData"
 UNIT_DERIVED_DATA="$ROOT_DIR/.build/HarnessUnitDerivedData"
 mkdir -p "$OUTPUT_DIR"
 rm -rf "$UNIT_RESULT_BUNDLE" "$UI_RESULT_BUNDLE" "$FINAL_UI_RESULT_BUNDLE" "$SATISFACTION_DIR"
-rm -f "$SCREENSHOT" "$FINAL_SCREENSHOT" "$FINAL_UI_SCREENSHOT" "$RUNNING_APP_PROOF" "$VIDEO"
+rm -f "$SCREENSHOT" "$FINAL_SCREENSHOT" "$FINAL_UI_SCREENSHOT" "$RUNNING_APP_PROOF" "$MEDIA_PROOF" "$VIDEO"
 mkdir -p "$SATISFACTION_DIR"
 
 REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
 PULLS_JSON="$(gh api "repos/$REPO/commits/$SHA/pulls")"
 PR_JSON="$(printf '%s' "$PULLS_JSON" | python3 "$CONTROL_DIR/scripts/select_pull_request.py" --head-sha "$SHA")"
 PR_NUMBER="$(printf '%s' "$PR_JSON" | jq -r .number)"
-PR_BODY_FILE="$OUTPUT_DIR/reviewed-pr-body.md"
 BASE_SHA="$(printf '%s' "$PR_JSON" | jq -r .base.sha)"
 PR_HEAD_SHA="$(printf '%s' "$PR_JSON" | jq -r .head.sha)"
 [[ "$PR_HEAD_SHA" == "$SHA" ]] || {
   echo "The pull request head advanced beyond local HEAD; stale handoff refused." >&2
   exit 1
 }
-printf '%s' "$PR_JSON" | jq -r .body > "$PR_BODY_FILE"
 python3 "$CONTROL_DIR/scripts/validate_acceptance_contract.py" \
   --contract-json "$CONTRACT" \
-  --pr-body-file "$PR_BODY_FILE" \
   --repo "$REPO" \
   --pr-number "$PR_NUMBER" \
   --base-sha "$BASE_SHA"
 CONTRACT_DIGEST="$(python3 -c 'import json,sys;sys.path.insert(0,sys.argv[1]);import validate_acceptance_contract as v;print(v.contract_digest(json.load(open(sys.argv[2]))))' "$CONTROL_DIR/scripts" "$CONTRACT")"
-PR_CONTRACT_DIGEST="$(python3 -c 'import sys;sys.path.insert(0,sys.argv[1]);import validate_acceptance_contract as v;print(v.pr_contract_digest(open(sys.argv[2]).read()))' "$CONTROL_DIR/scripts" "$PR_BODY_FILE")"
 EVIDENCE_BINDING="$(python3 "$CONTROL_DIR/scripts/evidence_binding.py" \
   --repo "$REPO" --pr-number "$PR_NUMBER" --base-sha "$BASE_SHA" --head-sha "$SHA" \
-  --contract-digest "$CONTRACT_DIGEST" --pr-contract-digest "$PR_CONTRACT_DIGEST")"
+  --contract-digest "$CONTRACT_DIGEST")"
 
 CONTRACT_UI_TEST="$(CONTRACT="$CONTRACT" /usr/bin/python3 - <<'PY'
 import json, os
@@ -106,6 +103,9 @@ SOL_URL="$(gh api "repos/$REPO/commits/$SHA/status" | python3 "$CONTROL_DIR/scri
   echo "The newest GPT-5.6 Sol review for commit $SHA is not successful; no proposed code was executed." >&2
   exit 1
 }
+xcrun swift "$CONTROL_DIR/scripts/preflight_tcc.swift"
+command -v ffmpeg >/dev/null
+command -v ffprobe >/dev/null
 
 HARNESS_EXPECTED_PID=0 HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER=UNSET HARNESS_ATTACH_EXISTING_APP=0 xcodegen generate
 xcodebuild build-for-testing \
@@ -258,6 +258,12 @@ WINDOW_ID="$(jq -r .window_id "$RUNNING_APP_PROOF")"
   echo "The exact candidate PID window did not produce final screenshot evidence." >&2
   exit 1
 }
+python3 "$CONTROL_DIR/scripts/validate_media.py" \
+  --png "$SCREENSHOT" \
+  --png "$FINAL_UI_SCREENSHOT" \
+  --png "$FINAL_SCREENSHOT" \
+  --video "$VIDEO" \
+  --output "$MEDIA_PROOF"
 
 MID_PR_HEAD="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .head.sha)"
 [[ "$MID_PR_HEAD" == "$SHA" ]] || {
@@ -270,10 +276,11 @@ VERIFIER="$VERIFIER" SHA="$SHA" OUTPUT_DIR="$OUTPUT_DIR" UNIT_RESULT_BUNDLE="$UN
 UI_RESULT_BUNDLE="$UI_RESULT_BUNDLE" FINAL_UI_RESULT_BUNDLE="$FINAL_UI_RESULT_BUNDLE" \
 FINAL_SCREENSHOT="$FINAL_SCREENSHOT" SATISFACTION_ARTIFACT="$SATISFACTION_ARTIFACT" \
 FINAL_UI_SCREENSHOT="$FINAL_UI_SCREENSHOT" RUNNING_APP_PROOF="$RUNNING_APP_PROOF" \
+MEDIA_PROOF="$MEDIA_PROOF" \
 APP_BUNDLE="$APP_BUNDLE" PID="$PID" SOL_URL="$SOL_URL" ACTUAL_UI_TEST="$UI_TEST" \
 FINAL_ATTACH_TEST="$UI_TEST" FINAL_ACCESSIBILITY_IDENTIFIER="$FINAL_ACCESSIBILITY_IDENTIFIER" \
 APP_IDENTITY="$APP_IDENTITY" \
-CONTRACT_DIGEST="$CONTRACT_DIGEST" PR_CONTRACT_DIGEST="$PR_CONTRACT_DIGEST" \
+CONTRACT_DIGEST="$CONTRACT_DIGEST" \
 EVIDENCE_BINDING="$EVIDENCE_BINDING" PR_NUMBER="$PR_NUMBER" BASE_SHA="$BASE_SHA" \
 TEAM_IDENTIFIER="$TEAM_IDENTIFIER" CDHASH="$CDHASH" /usr/bin/python3 - <<'PY'
 import datetime
@@ -307,6 +314,7 @@ artifacts = {
     "final_ui_screenshot": os.environ["FINAL_UI_SCREENSHOT"],
     "final_ui_xcresult": os.environ["FINAL_UI_RESULT_BUNDLE"],
     "running_app_proof": os.environ["RUNNING_APP_PROOF"],
+    "media_proof": os.environ["MEDIA_PROOF"],
     "satisfaction_artifact": os.environ["SATISFACTION_ARTIFACT"],
     "app_bundle": os.environ["APP_BUNDLE"],
     "app_identity": os.environ["APP_IDENTITY"],
@@ -317,7 +325,6 @@ manifest = {
     "commit": os.environ["SHA"],
     "git_tree": os.popen("git rev-parse 'HEAD^{tree}'").read().strip(),
     "contract_digest": os.environ["CONTRACT_DIGEST"],
-    "pr_contract_digest": os.environ["PR_CONTRACT_DIGEST"],
     "evidence_binding": os.environ["EVIDENCE_BINDING"],
     "pull_request_number": int(os.environ["PR_NUMBER"]),
     "base_sha": os.environ["BASE_SHA"],
@@ -354,11 +361,9 @@ PY
 python3 "$CONTROL_DIR/scripts/release_gate.py" validate --manifest "$OUTPUT_DIR/manifest.json"
 
 FINAL_PR_JSON="$(gh api "repos/$REPO/pulls/$PR_NUMBER")"
-printf '%s' "$FINAL_PR_JSON" | jq -r .body > "$OUTPUT_DIR/final-pr-body.md"
 FINAL_PR_HEAD="$(printf '%s' "$FINAL_PR_JSON" | jq -r .head.sha)"
 CURRENT_DIGEST="$(python3 -c 'import json,sys;sys.path.insert(0,sys.argv[1]);import validate_acceptance_contract as v;print(v.contract_digest(json.load(open(sys.argv[2]))))' "$CONTROL_DIR/scripts" "$CONTRACT")"
-CURRENT_PR_CONTRACT_DIGEST="$(python3 -c 'import sys;sys.path.insert(0,sys.argv[1]);import validate_acceptance_contract as v;print(v.pr_contract_digest(open(sys.argv[2]).read()))' "$CONTROL_DIR/scripts" "$OUTPUT_DIR/final-pr-body.md")"
-[[ "$FINAL_PR_HEAD" == "$SHA" && "$CURRENT_PR_CONTRACT_DIGEST" == "$PR_CONTRACT_DIGEST" && "$CURRENT_DIGEST" == "$CONTRACT_DIGEST" ]] || {
+[[ "$FINAL_PR_HEAD" == "$SHA" && "$CURRENT_DIGEST" == "$CONTRACT_DIGEST" ]] || {
   echo "Pull request or acceptance contract changed during handoff; stale evidence rejected." >&2
   exit 1
 }

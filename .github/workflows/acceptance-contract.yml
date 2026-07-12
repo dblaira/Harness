@@ -2,7 +2,7 @@ name: Trusted Acceptance Contract
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review, edited]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
@@ -29,18 +29,15 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           [[ "$HEAD_REPO" == "$GITHUB_REPOSITORY" ]] || {
             echo 'Fork pull requests are not accepted for this signed local release workflow.' >&2
             exit 1
           }
-          printf '%s' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
           gh api "repos/$HEAD_REPO/contents/.github/acceptance-contract.json?ref=$HEAD_SHA" \
             --jq .content | tr -d '\n' | base64 --decode > "$RUNNER_TEMP/acceptance-contract.json"
           python3 scripts/validate_acceptance_contract.py \
             --contract-json "$RUNNER_TEMP/acceptance-contract.json" \
-            --pr-body-file "$RUNNER_TEMP/pr-body.md" \
             --repo "$GITHUB_REPOSITORY" \
             --pr-number "$PR_NUMBER" \
             --base-sha "$BASE_SHA"
@@ -61,7 +58,7 @@ jobs:
               gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" \
                 -f state=pending \
                 -f context="$CONTEXT" \
-                -f description='Acceptance contract changed; fresh local evidence required' \
+                -f description='Committed acceptance contract changed; fresh local evidence required' \
                 -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/pull/${{ github.event.pull_request.number }}"
             done
           fi

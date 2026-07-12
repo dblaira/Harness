@@ -41,9 +41,9 @@ Branch `codex/verified-build-gates` installs the recommended system as repositor
 - a global Codex `Stop` hook that fails closed for product-change exits except a literal user question or explicit `BLOCKED:` exit;
 - merge-commit-only delivery and a post-merge `Verified release tree` attestation proving the final `main` tree exactly equals the fully verified PR-head tree.
 
-Five independent local GPT-5.6 Sol reviews were used during bootstrap. The first rejected six false-proof paths; the second rejected nine further fail-open or deadlock paths; the third rejected twelve trust-boundary weaknesses; the fourth found fourteen additional blocking paths plus one conflicting rule; and the fifth found six PR-binding, installer, artifact-type, static-analysis, authority-route, and Stop-hook gaps. Actionable findings were converted into code and adversarial regressions. The request for cryptographic resistance to Adam's own administrator credential was resolved instead by Adam's explicit no-Touch-ID threat-model decision. This is the intended operating model: Sol supplies adversarial findings, the owner defines the authority boundary, and executable evidence decides whether each correction is real.
+Six independent local GPT-5.6 Sol reviews were used during bootstrap. The first rejected six false-proof paths; the second rejected nine further fail-open or deadlock paths; the third rejected twelve trust-boundary weaknesses; the fourth found fourteen additional blocking paths plus one conflicting rule; the fifth found six PR-binding, installer, artifact-type, static-analysis, authority-route, and Stop-hook gaps; and the sixth found mutable PR-prose authority, an implicit accessibility target, shallow media validation, and an incorrect triple-dot review diff. Actionable findings were converted into code and adversarial regressions. The sixth review also requested resistance to intentional misuse of Adam's own administrator credential; Adam resolved that separately through his explicit no-Touch-ID threat-model decision. This is the intended operating model: Sol supplies adversarial findings, the owner defines the authority boundary, and executable evidence decides whether each correction is real.
 
-Harness deliberately has no repository `OPENAI_API_KEY`. Adam uses an existing paid ChatGPT/Codex subscription and blocks API keys so agents cannot accidentally create separate usage charges. The installed Sol gate therefore runs an ephemeral, read-only local Codex process through that existing authorization, posts its structured result to the pull request, and publishes the commit status. A credential-free GitHub workflow invalidates older Sol evidence whenever the PR head or acceptance text changes. Adam's Mac is never registered as a GitHub runner.
+Harness deliberately has no repository `OPENAI_API_KEY`. Adam uses an existing paid ChatGPT/Codex subscription and blocks API keys so agents cannot accidentally create separate usage charges. The installed Sol gate therefore runs an ephemeral, read-only local Codex process through that existing authorization, posts its structured result to the pull request, and publishes the commit status. A credential-free GitHub workflow invalidates older Sol evidence whenever the PR head changes. The committed JSON contract is the sole acceptance authority; PR prose is display copy and cannot alter a release decision. Adam's Mac is never registered as a GitHub runner.
 
 ## What Harness had before this installation
 
@@ -77,7 +77,7 @@ Adam's sentence
        - compile
        - unit and integration tests
        - lint / unused code / security scan
-  -> independent GPT-5.6 Sol review of base...head (read-only)
+  -> independent GPT-5.6 Sol review of the direct base-to-head tree diff (read-only)
        - exact requirement
        - exact diff
        - risk lenses
@@ -191,7 +191,7 @@ OpenAI’s current model guidance identifies `gpt-5.6-sol` as the frontier GPT-5
 The review process should follow these rules:
 
 1. **Independent context:** reviewer did not author the patch and cannot modify it.
-2. **Exact revisions:** review `base_sha...head_sha`, not an ambiguous working tree.
+2. **Exact revisions:** review the direct `git diff base_sha head_sha`, not an ambiguous working tree or a merge-base triple-dot diff that can omit changes when histories diverge.
 3. **Lean, outcome-focused prompt:** goal, requirement, constraints, risk lenses, required evidence, and output schema—each stated once.
 4. **Representative evidence:** include the acceptance contract, diff, directly affected callers/tests, and proof manifest. Do not dump the whole repository blindly; recent research found attention dilution as context expanded.
 5. **Explicit risk lenses:** correctness, regressions, missing tests, fail-open behavior, concurrency, authorization, filesystem/TCC/signing, authority boundaries, UI state, stale-instance risk, and observability.
@@ -217,7 +217,7 @@ Suggested blocking guidance for the top-level `AGENTS.md`:
 
 For an organization that intentionally uses API billing, `openai/codex-action@v1` can run on pull request events with pinned controls and a read-only bundle. Harness must not use that path: its credential boundary intentionally permits ChatGPT subscription authorization and blocks OpenAI API keys.
 
-The Harness gate instead builds an inert local `base/`, `head/`, and `changes.patch` bundle; removes proposed `AGENTS.md` files as instructions; runs an ephemeral `gpt-5.6-sol` process at `max` in a read-only sandbox through Adam's existing Codex login; validates strict structured output; posts the review to the PR; and publishes the `GPT-5.6 Sol review` status on the exact head SHA. The hosted GitHub workflow does only one credential-free job: publish `pending` after every PR edit or new commit so an older local review cannot remain valid.
+The Harness gate instead builds an inert local `base/`, `head/`, and direct base-to-head `changes.patch` bundle; removes proposed `AGENTS.md` files as instructions; runs an ephemeral `gpt-5.6-sol` process at `max` in a read-only sandbox through Adam's existing Codex login; validates strict structured output; posts the review to the PR; and publishes the `GPT-5.6 Sol review` status on the exact head SHA. The hosted GitHub workflow publishes `pending` after every new commit so an older local review cannot remain valid. PR-body edits do not change release authority because the full contract lives in the reviewed commit.
 
 The status issuer, prompt, schema, validator, signed handoff, manifest parser, and Stop hook are copied into a versioned local control directory only from protected `main`. Pull-request code cannot replace those installed commands. The bootstrap installer exception was removed: after infrastructure PR #19 is independently reviewed and visibly proven under the one-time trusted-operator bootstrap, it is merged, full protection is installed and read back, and only then are the permanent controls installed from `main`.
 

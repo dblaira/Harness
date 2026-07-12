@@ -36,25 +36,22 @@ rm -rf "$OUTPUT_DIR"
 mkdir -p "$BUNDLE/base" "$BUNDLE/head"
 
 [[ -f "$CONTRACT" ]] || { echo "Checked-in acceptance contract is missing." >&2; exit 1; }
-gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .body > "$OUTPUT_DIR/reviewed-pr-body.md"
 python3 "$CONTROL_DIR/scripts/validate_acceptance_contract.py" \
   --contract-json "$CONTRACT" \
-  --pr-body-file "$OUTPUT_DIR/reviewed-pr-body.md" \
   --repo "$REPO" \
   --pr-number "$PR_NUMBER" \
   --base-sha "$BASE_SHA"
 CONTRACT_DIGEST="$(python3 -c 'import json,sys;sys.path.insert(0,sys.argv[1]);import validate_acceptance_contract as v;print(v.contract_digest(json.load(open(sys.argv[2]))))' "$CONTROL_DIR/scripts" "$CONTRACT")"
-PR_CONTRACT_DIGEST="$(python3 -c 'import sys;sys.path.insert(0,sys.argv[1]);import validate_acceptance_contract as v;print(v.pr_contract_digest(open(sys.argv[2]).read()))' "$CONTROL_DIR/scripts" "$OUTPUT_DIR/reviewed-pr-body.md")"
 EVIDENCE_BINDING="$(python3 "$CONTROL_DIR/scripts/evidence_binding.py" \
   --repo "$REPO" --pr-number "$PR_NUMBER" --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" \
-  --contract-digest "$CONTRACT_DIGEST" --pr-contract-digest "$PR_CONTRACT_DIGEST")"
+  --contract-digest "$CONTRACT_DIGEST")"
 
 AUTH_FILE="${CODEX_HOME:-$HOME/.codex}/auth.json"
 python3 "$CONTROL_DIR/scripts/verify_codex_auth.py" --auth-file "$AUTH_FILE" --output "$AUTH_PROOF"
 
 git archive "$BASE_SHA" | tar -x -C "$BUNDLE/base"
 git archive "$HEAD_SHA" | tar -x -C "$BUNDLE/head"
-git diff --binary --find-renames "$BASE_SHA...$HEAD_SHA" > "$BUNDLE/changes.patch"
+git diff --binary --find-renames "$BASE_SHA" "$HEAD_SHA" > "$BUNDLE/changes.patch"
 find "$BUNDLE/base" "$BUNDLE/head" -name AGENTS.md -type f -delete
 git show "$BASE_SHA:AGENTS.md" > "$BUNDLE/AGENTS.md"
 cp "$CONTROL_DIR/.github/codex/sol-review.md" "$PROMPT"
@@ -102,12 +99,11 @@ if [[ $CODEX_RESULT -eq 0 && -s "$REVIEW" ]]; then
 fi
 set -e
 
-gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .body > "$OUTPUT_DIR/current-pr-body.md"
 CURRENT_DIGEST="$(python3 -c 'import json,sys;sys.path.insert(0,sys.argv[1]);import validate_acceptance_contract as v;print(v.contract_digest(json.load(open(sys.argv[2]))))' "$CONTROL_DIR/scripts" "$CONTRACT")"
-CURRENT_PR_CONTRACT_DIGEST="$(python3 -c 'import sys;sys.path.insert(0,sys.argv[1]);import validate_acceptance_contract as v;print(v.pr_contract_digest(open(sys.argv[2]).read()))' "$CONTROL_DIR/scripts" "$OUTPUT_DIR/current-pr-body.md")"
-if [[ "$CURRENT_PR_CONTRACT_DIGEST" != "$PR_CONTRACT_DIGEST" || "$CURRENT_DIGEST" != "$CONTRACT_DIGEST" ]]; then
+CURRENT_HEAD_SHA="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .head.sha)"
+if [[ "$CURRENT_HEAD_SHA" != "$HEAD_SHA" || "$CURRENT_DIGEST" != "$CONTRACT_DIGEST" ]]; then
   CODEX_RESULT=1
-  echo "Pull request or checked-in contract changed during review; stale result rejected." >> "$LOG"
+  echo "Pull request head or commit-bound contract changed during review; stale result rejected." >> "$LOG"
 fi
 
 STATE=failure
@@ -127,9 +123,8 @@ gh api -X POST "repos/$REPO/statuses/$SHA" \
   -f description="ChatGPT Sol $STATE pr:$PR_NUMBER binding:${EVIDENCE_BINDING:0:24}" \
   -f target_url="$COMMENT_URL" >/dev/null
 
-gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .body > "$OUTPUT_DIR/final-pr-body.md"
-FINAL_PR_CONTRACT_DIGEST="$(python3 -c 'import sys;sys.path.insert(0,sys.argv[1]);import validate_acceptance_contract as v;print(v.pr_contract_digest(open(sys.argv[2]).read()))' "$CONTROL_DIR/scripts" "$OUTPUT_DIR/final-pr-body.md")"
-if [[ "$FINAL_PR_CONTRACT_DIGEST" != "$PR_CONTRACT_DIGEST" ]]; then
+FINAL_HEAD_SHA="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .head.sha)"
+if [[ "$FINAL_HEAD_SHA" != "$HEAD_SHA" ]]; then
   gh api -X POST "repos/$REPO/statuses/$SHA" \
     -f state=pending \
     -f context='GPT-5.6 Sol review' \

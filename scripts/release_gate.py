@@ -72,6 +72,7 @@ FILE_ARTIFACTS = {
     "satisfaction_artifact",
     "app_identity",
     "running_app_proof",
+    "media_proof",
 }
 DIRECTORY_ARTIFACTS = {
     "unit_xcresult",
@@ -354,6 +355,7 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
         "final_ui_screenshot",
         "final_ui_xcresult",
         "running_app_proof",
+        "media_proof",
         "satisfaction_artifact",
         "app_bundle",
         "app_identity",
@@ -381,6 +383,7 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
     app_bundle = resolve_artifact(root, artifacts.get("app_bundle"))
     app_identity = resolve_artifact(root, artifacts.get("app_identity"))
     running_app_proof = resolve_artifact(root, artifacts.get("running_app_proof"))
+    media_proof = resolve_artifact(root, artifacts.get("media_proof"))
     if screenshot and screenshot.is_file():
         errors.extend(validate_png(screenshot))
     if final_screenshot and final_screenshot.is_file():
@@ -389,6 +392,29 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
         errors.extend(validate_png(final_ui_screenshot))
     if video and video.is_file():
         errors.extend(validate_quicktime(video))
+    decoded_media = Path(__file__).with_name("validate_media.py")
+    if (
+        screenshot and screenshot.is_file()
+        and final_ui_screenshot and final_ui_screenshot.is_file()
+        and final_screenshot and final_screenshot.is_file()
+        and video and video.is_file()
+        and media_proof and media_proof.is_file()
+    ):
+        with tempfile.TemporaryDirectory(prefix="harness-media-") as directory:
+            fresh_media_proof = Path(directory) / "media-proof.json"
+            media_result = run_command(
+                sys.executable,
+                str(decoded_media),
+                "--png", str(screenshot),
+                "--png", str(final_ui_screenshot),
+                "--png", str(final_screenshot),
+                "--video", str(video),
+                "--output", str(fresh_media_proof),
+            )
+            if media_result.returncode:
+                errors.append(media_result.stderr.strip() or media_result.stdout.strip())
+            elif sha256_path(fresh_media_proof) != sha256_path(media_proof):
+                errors.append("decoded media proof does not match the current screenshots and recording")
     if unit_xcresult and unit_xcresult.is_dir():
         errors.extend(validate_xcresult(unit_xcresult, required_bundle="HarnessTests"))
     if ui_xcresult and ui_xcresult.is_dir() and screenshot and screenshot.is_file():
@@ -478,12 +504,8 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
             sys.path.insert(0, str(Path(__file__).parent))
             import validate_acceptance_contract as acceptance  # type: ignore
             import evidence_binding as binding  # type: ignore
-            body_digest = acceptance.pr_contract_digest(str(open_pull.get("body") or ""))
-            if body_digest != manifest.get("pr_contract_digest"):
-                errors.append("manifest pull-request contract digest is stale")
             contract_errors = acceptance.validate_handoff_contract(
                 contract,
-                str(open_pull.get("body") or ""),
                 repo=repo.stdout.strip(),
                 pr_number=int(open_pull.get("number")),
                 base_sha=str((open_pull.get("base") or {}).get("sha") or ""),
@@ -495,7 +517,6 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
                 str((open_pull.get("base") or {}).get("sha") or ""),
                 expected_commit,
                 expected_contract_digest,
-                body_digest,
             )
             if manifest.get("pull_request_number") != int(open_pull.get("number")):
                 errors.append("manifest pull request number is stale")

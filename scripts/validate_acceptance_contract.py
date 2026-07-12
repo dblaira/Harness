@@ -29,6 +29,8 @@ HANDOFF_EXAMPLES = {
     "ui_test_identifier": "HarnessUITests/ExactRequirementTests/testExactVisibleRequirement",
     "final_accessibility_identifier": "REPLACE_WITH_ACCESSIBILITY_IDENTIFIER",
 }
+COMMIT_BOUND_LIST_FIELDS = ("critical_flow", "required_proof")
+COMMIT_BOUND_TEXT_FIELDS = ("risk_and_authority_boundaries", "threat_model")
 UI_TEST_PATTERN = re.compile(r"^HarnessUITests/[A-Za-z_][A-Za-z0-9_]*/test[A-Za-z0-9_]+$")
 ACCESSIBILITY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._:/-]{0,127}$")
 BOOTSTRAP_REPO = "dblaira/Harness"
@@ -81,15 +83,8 @@ def contract_digest(contract: dict) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
-def pr_contract_digest(body: str) -> str:
-    bound = {name: section(body, name) for name in REQUIRED_SECTIONS}
-    canonical = json.dumps(bound, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(canonical).hexdigest()
-
-
 def validate_handoff_contract(
     contract: dict,
-    pr_body: str | None = None,
     *,
     repo: str | None = None,
     pr_number: int | None = None,
@@ -118,20 +113,15 @@ def validate_handoff_contract(
     final_identifier = contract.get("final_accessibility_identifier", "")
     if not isinstance(final_identifier, str) or not ACCESSIBILITY_PATTERN.fullmatch(final_identifier):
         errors.append("final_accessibility_identifier must be one literal accessibility identifier")
+    for key in COMMIT_BOUND_LIST_FIELDS:
+        value = contract.get(key)
+        if not isinstance(value, list) or not value or not all(isinstance(item, str) and item.strip() for item in value):
+            errors.append(f"{key} must be a nonempty list of committed acceptance statements")
+    for key in COMMIT_BOUND_TEXT_FIELDS:
+        value = contract.get(key)
+        if not isinstance(value, str) or not value.strip():
+            errors.append(f"{key} must be committed in the acceptance contract")
 
-    if pr_body is not None:
-        mapping = {
-            "requirement_verbatim": "Requirement verbatim",
-            "visible_surface": "Visible surface",
-            "expected_visible_result": "Expected visible result",
-            "ui_test_identifier": "Exact UI test",
-            "final_accessibility_identifier": "Final accessibility identifier",
-        }
-        markdown_errors = validate(pr_body)
-        errors.extend(f"reviewed PR: {error}" for error in markdown_errors)
-        for key, heading in mapping.items():
-            if section(pr_body, heading) != contract.get(key):
-                errors.append(f"{key} does not exactly match the reviewed pull request")
     return errors
 
 
@@ -140,7 +130,6 @@ def main() -> int:
     inputs = parser.add_mutually_exclusive_group(required=True)
     inputs.add_argument("--body-file", type=Path)
     inputs.add_argument("--contract-json", type=Path)
-    parser.add_argument("--pr-body-file", type=Path)
     parser.add_argument("--repo")
     parser.add_argument("--pr-number", type=int)
     parser.add_argument("--base-sha")
@@ -153,10 +142,8 @@ def main() -> int:
         except (OSError, json.JSONDecodeError) as error:
             print(f"Invalid handoff contract: {error}", file=sys.stderr)
             return 1
-        pr_body = args.pr_body_file.read_text(encoding="utf-8") if args.pr_body_file else None
         errors = validate_handoff_contract(
             contract,
-            pr_body,
             repo=args.repo,
             pr_number=args.pr_number,
             base_sha=args.base_sha,
@@ -167,9 +154,9 @@ def main() -> int:
             print(f"- {error}", file=sys.stderr)
         return 1
     if args.contract_json:
-        print(f"Acceptance contract is complete and bound to its reviewed text: {contract_digest(contract)}")
+        print(f"Commit-bound acceptance contract is complete: {contract_digest(contract)}")
     else:
-        print("Acceptance contract is complete and bound to its reviewed text.")
+        print("Pull-request display copy is complete.")
     return 0
 
 

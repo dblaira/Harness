@@ -50,9 +50,11 @@ install -m 0755 \
   scripts/verify_codex_auth.py \
   scripts/verify_codex_runtime.py \
   scripts/verify_app_identity.py \
+  scripts/validate_media.py \
   scripts/resolve_harness_repo.py \
   "$DEST/scripts/"
 install -m 0644 scripts/verify_running_app.swift "$DEST/scripts/"
+install -m 0644 scripts/preflight_tcc.swift "$DEST/scripts/"
 install -m 0644 .github/codex/review.schema.json .github/codex/sol-review.md "$DEST/.github/codex/"
 
 # shellcheck disable=SC2016 # Generated wrapper expands ROOT when it runs.

@@ -1613,6 +1613,7 @@ struct MacChatView: View {
                         )
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier(view.label)
             }
         }
         .padding(2)

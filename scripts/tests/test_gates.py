@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -19,12 +20,21 @@ import resolve_harness_repo  # noqa: E402
 import select_pull_request  # noqa: E402
 import require_latest_status  # noqa: E402
 import validate_acceptance_contract  # noqa: E402
+import validate_media  # noqa: E402
 import validate_sol_review  # noqa: E402
 import validate_xcresult  # noqa: E402
 import verify_release_tree  # noqa: E402
 import verify_codex_auth  # noqa: E402
 import verify_codex_runtime  # noqa: E402
 import verify_app_identity  # noqa: E402
+
+
+COMMIT_BOUND_FIXTURE = {
+    "critical_flow": ["Run the exact flow."],
+    "required_proof": ["Capture tests and visible evidence."],
+    "risk_and_authority_boundaries": "Signing and accepted authority remain distinct.",
+    "threat_model": "The authenticated operator is trusted.",
+}
 
 
 class AcceptanceContractTests(unittest.TestCase):
@@ -63,65 +73,18 @@ Signed app, provider authentication, and accepted graph remain distinct.
             errors,
         )
 
-    def test_handoff_contract_must_match_reviewed_pr(self) -> None:
-        contract = {
-            "requirement_verbatim": "Exact requirement",
-            "visible_surface": "Harness window",
-            "expected_visible_result": "The answer is visible",
-            "ui_test_identifier": "HarnessUITests/AnswerTests/testVisibleAnswer",
-            "final_accessibility_identifier": "VisibleAnswer",
-        }
-        body = """## Requirement verbatim
-Different requirement
-## Visible surface
-Harness window
-## Expected visible result
-The answer is visible
-## Critical flow
-1. Run the flow.
-## Exact UI test
-HarnessUITests/AnswerTests/testVisibleAnswer
-## Final accessibility identifier
-VisibleAnswer
-## Required proof
-- UI test and screenshot.
-## Risk and authority boundaries
-Signing remains separate.
-"""
-        self.assertIn(
-            "requirement_verbatim does not exactly match the reviewed pull request",
-            validate_acceptance_contract.validate_handoff_contract(contract, body),
-        )
-
     def test_infrastructure_only_contract_is_consistent(self) -> None:
         contract = {
+            **COMMIT_BOUND_FIXTURE,
             "requirement_verbatim": "Install protected verification infrastructure.",
             "visible_surface": "GitHub pull request checks.",
             "expected_visible_result": "Every required gate is visible.",
             "ui_test_identifier": "INFRASTRUCTURE_ONLY",
             "final_accessibility_identifier": "Delegation",
         }
-        body = """## Requirement verbatim
-Install protected verification infrastructure.
-## Visible surface
-GitHub pull request checks.
-## Expected visible result
-Every required gate is visible.
-## Critical flow
-1. Open the pull request checks.
-## Exact UI test
-INFRASTRUCTURE_ONLY
-## Final accessibility identifier
-Delegation
-## Required proof
-- Infrastructure checks and signed-app smoke test.
-## Risk and authority boundaries
-No product feature is accepted through this path.
-"""
         self.assertEqual(
             validate_acceptance_contract.validate_handoff_contract(
                 contract,
-                body,
                 repo=validate_acceptance_contract.BOOTSTRAP_REPO,
                 pr_number=validate_acceptance_contract.BOOTSTRAP_PR,
                 base_sha=validate_acceptance_contract.BOOTSTRAP_BASE,
@@ -131,6 +94,7 @@ No product feature is accepted through this path.
 
     def test_infrastructure_only_is_rejected_outside_bootstrap(self) -> None:
         contract = {
+            **COMMIT_BOUND_FIXTURE,
             "requirement_verbatim": "Change a product feature.",
             "visible_surface": "Harness window",
             "expected_visible_result": "Feature appears",
@@ -449,18 +413,18 @@ class RepositoryBindingTests(unittest.TestCase):
 
 class EvidenceBindingTests(unittest.TestCase):
     def test_binding_changes_for_pr_base_or_full_contract(self) -> None:
-        first = evidence_binding.binding_digest("dblaira/Harness", 19, "a" * 40, "b" * 40, "c" * 64, "d" * 64)
+        first = evidence_binding.binding_digest("dblaira/Harness", 19, "a" * 40, "b" * 40, "c" * 64)
         self.assertNotEqual(
             first,
-            evidence_binding.binding_digest("dblaira/Harness", 20, "a" * 40, "b" * 40, "c" * 64, "d" * 64),
+            evidence_binding.binding_digest("dblaira/Harness", 20, "a" * 40, "b" * 40, "c" * 64),
         )
         self.assertNotEqual(
             first,
-            evidence_binding.binding_digest("dblaira/Harness", 19, "e" * 40, "b" * 40, "c" * 64, "d" * 64),
+            evidence_binding.binding_digest("dblaira/Harness", 19, "e" * 40, "b" * 40, "c" * 64),
         )
         self.assertNotEqual(
             first,
-            evidence_binding.binding_digest("dblaira/Harness", 19, "a" * 40, "b" * 40, "c" * 64, "f" * 64),
+            evidence_binding.binding_digest("dblaira/Harness", 19, "a" * 40, "b" * 40, "f" * 64),
         )
 
     def test_two_open_pull_requests_sharing_a_sha_are_rejected(self) -> None:
@@ -493,6 +457,31 @@ class AppIdentityTests(unittest.TestCase):
             "bundle identifier is com.attacker.Substitute, expected com.adamblair.Harness",
             errors,
         )
+
+
+class MediaEvidenceTests(unittest.TestCase):
+    def test_valid_blank_png_and_video_are_rejected(self) -> None:
+        self.assertIsNotNone(shutil.which("ffmpeg"), "ffmpeg is a mandatory handoff dependency")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            png = root / "blank.png"
+            video = root / "blank.mov"
+            subprocess.run(
+                [
+                    "ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=black:s=320x240",
+                    "-frames:v", "1", "-update", "1", str(png),
+                ],
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=black:s=320x240:d=2",
+                    "-c:v", "mpeg4", "-pix_fmt", "yuv420p", str(video),
+                ],
+                check=True,
+            )
+            self.assertTrue(any("blank" in error or "black" in error for error in validate_media.validate_png_file(png)))
+            self.assertTrue(any("nonblank" in error for error in validate_media.validate_video_file(video)))
 
 
 class SwiftLintGateTests(unittest.TestCase):
@@ -543,6 +532,7 @@ class GateStructureTests(unittest.TestCase):
         self.assertLess(handoff.index("PR_HEAD_SHA="), handoff.index("xcodegen generate"))
         self.assertGreaterEqual(handoff.count("--jq .head.sha"), 1)
         self.assertIn("FINAL_PR_HEAD=", handoff)
+        self.assertLess(handoff.index("preflight_tcc.swift"), handoff.index("xcodegen generate"))
 
     def test_signature_identity_precedes_first_app_test_or_launch(self) -> None:
         handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
@@ -589,11 +579,58 @@ class GateStructureTests(unittest.TestCase):
             self.assertIn("EVIDENCE_BINDING", source)
             self.assertIn("pr:$PR_NUMBER binding:", source)
 
+    def test_acceptance_authority_is_fully_commit_bound(self) -> None:
+        contract = json.loads((Path.cwd() / ".github/acceptance-contract.json").read_text(encoding="utf-8"))
+        self.assertEqual(validate_acceptance_contract.validate_handoff_contract(
+            contract,
+            repo=validate_acceptance_contract.BOOTSTRAP_REPO,
+            pr_number=validate_acceptance_contract.BOOTSTRAP_PR,
+            base_sha=validate_acceptance_contract.BOOTSTRAP_BASE,
+        ), [])
+        acceptance_workflow = (Path.cwd() / ".github/workflows/acceptance-contract.yml").read_text(encoding="utf-8")
+        sol_workflow = (Path.cwd() / ".github/workflows/sol-review.yml").read_text(encoding="utf-8")
+        validator = (Path.cwd() / "scripts/validate_acceptance_contract.py").read_text(encoding="utf-8")
+        self.assertNotIn("PR_BODY", acceptance_workflow)
+        self.assertNotIn("edited", acceptance_workflow)
+        self.assertNotIn("edited", sol_workflow)
+        self.assertNotIn("--pr-body-file", validator)
+        self.assertNotIn("pr_contract_digest", validator)
+
     def test_sol_runtime_is_pinned_to_official_provider(self) -> None:
         reviewer = (Path.cwd() / "script/sol_review_gate.sh").read_text(encoding="utf-8")
         self.assertIn("--ignore-user-config", reviewer)
         self.assertIn('model_provider="openai"', reviewer)
         self.assertIn("verify_codex_runtime.py", reviewer)
+
+    def test_review_diff_is_direct_base_to_head_on_diverged_history(self) -> None:
+        reviewer = (Path.cwd() / "script/sol_review_gate.sh").read_text(encoding="utf-8")
+        self.assertIn('git diff --binary --find-renames "$BASE_SHA" "$HEAD_SHA"', reviewer)
+        self.assertNotIn('$BASE_SHA...$HEAD_SHA', reviewer)
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.com"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "Gate Test"], check=True)
+            (repo / "shared.txt").write_text("base\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "base"], check=True)
+            base = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+            subprocess.run(["git", "-C", str(repo), "switch", "-qc", "feature"], check=True)
+            (repo / "feature.txt").write_text("feature-only\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "feature"], check=True)
+            head = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+            subprocess.run(["git", "-C", str(repo), "switch", "-q", "main"], check=True)
+            (repo / "main.txt").write_text("main-only\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "advanced base"], check=True)
+            advanced_base = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+            direct = subprocess.check_output(["git", "-C", str(repo), "diff", advanced_base, head], text=True)
+            triple = subprocess.check_output(["git", "-C", str(repo), "diff", f"{advanced_base}...{head}"], text=True)
+            self.assertIn("main.txt", direct)
+            self.assertIn("feature.txt", direct)
+            self.assertNotIn("main.txt", triple)
+            self.assertNotEqual(base, advanced_base)
 
     def test_rejection_probe_never_pushes_to_production_main(self) -> None:
         probe = (Path.cwd() / "script/prove_merge_gate.sh").read_text(encoding="utf-8")
