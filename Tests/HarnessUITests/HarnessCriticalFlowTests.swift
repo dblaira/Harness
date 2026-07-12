@@ -20,10 +20,6 @@ final class HarnessCriticalFlowTests: XCTestCase {
         let delegation = app.buttons["Delegation"]
         XCTAssertTrue(delegation.waitForExistence(timeout: 10), "The visible Delegation surface never appeared")
 
-        let screenshot = XCUIScreen.main.screenshot()
-        let attachment = XCTAttachment(screenshot: screenshot)
-        attachment.name = "Harness signed app visible surface"
-        attachment.lifetime = .keepAlways
-        add(attachment)
+        HarnessRequirementEvidence.attachVisibleResult(of: window, to: self)
     }
 }

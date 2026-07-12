@@ -1,0 +1,42 @@
+name: Trusted Acceptance Contract
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: acceptance-contract-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  acceptance-contract:
+    name: Acceptance contract workflow
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out validator from protected base
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - name: Validate literal requirement and proof plan
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
+          python3 scripts/validate_acceptance_contract.py --body-file "$RUNNER_TEMP/pr-body.md"
+      - name: Publish commit-bound acceptance verdict
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          STATE: ${{ job.status == 'success' && 'success' || 'failure' }}
+        run: |
+          gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" \
+            -f state="$STATE" \
+            -f context='Acceptance contract' \
+            -f description="Protected-base acceptance validation: $STATE" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

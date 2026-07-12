@@ -102,3 +102,19 @@ schemes:
       targets:
         - HarnessTests
         - HarnessUITests
+
+  HarnessUnitVerification:
+    build:
+      targets:
+        Harness: all
+    test:
+      targets:
+        - HarnessTests
+
+  HarnessUIVerification:
+    build:
+      targets:
+        Harness: all
+    test:
+      targets:
+        - HarnessUITests

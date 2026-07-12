@@ -13,6 +13,7 @@ sys.path.insert(0, str(SCRIPTS))
 import release_gate  # noqa: E402
 import validate_acceptance_contract  # noqa: E402
 import validate_sol_review  # noqa: E402
+import validate_xcresult  # noqa: E402
 
 
 class AcceptanceContractTests(unittest.TestCase):
@@ -30,12 +31,48 @@ The answer is visible and no progress state remains.
 ## Critical flow
 1. Open Harness.
 2. Submit the request and observe the answer.
+## Exact UI test
+HarnessUITests/AnswerTests/testVisibleAnswer
 ## Required proof
 - Unit and UI tests, screenshot, and video.
 ## Risk and authority boundaries
 Signed app, provider authentication, and accepted graph remain distinct.
 """
         self.assertEqual(validate_acceptance_contract.validate(body), [])
+
+    def test_handoff_examples_and_non_ui_test_fail(self) -> None:
+        contract = dict(validate_acceptance_contract.HANDOFF_EXAMPLES)
+        contract["ui_test_identifier"] = "HarnessTests/FeatureTests/testFeature"
+        errors = validate_acceptance_contract.validate_handoff_contract(contract)
+        self.assertIn("placeholder remains in requirement_verbatim", errors)
+        self.assertIn("ui_test_identifier must name one exact HarnessUITests test method", errors)
+
+    def test_handoff_contract_must_match_reviewed_pr(self) -> None:
+        contract = {
+            "requirement_verbatim": "Exact requirement",
+            "visible_surface": "Harness window",
+            "expected_visible_result": "The answer is visible",
+            "ui_test_identifier": "HarnessUITests/AnswerTests/testVisibleAnswer",
+        }
+        body = """## Requirement verbatim
+Different requirement
+## Visible surface
+Harness window
+## Expected visible result
+The answer is visible
+## Critical flow
+1. Run the flow.
+## Exact UI test
+HarnessUITests/AnswerTests/testVisibleAnswer
+## Required proof
+- UI test and screenshot.
+## Risk and authority boundaries
+Signing remains separate.
+"""
+        self.assertIn(
+            "requirement_verbatim does not exactly match the reviewed pull request",
+            validate_acceptance_contract.validate_handoff_contract(contract, body),
+        )
 
 
 class SolReviewTests(unittest.TestCase):
@@ -74,6 +111,39 @@ class ReleaseGateTests(unittest.TestCase):
             errors = release_gate.validate_manifest(root, manifest_path)
             self.assertIn("manifest commit does not match HEAD", errors)
             self.assertIn("artifact is missing: screenshot", errors)
+
+
+class XCResultGateTests(unittest.TestCase):
+    def test_exact_passing_ui_test_is_required(self) -> None:
+        tree = {
+            "testNodes": [{
+                "nodeType": "Test Case",
+                "nodeIdentifier": "VisibleAnswerTests/testVisibleAnswer()",
+                "result": "Passed",
+                "durationInSeconds": 1.25,
+            }]
+        }
+        self.assertEqual(
+            validate_xcresult.validate_test_tree(
+                tree, "HarnessUITests/VisibleAnswerTests/testVisibleAnswer"
+            ),
+            [],
+        )
+        self.assertTrue(
+            validate_xcresult.validate_test_tree(
+                tree, "HarnessUITests/VisibleAnswerTests/testDifferentAnswer"
+            )
+        )
+
+    def test_unit_bundle_rejects_skips(self) -> None:
+        tree = {"children": [
+            {"name": "HarnessTests", "nodeType": "Unit test bundle", "result": "Passed"},
+            {"name": "testOne()", "nodeType": "Test Case", "result": "Skipped"},
+        ]}
+        self.assertIn(
+            "required test bundle HarnessTests skipped 1 test(s)",
+            validate_xcresult.validate_bundle_tree(tree, "HarnessTests"),
+        )
 
 
 if __name__ == "__main__":

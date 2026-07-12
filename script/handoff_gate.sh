@@ -33,30 +33,90 @@ UNIT_RESULT_BUNDLE="$OUTPUT_DIR/HarnessUnitTests.xcresult"
 UI_RESULT_BUNDLE="$OUTPUT_DIR/HarnessRequirementUI.xcresult"
 SCREENSHOT="$OUTPUT_DIR/visible-result.png"
 VIDEO="$OUTPUT_DIR/visible-requirement.mov"
-APP_BUNDLE="$ROOT_DIR/.build/HarnessDerivedData/Build/Products/Debug/Harness.app"
+APP_BUNDLE="$ROOT_DIR/.build/HarnessCandidateDerivedData/Build/Products/Debug/Harness.app"
+CANDIDATE_DERIVED_DATA="$ROOT_DIR/.build/HarnessCandidateDerivedData"
+UNIT_DERIVED_DATA="$ROOT_DIR/.build/HarnessUnitDerivedData"
 mkdir -p "$OUTPUT_DIR"
 rm -rf "$UNIT_RESULT_BUNDLE" "$UI_RESULT_BUNDLE"
 rm -f "$SCREENSHOT" "$VIDEO"
 
-UI_TEST="$(CONTRACT="$CONTRACT" /usr/bin/python3 - <<'PY'
-import json
-import os
-from pathlib import Path
+REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
+PR_NUMBER="$(gh api "repos/$REPO/commits/$SHA/pulls" --jq '[.[] | select(.state == "open")] | first | .number')"
+[[ -n "$PR_NUMBER" && "$PR_NUMBER" != "null" ]] || {
+  echo "No open pull request is bound to commit $SHA." >&2
+  exit 1
+}
+PR_BODY_FILE="$OUTPUT_DIR/reviewed-pr-body.md"
+gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .body > "$PR_BODY_FILE"
+python3 scripts/validate_acceptance_contract.py \
+  --contract-json "$CONTRACT" \
+  --pr-body-file "$PR_BODY_FILE"
 
-contract = json.loads(Path(os.environ["CONTRACT"]).read_text(encoding="utf-8"))
-required = ("requirement_verbatim", "visible_surface", "expected_visible_result", "ui_test_identifier")
-missing = [key for key in required if not isinstance(contract.get(key), str) or not contract[key].strip()]
-if missing:
-    raise SystemExit("Acceptance contract is missing: " + ", ".join(missing))
-print(contract["ui_test_identifier"])
+UI_TEST="$(CONTRACT="$CONTRACT" /usr/bin/python3 - <<'PY'
+import json, os
+from pathlib import Path
+print(json.loads(Path(os.environ["CONTRACT"]).read_text(encoding="utf-8"))["ui_test_identifier"])
 PY
 )"
+[[ "$UI_TEST" == HarnessUITests/*/test* ]] || {
+  echo "The handoff test must be one exact HarnessUITests method." >&2
+  exit 1
+}
 [[ "$UI_TEST" != "HarnessUITests/HarnessCriticalFlowTests/testSignedAppLaunchesItsVisibleDelegationSurface" ]] || {
   echo "The generic launch smoke test cannot prove a feature requirement. Name an exact requirement test." >&2
   exit 1
 }
 
-"$ROOT_DIR/script/build_and_run.sh" --verify | tee "$OUTPUT_DIR/signed-build.log"
+xcodegen generate
+xcodebuild build-for-testing \
+  -project Harness.xcodeproj \
+  -scheme HarnessUIVerification \
+  -configuration Debug \
+  -destination 'platform=macOS' \
+  -derivedDataPath "$CANDIDATE_DERIVED_DATA" | tee "$OUTPUT_DIR/signed-build.log"
+
+xcodebuild test \
+  -project Harness.xcodeproj \
+  -scheme HarnessUnitVerification \
+  -destination 'platform=macOS' \
+  -derivedDataPath "$UNIT_DERIVED_DATA" \
+  -resultBundlePath "$UNIT_RESULT_BUNDLE" \
+  -only-testing:HarnessTests
+python3 scripts/validate_xcresult.py \
+  --xcresult "$UNIT_RESULT_BUNDLE" \
+  --required-bundle HarnessTests
+
+/usr/sbin/screencapture -v -V60 -m -x -k "$VIDEO" &
+VIDEO_PID=$!
+video_cleanup() {
+  if kill -0 "$VIDEO_PID" 2>/dev/null; then
+    kill -TERM "$VIDEO_PID" 2>/dev/null || true
+  fi
+  wait "$VIDEO_PID" 2>/dev/null || true
+}
+trap video_cleanup EXIT
+
+xcodebuild test-without-building \
+  -project Harness.xcodeproj \
+  -scheme HarnessUIVerification \
+  -destination 'platform=macOS' \
+  -derivedDataPath "$CANDIDATE_DERIVED_DATA" \
+  -resultBundlePath "$UI_RESULT_BUNDLE" \
+  "-only-testing:$UI_TEST"
+
+wait "$VIDEO_PID"
+trap - EXIT
+python3 scripts/validate_xcresult.py \
+  --xcresult "$UI_RESULT_BUNDLE" \
+  --required-test "$UI_TEST" \
+  --max-duration 55 \
+  --screenshot-output "$SCREENSHOT"
+[[ -s "$VIDEO" && -s "$SCREENSHOT" ]] || {
+  echo "The exact visible requirement did not produce both video and screenshot evidence." >&2
+  exit 1
+}
+
+[[ -d "$APP_BUNDLE" ]] || { echo "The tested Harness.app bundle is missing." >&2; exit 1; }
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE" 2>&1 | tee "$OUTPUT_DIR/codesign.log"
 /usr/bin/codesign -dvv "$APP_BUNDLE" 2>> "$OUTPUT_DIR/codesign.log"
 SIGNATURE="$(/usr/bin/codesign -dvvv "$APP_BUNDLE" 2>&1)"
@@ -67,45 +127,20 @@ CDHASH="$(printf '%s\n' "$SIGNATURE" | sed -n 's/^CDHash=//p' | head -1)"
   exit 1
 }
 
-xcodegen generate
-xcodebuild test \
-  -project Harness.xcodeproj \
-  -scheme Harness \
-  -destination 'platform=macOS' \
-  -derivedDataPath .build/HarnessHandoffDerivedData \
-  -resultBundlePath "$UNIT_RESULT_BUNDLE" \
-  -only-testing:HarnessTests
-
-/usr/sbin/screencapture -v -V120 -m -x -k "$VIDEO" &
-VIDEO_PID=$!
-video_cleanup() {
-  if kill -0 "$VIDEO_PID" 2>/dev/null; then
-    kill -INT "$VIDEO_PID" 2>/dev/null || true
-    wait "$VIDEO_PID" 2>/dev/null || true
-  fi
-}
-trap video_cleanup EXIT
-
-xcodebuild test \
-  -project Harness.xcodeproj \
-  -scheme Harness \
-  -destination 'platform=macOS' \
-  -derivedDataPath .build/HarnessHandoffDerivedData \
-  -resultBundlePath "$UI_RESULT_BUNDLE" \
-  "-only-testing:$UI_TEST"
-
-video_cleanup
-trap - EXIT
-/usr/sbin/screencapture -m -x "$SCREENSHOT"
-[[ -s "$VIDEO" && -s "$SCREENSHOT" ]] || {
-  echo "The exact visible requirement did not produce both video and screenshot evidence." >&2
+pkill -x Harness >/dev/null 2>&1 || true
+/usr/bin/open -n "$APP_BUNDLE"
+for _ in {1..20}; do
+  PID="$(pgrep -x Harness | head -1 || true)"
+  [[ -n "$PID" ]] && break
+  sleep 0.25
+done
+[[ -n "$PID" ]] || { echo "Harness is not running after verification." >&2; exit 1; }
+PROCESS_COMMAND="$(ps -p "$PID" -o command=)"
+[[ "$PROCESS_COMMAND" == "$APP_BUNDLE/Contents/MacOS/Harness"* ]] || {
+  echo "Running Harness process is not the signed and UI-tested app bundle." >&2
   exit 1
 }
 
-PID="$(pgrep -x Harness | head -1)"
-[[ -n "$PID" ]] || { echo "Harness is not running after verification." >&2; exit 1; }
-
-REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
 SOL_URL="$(gh api "repos/$REPO/commits/$SHA/status" --jq '.statuses[] | select(.context == "GPT-5.6 Sol review" and .state == "success") | .target_url' | head -1)"
 [[ -n "$SOL_URL" ]] || {
   echo "No passing GPT-5.6 Sol review is bound to commit $SHA." >&2
@@ -153,6 +188,7 @@ manifest = {
     "requirement_verbatim": contract["requirement_verbatim"],
     "visible_surface": contract["visible_surface"],
     "expected_visible_result": contract["expected_visible_result"],
+    "ui_test_identifier": contract["ui_test_identifier"],
     "observed_visible_result": observed,
     "app_bundle": os.environ["APP_BUNDLE"],
     "app_pid": int(os.environ["PID"]),
@@ -163,7 +199,7 @@ manifest = {
     "verifier": os.environ["VERIFIER"],
     "tests": [
         {"name": "macos-unit-tests", "status": "PASS"},
-        {"name": "macos-ui-tests", "status": "PASS"},
+        {"name": "macos-ui-tests", "status": "PASS", "test_identifier": contract["ui_test_identifier"]},
     ],
     "sol_review": {"status": "PASS", "check_run_url": os.environ["SOL_URL"]},
     "artifacts": artifacts,

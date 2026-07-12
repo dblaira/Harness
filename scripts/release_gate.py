@@ -30,6 +30,7 @@ NON_COMPLETION = re.compile(
     r"\b(not done|not ready|not verified|unverified|incomplete|blocked|failed|could not)\b",
     re.IGNORECASE,
 )
+UI_TEST_PATTERN = re.compile(r"^HarnessUITests/[A-Za-z_][A-Za-z0-9_]*/test[A-Za-z0-9_]+$")
 
 
 def run_git(root: Path, *args: str) -> str:
@@ -93,6 +94,8 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         return [f"cannot read handoff manifest: {error}"]
+    if not isinstance(manifest, dict):
+        return ["handoff manifest must be a JSON object"]
 
     expected_commit = current_commit(root)
     if manifest.get("schema_version") != 1:
@@ -106,6 +109,7 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
         "visible_surface",
         "expected_visible_result",
         "observed_visible_result",
+        "ui_test_identifier",
         "app_bundle",
         "app_cdhash",
         "app_team_identifier",
@@ -127,8 +131,14 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
         errors.append("working tree was not clean when evidence was captured")
     if run_git(root, "status", "--porcelain", "--untracked-files=normal"):
         errors.append("working tree is not currently clean")
+    ui_test_identifier = manifest.get("ui_test_identifier", "")
+    if not isinstance(ui_test_identifier, str) or not UI_TEST_PATTERN.fullmatch(ui_test_identifier):
+        errors.append("manifest does not name an exact HarnessUITests requirement test")
 
     tests = manifest.get("tests")
+    if not isinstance(tests, list):
+        errors.append("tests must be a list")
+        tests = []
     required_tests = {"macos-unit-tests", "macos-ui-tests"}
     passed_tests = {
         test.get("name")
@@ -137,13 +147,28 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
     }
     if not required_tests.issubset(passed_tests):
         errors.append("both macOS unit and UI tests must pass without skips")
+    ui_results = [
+        test for test in tests or []
+        if isinstance(test, dict) and test.get("name") == "macos-ui-tests"
+    ]
+    if len(ui_results) != 1 or ui_results[0].get("test_identifier") != ui_test_identifier:
+        errors.append("UI test result is not bound to the manifest requirement test")
 
     review = manifest.get("sol_review") or {}
+    if not isinstance(review, dict):
+        errors.append("sol_review must be an object")
+        review = {}
     if review.get("status") != "PASS" or not review.get("check_run_url"):
         errors.append("a passing commit-bound GPT-5.6 Sol check is required")
 
     artifacts = manifest.get("artifacts") or {}
     hashes = manifest.get("artifact_sha256") or {}
+    if not isinstance(artifacts, dict):
+        errors.append("artifacts must be an object")
+        artifacts = {}
+    if not isinstance(hashes, dict):
+        errors.append("artifact_sha256 must be an object")
+        hashes = {}
     for name in ("screenshot", "video", "unit_xcresult", "ui_xcresult"):
         path = resolve_artifact(root, artifacts.get(name))
         if path is None or not path.exists():

@@ -30,6 +30,7 @@ GPT-5.6 Sol should be a reviewer, not the release oracle. Current research shows
 Branch `codex/verified-build-gates` installs the recommended system as repository code:
 
 - agent-owned pull requests and a literal acceptance-contract validator;
+- protected-base acceptance validation that proposed PR code cannot weaken;
 - GitHub-hosted macOS tests, SwiftLint, changed-code Periphery, and Swift/Python CodeQL;
 - an immutable-SHA, read-only `gpt-5.6-sol` review with structured fail-closed output;
 - a signed macOS XCUITest target and a handoff command that records the exact named requirement test;
@@ -39,7 +40,7 @@ Branch `codex/verified-build-gates` installs the recommended system as repositor
 
 The only external credential prerequisite is the repository `OPENAI_API_KEY` secret. It was not present during installation. The Sol workflow deliberately fails closed when it is absent; no credential or paid API authority was invented by the installer.
 
-## What Harness has now
+## What Harness had before this installation
 
 | Layer | Present state | Consequence |
 |---|---|---|
@@ -79,14 +80,15 @@ Adam's sentence
        - structured PASS / FAIL
   -> fix findings
   -> fresh Sol review of the final diff
-  -> protected merge only when required checks pass
-  -> handoff verification on Adam's Mac
+  -> handoff verification of the final PR head on Adam's Mac
        - signed app launched from the exact commit
        - stale app instances closed
-       - critical UI flow executed
+       - exact named XCUITest executed and confirmed inside xcresult
        - expected vs actual recorded
-       - screenshot/video + xcresult/log attached
+       - window screenshot + test-time video + unit/UI xcresults attached
   -> release certificate bound to commit SHA
+  -> Signed Mac handoff status published on that SHA
+  -> protected merge only when every required status passes
   -> only then may the agent say "done" or hand Adam the build
 ```
 
@@ -105,11 +107,12 @@ Protect `main` with no bypass for ordinary agent credentials:
 
 Required checks:
 
-1. `swift-build-and-tests` on a clean macOS runner.
-2. `swiftlint` and `periphery`.
-3. `codeql-swift` on macOS. Harness is public, so GitHub code scanning is available without a private-repository Code Security license.
-4. `gpt-5.6-sol-review` in read-only mode.
-5. `acceptance-contract-present` ensuring the PR names Adam’s exact sentence, changed behavior, critical flow, and proof plan.
+1. `macOS tests, SwiftLint, Periphery` on a clean hosted macOS runner.
+2. `Gate script tests` for the deterministic validators.
+3. `CodeQL (swift)` and `CodeQL (python)`. Harness is public, so GitHub code scanning is available without a private-repository Code Security license.
+4. `GPT-5.6 Sol review` from protected-base controls in read-only mode.
+5. `Acceptance contract` from a validator on the protected base, ensuring proposed code cannot weaken its own gate.
+6. `Signed Mac handoff`, published only after the exact named UI test and local evidence certificate pass.
 
 Do not treat a native Codex or Copilot review comment as a blocking approval by itself. GitHub documents that Copilot reviews are comments and do not count toward required approvals. OpenAI’s native GitHub review is optimized for serious P0/P1 findings. A custom `openai/codex-action@v1` job is the better enforcement surface because the prompt, model, effort, output artifact, and job exit state can be controlled.
 
@@ -122,6 +125,7 @@ Every feature change must produce a proof directory keyed by commit SHA:
 ```text
 .local-artifacts/release-gate/<commit>/
   manifest.json
+  reviewed-pr-body.md
   signed-build.log
   codesign.log
   HarnessUnitTests.xcresult/
@@ -138,6 +142,7 @@ Every feature change must produce a proof directory keyed by commit SHA:
 - app bundle path, signature identity, and launch PID;
 - tests and checks executed, with pass/fail/skip distinguished;
 - critical UI flow steps;
+- the exact `HarnessUITests/<Class>/<method>` identifier confirmed as executed and passed in the result bundle;
 - observed result and artifact paths;
 - unresolved P0/P1/P2 findings;
 - builder identity, independent reviewer identity, and verifier identity.
