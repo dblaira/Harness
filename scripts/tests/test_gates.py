@@ -384,6 +384,21 @@ class XCResultGateTests(unittest.TestCase):
         self.assertEqual(len(inventory), 53)
         self.assertIn("answerWindowMakesTheAnswerAPrimaryReadingSurface", inventory)
 
+    def test_swift_inventory_handles_hostile_long_annotation_input_without_regex(self) -> None:
+        hostile = "@A(" + ") @A(" * 100_000 + "\n@Test @MainActor func protectedTest() {}"
+        self.assertEqual(swift_test_inventory.identifiers(hostile), {"protectedTest"})
+
+    def test_swift_inventory_tracks_multiline_test_annotations_without_parsing_strings(self) -> None:
+        source = '''
+        @Test(
+            "descriptive name"
+        )
+        @MainActor
+        func multilineTest() {}
+        let example = "func inventedTest()"
+        '''
+        self.assertEqual(swift_test_inventory.identifiers(source), {"multilineTest"})
+
 
 class CommitStatusTests(unittest.TestCase):
     def test_newest_failure_rejects_older_success(self) -> None:

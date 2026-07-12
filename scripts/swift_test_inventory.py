@@ -5,24 +5,55 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import subprocess
 import sys
 from pathlib import Path
 
 
-TEST_PATTERN = re.compile(
-    r"(?m)^\s*(?P<annotations>(?:@[A-Za-z_][A-Za-z0-9_]*(?:\([^\n]*\))?\s+)*)"
-    r"func\s+(?P<name>test[A-Za-z0-9_]+|[a-z][A-Za-z0-9_]+)\s*\("
-)
+FUNCTION_MODIFIERS = {
+    "class", "fileprivate", "final", "internal", "mutating", "nonisolated",
+    "open", "override", "package", "private", "public", "static",
+}
+
+
+def declared_function(line: str) -> tuple[str, str] | None:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("//"):
+        return None
+    marker = "func "
+    index = stripped.find(marker)
+    if index < 0:
+        return None
+    prefix = stripped[:index]
+    if prefix and not prefix.startswith("@") and not set(prefix.split()).issubset(FUNCTION_MODIFIERS):
+        return None
+    tail = stripped[index + len(marker):].lstrip()
+    name, separator, _ = tail.partition("(")
+    name = name.strip()
+    if not separator or not name or not name[0].islower() or not name.replace("_", "a").isalnum():
+        return None
+    return name, prefix
 
 
 def identifiers(text: str) -> set[str]:
     results: set[str] = set()
-    for match in TEST_PATTERN.finditer(text):
-        name = match.group("name")
-        if "@Test" in match.group("annotations") or name.startswith("test"):
-            results.add(name)
+    pending_test_annotation = False
+    pending_annotation_depth = 0
+    for line in text.splitlines():
+        declaration = declared_function(line)
+        if declaration:
+            name, prefix = declaration
+            if pending_test_annotation or "@Test" in prefix or name.startswith("test"):
+                results.add(name)
+            pending_test_annotation = False
+            pending_annotation_depth = 0
+        elif line.lstrip().startswith("@"):
+            pending_test_annotation = pending_test_annotation or "@Test" in line
+            pending_annotation_depth += line.count("(") - line.count(")")
+        elif pending_annotation_depth > 0:
+            pending_annotation_depth += line.count("(") - line.count(")")
+        elif line.strip() and not line.lstrip().startswith("//"):
+            pending_test_annotation = False
     return results
 
 
