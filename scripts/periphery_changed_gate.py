@@ -51,6 +51,43 @@ def parse_changed_lines(diff: str, root: Path) -> dict[Path, set[int]]:
     return changed
 
 
+def changed_swift_lines(root: Path, base: str) -> dict[Path, set[int]]:
+    names = subprocess.run(
+        ["git", "-C", str(root), "diff", "--name-only", "-z", base, "HEAD", "--", "*.swift"],
+        capture_output=True,
+        check=False,
+    )
+    if names.returncode:
+        raise ValueError(names.stderr.decode("utf-8", "replace") or "cannot enumerate changed Swift paths")
+    changed: dict[Path, set[int]] = {}
+    for raw_path in (item for item in names.stdout.split(b"\0") if item):
+        relative = Path(raw_path.decode("utf-8", "surrogateescape"))
+        path = (root / relative).resolve()
+        try:
+            path.relative_to(root.resolve())
+        except ValueError:
+            raise ValueError(f"changed Swift path escapes repository: {relative}") from None
+        diff = subprocess.run(
+            ["git", "-C", str(root), "diff", "--unified=0", "--no-color", "--no-ext-diff", base, "HEAD", "--", str(relative)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if diff.returncode:
+            raise ValueError(diff.stderr or f"cannot inspect changed Swift path: {relative}")
+        lines: set[int] = set()
+        for line in diff.stdout.splitlines():
+            match = HUNK_PATTERN.match(line)
+            if match:
+                start = int(match.group(1))
+                count = int(match.group(2) or "1")
+                lines.update(range(start, start + count))
+        if not lines and path.exists():
+            raise ValueError(f"changed Swift path has no parseable added lines: {relative}")
+        changed[path] = lines
+    return changed
+
+
 def changed_findings(
     findings: list[dict],
     changed: dict[Path, set[int]],
@@ -101,14 +138,11 @@ def main() -> int:
     if base_result.returncode:
         print(f"Periphery base commit is unavailable: {args.base}", file=sys.stderr)
         return 1
-    diff = command(
-        "git", "-C", str(root), "diff", "--unified=0", "--no-color", "--no-ext-diff",
-        args.base, "HEAD", "--", "*.swift",
-    )
-    if diff.returncode:
-        print(diff.stderr, file=sys.stderr)
-        return diff.returncode
-    changed = parse_changed_lines(diff.stdout, root)
+    try:
+        changed = changed_swift_lines(root, args.base)
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 1
     args.output.parent.mkdir(parents=True, exist_ok=True)
     if not any(changed.values()):
         args.output.write_text("[]\n", encoding="utf-8")

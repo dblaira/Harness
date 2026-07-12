@@ -93,17 +93,18 @@ print(json.loads(Path(os.environ["CONTRACT"]).read_text(encoding="utf-8"))["fina
 PY
 )"
 UI_TEST="$CONTRACT_UI_TEST"
+BINDING_UI_TEST="HarnessUITests/HarnessCriticalFlowTests/testSignedAppLaunchesItsVisibleDelegationSurface"
 if [[ "$CONTRACT_UI_TEST" == "INFRASTRUCTURE_ONLY" ]]; then
-  UI_TEST="HarnessUITests/HarnessCriticalFlowTests/testSignedAppLaunchesItsVisibleDelegationSurface"
+  UI_TEST="$BINDING_UI_TEST"
 fi
 [[ "$UI_TEST" == HarnessUITests/*/test* ]] || {
   echo "The handoff test must be one exact HarnessUITests method." >&2
   exit 1
 }
-[[ "$CONTRACT_UI_TEST" == "INFRASTRUCTURE_ONLY" || "$UI_TEST" != "HarnessUITests/HarnessCriticalFlowTests/testSignedAppLaunchesItsVisibleDelegationSurface" ]] || {
-  echo "The generic launch smoke test cannot prove a feature requirement. Name an exact requirement test." >&2
-  exit 1
-}
+UI_TEST_ARGS=("-only-testing:$BINDING_UI_TEST")
+if [[ "$UI_TEST" != "$BINDING_UI_TEST" ]]; then
+  UI_TEST_ARGS+=("-only-testing:$UI_TEST")
+fi
 
 "$CONTROL_DIR/script/hosted_verification_gate.sh"
 HOSTED_URL="$(gh api "repos/$REPO/commits/$SHA/status" | python3 "$CONTROL_DIR/scripts/require_latest_status.py" --context 'Trusted hosted verification' --description-contains "pr:$PR_NUMBER binding:${EVIDENCE_BINDING:0:24}")" || {
@@ -219,7 +220,7 @@ python3 "$CONTROL_DIR/scripts/run_with_timeout.py" --seconds 110 -- xcodebuild t
   -destination 'platform=macOS' \
   -derivedDataPath "$CANDIDATE_DERIVED_DATA" \
   -resultBundlePath "$UI_RESULT_BUNDLE" \
-  "-only-testing:$UI_TEST"
+  "${UI_TEST_ARGS[@]}"
 
 kill -0 "$VIDEO_PID" 2>/dev/null || {
   echo "The video recording ended before the exact UI test completed." >&2
@@ -227,9 +228,13 @@ kill -0 "$VIDEO_PID" 2>/dev/null || {
 }
 wait "$VIDEO_PID"
 trap - EXIT
+if [[ "$UI_TEST" != "$BINDING_UI_TEST" ]]; then
+  python3 "$CONTROL_DIR/scripts/validate_xcresult.py" \
+    --xcresult "$UI_RESULT_BUNDLE" --required-test "$UI_TEST" --result-only
+fi
 python3 "$CONTROL_DIR/scripts/validate_xcresult.py" \
   --xcresult "$UI_RESULT_BUNDLE" \
-  --required-test "$UI_TEST" \
+  --required-test "$BINDING_UI_TEST" \
   --max-duration 55 \
   --screenshot-output "$SCREENSHOT"
 [[ -s "$VIDEO" && -s "$SCREENSHOT" ]] || {
@@ -281,10 +286,14 @@ python3 "$CONTROL_DIR/scripts/run_with_timeout.py" --seconds 110 -- xcodebuild t
   -destination 'platform=macOS' \
   -derivedDataPath "$CANDIDATE_DERIVED_DATA" \
   -resultBundlePath "$FINAL_UI_RESULT_BUNDLE" \
-  "-only-testing:$UI_TEST"
+  "${UI_TEST_ARGS[@]}"
+if [[ "$UI_TEST" != "$BINDING_UI_TEST" ]]; then
+  python3 "$CONTROL_DIR/scripts/validate_xcresult.py" \
+    --xcresult "$FINAL_UI_RESULT_BUNDLE" --required-test "$UI_TEST" --result-only
+fi
 python3 "$CONTROL_DIR/scripts/validate_xcresult.py" \
   --xcresult "$FINAL_UI_RESULT_BUNDLE" \
-  --required-test "$UI_TEST" \
+  --required-test "$BINDING_UI_TEST" \
   --max-duration 55 \
   --screenshot-output "$FINAL_UI_SCREENSHOT"
 [[ -s "$FINAL_UI_SCREENSHOT" ]] || {
@@ -339,7 +348,7 @@ INITIAL_RUNNING_APP_PROOF="$INITIAL_RUNNING_APP_PROOF" RECORDED_WINDOW_ID="$RECO
 MEDIA_PROOF="$MEDIA_PROOF" \
 TEST_INVENTORY="$TEST_INVENTORY" \
 APP_BUNDLE="$APP_BUNDLE" PID="$PID" SOL_URL="$SOL_URL" HOSTED_URL="$HOSTED_URL" ACTUAL_UI_TEST="$UI_TEST" \
-FINAL_ATTACH_TEST="$UI_TEST" FINAL_ACCESSIBILITY_IDENTIFIER="$FINAL_ACCESSIBILITY_IDENTIFIER" \
+BINDING_TEST_IDENTIFIER="$BINDING_UI_TEST" FINAL_ATTACH_TEST="$BINDING_UI_TEST" FINAL_ACCESSIBILITY_IDENTIFIER="$FINAL_ACCESSIBILITY_IDENTIFIER" \
 APP_IDENTITY="$APP_IDENTITY" \
 CONTRACT_DIGEST="$CONTRACT_DIGEST" \
 EVIDENCE_BINDING="$EVIDENCE_BINDING" PR_NUMBER="$PR_NUMBER" BASE_SHA="$BASE_SHA" \
@@ -397,6 +406,7 @@ manifest = {
     "expected_visible_result": contract["expected_visible_result"],
     "acceptance_test_identifier": contract["ui_test_identifier"],
     "ui_test_identifier": os.environ["ACTUAL_UI_TEST"],
+    "binding_ui_test_identifier": os.environ["BINDING_TEST_IDENTIFIER"],
     "final_accessibility_identifier": os.environ["FINAL_ACCESSIBILITY_IDENTIFIER"],
     "observed_visible_result": observed,
     "app_bundle": os.environ["APP_BUNDLE"],
@@ -410,6 +420,7 @@ manifest = {
     "tests": [
         {"name": "macos-unit-tests", "status": "PASS"},
         {"name": "macos-ui-tests", "status": "PASS", "test_identifier": os.environ["ACTUAL_UI_TEST"]},
+        {"name": "window-bound-ui-evidence", "status": "PASS", "test_identifier": os.environ["BINDING_TEST_IDENTIFIER"]},
         {"name": "final-relaunch-ui-test", "status": "PASS", "test_identifier": os.environ["FINAL_ATTACH_TEST"]},
         {"name": "live-satisfaction-gate", "status": "PASS"},
         {"name": "trusted-hosted-verification", "status": "PASS"},

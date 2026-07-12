@@ -19,6 +19,12 @@ final class HarnessCriticalFlowTests: XCTestCase {
             XCTFail("HARNESS_EXPECTED_WINDOW_BOUNDS must name the exact evidence window")
             return
         }
+        guard let requiredIdentifier = environment["HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER"],
+              !requiredIdentifier.isEmpty,
+              requiredIdentifier != "UNSET" else {
+            XCTFail("HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER must name the contracted visible result")
+            return
+        }
         if attachExisting {
             app.activate()
         } else {
@@ -59,8 +65,8 @@ final class HarnessCriticalFlowTests: XCTestCase {
         let processMarker = window.descendants(matching: .any)["HarnessProcess-\(expectedPID)"]
         XCTAssertTrue(processMarker.waitForExistence(timeout: 10), "The evidence window is not owned by HARNESS_EXPECTED_PID")
 
-        let delegation = window.buttons["Delegation"]
-        XCTAssertTrue(delegation.waitForExistence(timeout: 10), "The visible Delegation surface never appeared")
+        let requiredElement = window.descendants(matching: .any)[requiredIdentifier]
+        XCTAssertTrue(requiredElement.waitForExistence(timeout: 10), "The contracted visible surface never appeared in the evidence window")
 
         HarnessRequirementEvidence.attachVisibleResult(of: window, to: self)
     }

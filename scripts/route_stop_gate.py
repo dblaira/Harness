@@ -36,11 +36,18 @@ def is_within(path: Path, parent: Path) -> bool:
         return False
 
 
+def marker_root(cwd: Path) -> Path | None:
+    for candidate in (cwd, *cwd.parents):
+        if all((candidate / marker).exists() for marker in HARNESS_MARKERS):
+            return candidate
+    return None
+
+
 def route(cwd: Path, installed_root: Path) -> Path | None:
     cwd = cwd.resolve()
     root = git_root(cwd)
     if root is None:
-        if is_within(cwd, installed_root):
+        if is_within(cwd, installed_root) or marker_root(cwd) is not None:
             raise ValueError("Harness Git metadata is unreadable; Stop gate stays closed")
         return None
     try:

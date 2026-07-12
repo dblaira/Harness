@@ -94,6 +94,7 @@ def main() -> int:
     required.add_argument("--required-test")
     required.add_argument("--required-bundle")
     parser.add_argument("--screenshot-output", type=Path)
+    parser.add_argument("--result-only", action="store_true")
     parser.add_argument("--max-duration", type=float)
     parser.add_argument("--required-test-list", type=Path)
     args = parser.parse_args()
@@ -135,6 +136,9 @@ def main() -> int:
 
     if args.required_bundle:
         print(f"Test bundle passed with no skipped tests: {args.required_bundle}")
+        return 0
+    if args.result_only:
+        print(f"Exact UI test passed: {args.required_test}")
         return 0
     if args.screenshot_output is None:
         print("--screenshot-output is required with --required-test", file=sys.stderr)

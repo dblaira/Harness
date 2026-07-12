@@ -58,6 +58,7 @@ PROTECTED_CONTROL_PATHS = (
     "scripts/verify_running_app.swift",
     "Tests/HarnessUITests/HarnessCriticalFlowTests.swift",
     "Tests/HarnessUITests/HarnessRequirementEvidence.swift",
+    "Packages/OntologyKit/Tests/OntologyKitTests/SatisfactionGateLiveTests.swift",
 )
 RUN_ID = re.compile(r"/actions/runs/(\d+)(?:/|$)")
 JOB_ID = re.compile(r"/(?:actions/runs/\d+/job|runs)/(\d+)(?:/|$)")

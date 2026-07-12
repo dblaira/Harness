@@ -590,6 +590,16 @@ class RepositoryBindingTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Git metadata is unreadable"):
                 route_stop_gate.route(root, root)
 
+    def test_stop_router_blocks_unreadable_secondary_harness_clone(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "secondary" / "Harness"
+            (root / ".github").mkdir(parents=True)
+            (root / ".github/acceptance-contract.json").write_text("{}\n", encoding="utf-8")
+            (root / "project.yml").write_text("name: Harness\n", encoding="utf-8")
+            (root / "Sources/Harness").mkdir(parents=True)
+            with self.assertRaisesRegex(ValueError, "Git metadata is unreadable"):
+                route_stop_gate.route(root / "Sources/Harness", Path(directory) / "installed" / "Harness")
+
 
 class EvidenceBindingTests(unittest.TestCase):
     def test_binding_changes_for_pr_base_or_full_contract(self) -> None:
@@ -698,6 +708,25 @@ diff --git a/Deleted.swift b/Deleted.swift
         changed = periphery_changed_gate.parse_changed_lines(diff, Path("/proposal"))
         self.assertEqual(changed[Path("/proposal/Kept.swift")], {2})
 
+    def test_unicode_swift_path_is_enumerated_without_git_header_quoting(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.email", "test@example.com"], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.name", "Gate Test"], check=True)
+            (root / "README.md").write_text("base\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "base"], check=True)
+            base = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+            path = root / "évidence.swift"
+            path.write_text("let unusedEvidence = true\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "unicode"], check=True)
+            changed = periphery_changed_gate.changed_swift_lines(root, base)
+            self.assertEqual(changed[path.resolve()], {1})
+            finding = {"name": "unusedEvidence", "location": f"{path.resolve()}:1:1"}
+            self.assertEqual(periphery_changed_gate.changed_findings([finding], changed, root), [finding])
+
 
 class AppIdentityTests(unittest.TestCase):
     def test_wrong_bundle_identifier_is_rejected_before_launch(self) -> None:
@@ -784,6 +813,7 @@ class HostedAuthorityTests(unittest.TestCase):
             "scripts/preflight_tcc.swift",
             "Tests/HarnessUITests/HarnessCriticalFlowTests.swift",
             "Tests/HarnessUITests/HarnessRequirementEvidence.swift",
+            "Packages/OntologyKit/Tests/OntologyKitTests/SatisfactionGateLiveTests.swift",
         )
         for relative in protected:
             with self.subTest(path=relative), tempfile.TemporaryDirectory() as directory:
@@ -972,10 +1002,20 @@ class GateStructureTests(unittest.TestCase):
         self.assertIn("HARNESS_EXPECTED_PID", ui_test)
         self.assertIn("HarnessProcess-\\(expectedPID)", ui_test)
         self.assertIn("HARNESS_EXPECTED_WINDOW_BOUNDS", ui_test)
-        self.assertIn('window.buttons["Delegation"]', ui_test)
-        self.assertNotIn('app.buttons["Delegation"]', ui_test)
+        self.assertIn("window.descendants(matching: .any)[requiredIdentifier]", ui_test)
+        self.assertNotIn("app.descendants(matching: .any)[requiredIdentifier]", ui_test)
         self.assertIn("attachVisibleResult(of: window", ui_test)
         self.assertGreaterEqual(handoff.count("HARNESS_EXPECTED_WINDOW_BOUNDS="), 3)
+        self.assertIn('UI_TEST_ARGS=("-only-testing:$BINDING_UI_TEST")', handoff)
+        self.assertIn('UI_TEST_ARGS+=("-only-testing:$UI_TEST")', handoff)
+        self.assertIn('--required-test "$UI_TEST" --result-only', handoff)
+        self.assertIn('--required-test "$BINDING_UI_TEST"', handoff)
+
+    def test_live_satisfaction_oracle_change_is_rejected_before_handoff_execution(self) -> None:
+        handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
+        protected = "Packages/OntologyKit/Tests/OntologyKitTests/SatisfactionGateLiveTests.swift"
+        self.assertIn(protected, verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
+        self.assertLess(handoff.index("hosted_verification_gate.sh"), handoff.index("HARNESS_REQUIRE_LIVE_SATISFACTION=1"))
 
     def test_protected_test_inventory_is_rebuilt_after_proposal_execution(self) -> None:
         handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")

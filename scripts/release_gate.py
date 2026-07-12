@@ -205,6 +205,7 @@ def validate_xcresult(
     required_bundle: str | None = None,
     required_test_list: Path | None = None,
     expected_screenshot: Path | None = None,
+    result_only: bool = False,
 ) -> list[str]:
     validator = Path(__file__).with_name("validate_xcresult.py")
     args = [sys.executable, str(validator), "--xcresult", str(path)]
@@ -213,6 +214,10 @@ def validate_xcresult(
         if required_test_list is None:
             return ["trusted xcresult validation lacks the protected test inventory"]
         args.extend(("--required-test-list", str(required_test_list)))
+        result = run_command(*args)
+        return [] if result.returncode == 0 else [result.stderr.strip() or result.stdout.strip()]
+    if required_test and result_only:
+        args.extend(("--required-test", required_test, "--result-only"))
         result = run_command(*args)
         return [] if result.returncode == 0 else [result.stderr.strip() or result.stdout.strip()]
     if not required_test or expected_screenshot is None:
@@ -255,6 +260,7 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
         "expected_visible_result",
         "observed_visible_result",
         "ui_test_identifier",
+        "binding_ui_test_identifier",
         "app_bundle",
         "app_cdhash",
         "app_team_identifier",
@@ -285,6 +291,9 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
     ui_test_identifier = manifest.get("ui_test_identifier", "")
     if not isinstance(ui_test_identifier, str) or not UI_TEST_PATTERN.fullmatch(ui_test_identifier):
         errors.append("manifest does not name an exact HarnessUITests requirement test")
+    binding_ui_test_identifier = manifest.get("binding_ui_test_identifier", "")
+    if not isinstance(binding_ui_test_identifier, str) or not UI_TEST_PATTERN.fullmatch(binding_ui_test_identifier):
+        errors.append("manifest does not name the immutable window-binding UI test")
     acceptance_test_identifier = manifest.get("acceptance_test_identifier", "")
     if (
         acceptance_test_identifier != "INFRASTRUCTURE_ONLY"
@@ -322,6 +331,7 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
         "final-relaunch-ui-test",
         "live-satisfaction-gate",
         "trusted-hosted-verification",
+        "window-bound-ui-evidence",
     }
     passed_tests = {
         test.get("name")
@@ -336,11 +346,17 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
     ]
     if len(ui_results) != 1 or ui_results[0].get("test_identifier") != ui_test_identifier:
         errors.append("UI test result is not bound to the manifest requirement test")
+    binding_results = [
+        test for test in tests or []
+        if isinstance(test, dict) and test.get("name") == "window-bound-ui-evidence"
+    ]
+    if len(binding_results) != 1 or binding_results[0].get("test_identifier") != binding_ui_test_identifier:
+        errors.append("UI evidence is not bound by the immutable PID/window test")
     final_results = [
         test for test in tests or []
         if isinstance(test, dict) and test.get("name") == "final-relaunch-ui-test"
     ]
-    final_attach_test = ui_test_identifier
+    final_attach_test = binding_ui_test_identifier
     if len(final_results) != 1 or final_results[0].get("test_identifier") != final_attach_test:
         errors.append("final relaunch did not rerun the exact manifest requirement test")
 
@@ -435,8 +451,10 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
     if unit_xcresult and unit_xcresult.is_dir() and test_inventory and test_inventory.is_file():
         errors.extend(validate_xcresult(unit_xcresult, required_bundle="HarnessTests", required_test_list=test_inventory))
     if ui_xcresult and ui_xcresult.is_dir() and screenshot and screenshot.is_file():
-        errors.extend(validate_xcresult(ui_xcresult, required_test=ui_test_identifier, expected_screenshot=screenshot))
+        errors.extend(validate_xcresult(ui_xcresult, required_test=ui_test_identifier, result_only=True))
+        errors.extend(validate_xcresult(ui_xcresult, required_test=binding_ui_test_identifier, expected_screenshot=screenshot))
     if final_ui_xcresult and final_ui_xcresult.is_dir() and final_ui_screenshot and final_ui_screenshot.is_file():
+        errors.extend(validate_xcresult(final_ui_xcresult, required_test=ui_test_identifier, result_only=True))
         errors.extend(validate_xcresult(final_ui_xcresult, required_test=final_attach_test, expected_screenshot=final_ui_screenshot))
     if satisfaction and satisfaction.is_file():
         text = satisfaction.read_text(encoding="utf-8", errors="replace")
