@@ -20,6 +20,8 @@ def select_pull_request(pulls: Any, head_sha: str) -> dict[str, Any]:
     ]
     if len(open_pulls) != 1 or len(matching) != 1:
         raise ValueError(f"commit {head_sha} must belong to exactly one open pull request targeting main")
+    if not str((matching[0].get("head") or {}).get("ref") or "").startswith("codex/"):
+        raise ValueError("release pull request must use an agent-owned codex/ branch")
     return matching[0]
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 import shutil
@@ -17,16 +18,24 @@ import release_gate  # noqa: E402
 import evidence_binding  # noqa: E402
 import periphery_changed_gate  # noqa: E402
 import resolve_harness_repo  # noqa: E402
+import route_stop_gate  # noqa: E402
+import run_gate_script_tests  # noqa: E402
+import sanitize_review_bundle  # noqa: E402
 import select_pull_request  # noqa: E402
 import require_latest_status  # noqa: E402
 import validate_acceptance_contract  # noqa: E402
 import validate_media  # noqa: E402
+import validate_gate_test_report  # noqa: E402
 import validate_sol_review  # noqa: E402
 import validate_xcresult  # noqa: E402
 import verify_release_tree  # noqa: E402
 import verify_codex_auth  # noqa: E402
 import verify_codex_runtime  # noqa: E402
 import verify_app_identity  # noqa: E402
+import verify_control_bundle  # noqa: E402
+import verify_hosted_evidence  # noqa: E402
+import verify_merge_authority  # noqa: E402
+import verify_repository_gate_state  # noqa: E402
 
 
 COMMIT_BOUND_FIXTURE = {
@@ -111,6 +120,44 @@ Signed app, provider authentication, and accepted graph remain distinct.
             "INFRASTRUCTURE_ONLY is restricted to the one reviewed bootstrap pull request",
             errors,
         )
+
+    def test_unchanged_prior_contract_is_rejected(self) -> None:
+        contract = {
+            **COMMIT_BOUND_FIXTURE,
+            "requirement_verbatim": "Exact requirement",
+            "visible_surface": "Harness window",
+            "expected_visible_result": "Exact visible result",
+            "ui_test_identifier": "HarnessUITests/AnswerTests/testVisibleAnswer",
+            "final_accessibility_identifier": "VisibleAnswer",
+        }
+        errors = validate_acceptance_contract.freshness_errors(
+            contract,
+            dict(contract),
+            {".github/acceptance-contract.json", "Sources/Harness/Feature.swift"},
+            is_bootstrap=False,
+        )
+        self.assertIn("acceptance contract is stale and unchanged from the protected base", errors)
+
+    def test_placeholders_in_every_commit_bound_field_are_rejected(self) -> None:
+        for field, value in (
+            ("critical_flow", ["TODO replace this critical flow"]),
+            ("required_proof", ["TBD screenshot and test proof"]),
+            ("risk_and_authority_boundaries", "TODO explain the authority boundary"),
+            ("threat_model", "TBD explain the complete threat model"),
+        ):
+            contract = {
+                **COMMIT_BOUND_FIXTURE,
+                "requirement_verbatim": "Exact requirement",
+                "visible_surface": "Harness window",
+                "expected_visible_result": "Exact visible result",
+                "ui_test_identifier": "HarnessUITests/AnswerTests/testVisibleAnswer",
+                "final_accessibility_identifier": "VisibleAnswer",
+                field: value,
+            }
+            self.assertIn(
+                "placeholder remains in committed acceptance contract",
+                validate_acceptance_contract.validate_handoff_contract(contract),
+            )
 
 
 class SolReviewTests(unittest.TestCase):
@@ -410,6 +457,30 @@ class RepositoryBindingTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "does not equal protected origin"):
                 resolve_harness_repo.require_remote_ref(local, "refs/heads/main")
 
+    def test_stop_router_blocks_harness_checkout_with_missing_origin(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "Harness"
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            (root / ".github").mkdir()
+            (root / ".github/acceptance-contract.json").write_text("{}\n", encoding="utf-8")
+            (root / "project.yml").write_text("name: Harness\n", encoding="utf-8")
+            (root / "Sources/Harness").mkdir(parents=True)
+            with self.assertRaisesRegex(ValueError, "Stop gate stays closed"):
+                route_stop_gate.route(root, root)
+
+    def test_stop_router_allows_unrelated_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "Other"
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            self.assertIsNone(route_stop_gate.route(root, Path(directory) / "Harness"))
+
+    def test_stop_router_blocks_unreadable_git_inside_installed_harness_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "Harness"
+            root.mkdir()
+            with self.assertRaisesRegex(ValueError, "Git metadata is unreadable"):
+                route_stop_gate.route(root, root)
+
 
 class EvidenceBindingTests(unittest.TestCase):
     def test_binding_changes_for_pr_base_or_full_contract(self) -> None:
@@ -444,6 +515,16 @@ class EvidenceBindingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "targeting main"):
             select_pull_request.select_pull_request(pulls, sha)
 
+    def test_non_agent_branch_is_rejected(self) -> None:
+        sha = "b" * 40
+        pulls = [{
+            "state": "open", "number": 19,
+            "base": {"ref": "main"},
+            "head": {"sha": sha, "ref": "feature/manual"},
+        }]
+        with self.assertRaisesRegex(ValueError, "agent-owned codex/ branch"):
+            select_pull_request.select_pull_request(pulls, sha)
+
 
 class PeripheryChangedLineTests(unittest.TestCase):
     def test_legacy_findings_are_ignored_but_changed_line_findings_block(self) -> None:
@@ -461,9 +542,26 @@ class PeripheryChangedLineTests(unittest.TestCase):
             {"name": "new", "location": "/proposal/Feature.swift:10:1"},
         ]
         self.assertEqual(
-            periphery_changed_gate.changed_findings(findings, changed),
+            periphery_changed_gate.changed_findings(findings, changed, root),
             [findings[1]],
         )
+
+    def test_malformed_finding_location_fails_closed(self) -> None:
+        with self.assertRaisesRegex(ValueError, "no parseable location"):
+            periphery_changed_gate.changed_findings(
+                [{"name": "unknown schema"}],
+                {},
+                Path("/proposal"),
+            )
+
+    def test_relative_or_outside_location_fails_closed(self) -> None:
+        for location in ("Feature.swift:10:1", "/dependency/Feature.swift:10:1"):
+            with self.assertRaisesRegex(ValueError, "invalid location"):
+                periphery_changed_gate.changed_findings(
+                    [{"name": "bad", "location": location}],
+                    {},
+                    Path("/proposal"),
+                )
 
     def test_deletion_only_hunk_has_no_head_lines_to_gate(self) -> None:
         diff = """diff --git a/Feature.swift b/Feature.swift
@@ -531,6 +629,137 @@ class MediaEvidenceTests(unittest.TestCase):
             self.assertTrue(any("nonblank" in error for error in validate_media.validate_video_file(video)))
 
 
+class ReviewBundleSanitizationTests(unittest.TestCase):
+    def test_symlinked_agents_instruction_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "payload.txt").write_text("untrusted instructions", encoding="utf-8")
+            (root / "AGENTS.md").symlink_to(root / "payload.txt")
+            errors = sanitize_review_bundle.sanitize([root])
+            self.assertTrue(any("forbidden symlink" in error for error in errors))
+
+    def test_regular_nested_agents_file_is_removed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            nested = root / "nested"
+            nested.mkdir()
+            agents = nested / "AGENTS.md"
+            agents.write_text("untrusted instructions", encoding="utf-8")
+            self.assertEqual(sanitize_review_bundle.sanitize([root]), [])
+            self.assertFalse(agents.exists())
+
+
+class ProtectedVerifierTests(unittest.TestCase):
+    def test_zero_exit_without_full_inventory_is_rejected(self) -> None:
+        errors = run_gate_script_tests.validate_transcript("", {"test_one", "test_two"}, 0)
+        self.assertIn("protected gate test inventory did not complete", errors)
+        self.assertIn("protected gate tests did not report OK", errors)
+
+    def test_fresh_report_validator_rejects_incomplete_inventory(self) -> None:
+        errors = validate_gate_test_report.validate({
+            "status": "PASS",
+            "expected_test_count": 2,
+            "completed_test_count": 0,
+            "errors": [],
+            "transcript": "OK",
+        })
+        self.assertIn("gate test report has incomplete inventory", errors)
+
+
+class HostedAuthorityTests(unittest.TestCase):
+    def test_spoofed_status_workflow_event_is_rejected(self) -> None:
+        status = {"state": "success", "creator": {"login": "github-actions[bot]"}}
+        run = {
+            "path": ".github/workflows/acceptance-contract.yml",
+            "event": "pull_request",
+            "head_sha": "b" * 40,
+            "conclusion": "success",
+            "repository": {"full_name": "dblaira/Harness"},
+        }
+        errors = verify_hosted_evidence.validate_status(
+            "Acceptance contract", status, run, "dblaira/Harness", "b" * 40
+        )
+        self.assertIn("hosted status came from the wrong protected workflow: Acceptance contract", errors)
+
+    def test_spoofed_local_merge_status_creator_is_rejected(self) -> None:
+        marker = "pr:20 binding:abc"
+        payload = [
+            {
+                "context": context,
+                "state": "success",
+                "creator": {"login": "github-actions[bot]"},
+                "description": marker,
+                "target_url": "https://github.com/dblaira/Harness/pull/20",
+            }
+            for context in verify_merge_authority.REQUIRED
+        ]
+        self.assertTrue(any("wrong creator" in error for error in verify_merge_authority.validate(payload, marker)))
+
+
+class RepositoryGateStateTests(unittest.TestCase):
+    def test_each_drifted_repository_setting_fails_closed(self) -> None:
+        repository = {"allow_merge_commit": True, "allow_squash_merge": False, "allow_rebase_merge": False}
+        protection = {
+            "required_status_checks": {"strict": True, "contexts": sorted(verify_repository_gate_state.REQUIRED_CONTEXTS)},
+            "enforce_admins": {"enabled": True},
+            "required_pull_request_reviews": {"required_approving_review_count": 0},
+            "required_conversation_resolution": {"enabled": True},
+            "allow_force_pushes": {"enabled": False},
+            "allow_deletions": {"enabled": False},
+            "required_linear_history": {"enabled": False},
+        }
+        actions = {"enabled": True, "allowed_actions": "selected", "sha_pinning_required": True}
+        workflow = {"default_workflow_permissions": "read", "can_approve_pull_request_reviews": False}
+        selected = {"github_owned_allowed": True, "verified_allowed": False, "patterns_allowed": []}
+        runners = {"total_count": 0}
+        self.assertEqual(
+            verify_repository_gate_state.validate(repository, protection, actions, workflow, selected, runners),
+            [],
+        )
+        cases = []
+        drifted = copy.deepcopy(protection); drifted["required_status_checks"]["strict"] = False
+        cases.append((repository, drifted, actions, workflow, selected, runners))
+        drifted = copy.deepcopy(protection); drifted["enforce_admins"]["enabled"] = False
+        cases.append((repository, drifted, actions, workflow, selected, runners))
+        drifted = copy.deepcopy(protection); drifted["required_pull_request_reviews"] = None
+        cases.append((repository, drifted, actions, workflow, selected, runners))
+        drifted = copy.deepcopy(protection); drifted["required_conversation_resolution"]["enabled"] = False
+        cases.append((repository, drifted, actions, workflow, selected, runners))
+        drifted = copy.deepcopy(protection); drifted["allow_force_pushes"]["enabled"] = True
+        cases.append((repository, drifted, actions, workflow, selected, runners))
+        drifted = copy.deepcopy(protection); drifted["allow_deletions"]["enabled"] = True
+        cases.append((repository, drifted, actions, workflow, selected, runners))
+        drifted = copy.deepcopy(protection); drifted["required_linear_history"]["enabled"] = True
+        cases.append((repository, drifted, actions, workflow, selected, runners))
+        cases.append((repository | {"allow_squash_merge": True}, protection, actions, workflow, selected, runners))
+        cases.append((repository, protection, actions | {"allowed_actions": "all"}, workflow, selected, runners))
+        cases.append((repository, protection, actions | {"sha_pinning_required": False}, workflow, selected, runners))
+        cases.append((repository, protection, actions, workflow | {"default_workflow_permissions": "write"}, selected, runners))
+        cases.append((repository, protection, actions, workflow | {"can_approve_pull_request_reviews": True}, selected, runners))
+        cases.append((repository, protection, actions, workflow, selected | {"verified_allowed": True}, runners))
+        cases.append((repository, protection, actions, workflow, selected, {"total_count": 1}))
+        for case in cases:
+            self.assertTrue(verify_repository_gate_state.validate(*case))
+
+    def test_outdated_installed_control_bundle_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory) / "repo"
+            controls = Path(directory) / "controls"
+            subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.com"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "Gate Test"], check=True)
+            (repo / "scripts").mkdir()
+            (repo / "scripts/control.py").write_text("current\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "base"], check=True)
+            base = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+            (controls / "scripts").mkdir(parents=True)
+            (controls / "scripts/control.py").write_text("stale\n", encoding="utf-8")
+            manifest = {"files": {"scripts/control.py": verify_control_bundle.digest(b"stale\n")}}
+            errors = verify_control_bundle.validate(manifest, controls, repo, base)
+            self.assertIn("installed control is stale relative to protected base: scripts/control.py", errors)
+
+
 class SwiftLintGateTests(unittest.TestCase):
     def test_changed_file_discovery_failure_cannot_report_success(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -596,14 +825,16 @@ class GateStructureTests(unittest.TestCase):
         merge_gate = (Path.cwd() / "script/install_merge_gate.sh").read_text(encoding="utf-8")
         self.assertNotIn("--bootstrap-pr", installer)
         self.assertNotIn("--bootstrap", merge_gate)
-        self.assertIn("full required status context set is not installed", installer)
+        self.assertIn("verify_repository_gate_state.py", installer)
         self.assertIn("--require-ref refs/heads/main", installer)
 
     def test_hosted_evidence_is_exact_head_bound_and_forks_are_rejected(self) -> None:
         verification = (Path.cwd() / ".github/workflows/verification.yml").read_text(encoding="utf-8")
         acceptance = (Path.cwd() / ".github/workflows/acceptance-contract.yml").read_text(encoding="utf-8")
         self.assertIn("github.event.pull_request.head.sha", verification)
-        self.assertIn("HARNESS_SCRIPTS_UNDER_TEST", verification)
+        self.assertIn("run_gate_script_tests.py", verification)
+        self.assertIn("Fresh protected gate evidence verifier", verification)
+        self.assertIn("Fresh protected macOS evidence verifier", verification)
         self.assertIn("Fork pull requests are not accepted", acceptance)
 
     def test_periphery_uses_protected_configuration(self) -> None:
@@ -697,6 +928,7 @@ class ReleaseTreeTests(unittest.TestCase):
             "state": "success",
             "target_url": f"https://example/{context}",
             "creator": {"login": verify_release_tree.REQUIRED_STATUS_CONTEXTS[context]},
+            "description": "success pr:19 binding:abcdef",
         } for context in status_contexts]
         checks = {"check_runs": [
             {
@@ -734,35 +966,25 @@ class ReleaseTreeTests(unittest.TestCase):
             errors,
         )
 
-    def test_success_status_cannot_override_failed_codeql_check(self) -> None:
-        context = "CodeQL (swift)"
+    def test_unbound_local_status_is_rejected(self) -> None:
+        context = "Trusted hosted verification"
         statuses = [{
             "context": context,
             "state": "success",
             "creator": {"login": "dblaira"},
             "target_url": "https://example/status",
+            "description": "success without contract binding",
         }]
-        checks = {"check_runs": [{
-            "name": context,
-            "status": "completed",
-            "conclusion": "failure",
-            "app": {"slug": "github-actions"},
-            "html_url": "https://example/check",
-        }]}
         errors, _ = verify_release_tree.validate(
             "m" * 40,
             f"{'m' * 40} {'a' * 40} {'b' * 40}",
             "t" * 40,
             "t" * 40,
             statuses,
-            checks,
+            {"check_runs": []},
         )
         self.assertIn(
-            "required check context is duplicated by a commit status: CodeQL (swift)",
-            errors,
-        )
-        self.assertIn(
-            "verified head lacks a latest successful required check: CodeQL (swift)",
+            "required status lacks PR and contract binding: Trusted hosted verification",
             errors,
         )
 

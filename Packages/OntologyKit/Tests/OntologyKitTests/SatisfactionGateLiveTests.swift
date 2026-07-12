@@ -37,6 +37,20 @@ private func requiredLiveEvidenceErrors(
     return errors
 }
 
+private func requiredAcceptedRouteErrors(
+    health: GraphHealthReport,
+    authorityHits: [GraphAuthorityHit]
+) -> [String] {
+    var errors: [String] = []
+    if health.status != .healthy {
+        errors.append("accepted Fuseki named graph is not healthy: \(health.status.rawValue)")
+    }
+    if authorityHits.isEmpty || !authorityHits.allSatisfy({ $0.authorityLevel == .accepted }) {
+        errors.append("production accepted-only route did not return accepted authority")
+    }
+    return errors
+}
+
 private func authoritySeparationPassed(_ detail: HarnessRunDetail) -> Bool {
     detail.evalResults.contains {
         $0.checkName == "authority-memory-separated" && $0.passed
@@ -129,7 +143,7 @@ private actor RecordingGraphHealthChecker: GraphHealthChecking {
     )
     let acceptedRecordedGraphHealth = await graphHealthChecker.recordedReport()
     let acceptedGraphHealth = try #require(acceptedRecordedGraphHealth)
-    let acceptedEvidenceErrors = requiredLiveEvidenceErrors(
+    let acceptedEvidenceErrors = requiredAcceptedRouteErrors(
         health: acceptedGraphHealth,
         authorityHits: acceptedDetail.authorityHits
     )
@@ -137,6 +151,17 @@ private actor RecordingGraphHealthChecker: GraphHealthChecking {
     #expect(acceptedDetail.memoryHits.isEmpty)
     #expect(acceptedDetail.run.success)
     #expect(authoritySeparationPassed(acceptedDetail))
+
+    let directFusekiHits = try await OntologyAuthorityRetriever().retrieve(
+        prompt: prompt,
+        ontology: ontology,
+        limit: 6
+    )
+    let directFusekiErrors = requiredLiveEvidenceErrors(
+        health: acceptedGraphHealth,
+        authorityHits: directFusekiHits
+    )
+    try #require(directFusekiErrors.isEmpty, Comment(rawValue: directFusekiErrors.joined(separator: "; ")))
 
     let synthesisPrompt = "Synthesize accepted information and supporting memory about capturing value while keeping every trust layer separate."
     let started = Date()
@@ -150,7 +175,7 @@ private actor RecordingGraphHealthChecker: GraphHealthChecking {
     let elapsed = Date().timeIntervalSince(started)
     let recordedGraphHealth = await graphHealthChecker.recordedReport()
     let graphHealth = try #require(recordedGraphHealth)
-    let liveEvidenceErrors = requiredLiveEvidenceErrors(
+    let liveEvidenceErrors = requiredAcceptedRouteErrors(
         health: graphHealth,
         authorityHits: synthesisDetail.authorityHits
     )
@@ -178,6 +203,7 @@ private actor RecordingGraphHealthChecker: GraphHealthChecking {
     - Accepted-only production route: supporting memory disabled; model execution disabled
     - Accepted-only supporting memory hits: \(acceptedDetail.memoryHits.count)
     - Accepted-only authority separation: \(authoritySeparationPassed(acceptedDetail) ? "PASS" : "FAIL")
+    - Direct accepted-only Fuseki preflight hits: \(directFusekiHits.filter { $0.source == "Fuseki /accepted named graph" }.count)
     - Live synthesis prompt: \(synthesisPrompt)
     - Backend: Hermes local (Ollama), no interactive deadline
     - Authority hits from accepted graph: \(synthesisDetail.authorityHits.count)
@@ -188,7 +214,7 @@ private actor RecordingGraphHealthChecker: GraphHealthChecking {
     - Run success: \(synthesisDetail.run.success)
     - Commit: \(environment["HARNESS_SATISFACTION_COMMIT"] ?? "UNBOUND")
     - Fuseki graph health: \(graphHealth.status.rawValue)
-    - Fuseki authority hits: \(synthesisDetail.authorityHits.filter { $0.source == "Fuseki /accepted named graph" }.count)
+    - Fuseki authority hits: \(directFusekiHits.filter { $0.source == "Fuseki /accepted named graph" }.count)
 
     ## Accepted-only answer as produced
 

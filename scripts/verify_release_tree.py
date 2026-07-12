@@ -10,16 +10,11 @@ from pathlib import Path
 
 
 REQUIRED_STATUS_CONTEXTS = {
-    "Acceptance contract": "github-actions[bot]",
-    "Gate script tests": "github-actions[bot]",
-    "macOS tests, SwiftLint, Periphery": "github-actions[bot]",
+    "Trusted hosted verification": "dblaira",
     "GPT-5.6 Sol review": "dblaira",
     "Signed Mac handoff": "dblaira",
 }
-REQUIRED_CHECK_CONTEXTS = {
-    "CodeQL (swift)",
-    "CodeQL (python)",
-}
+REQUIRED_CHECK_CONTEXTS: set[str] = set()
 REQUIRED_CONTEXTS = tuple(REQUIRED_STATUS_CONTEXTS) + tuple(sorted(REQUIRED_CHECK_CONTEXTS))
 
 
@@ -34,6 +29,7 @@ def latest_statuses(payload: dict) -> dict[str, dict]:
                 "url": status.get("target_url"),
                 "source": "commit-status",
                 "creator": (status.get("creator") or {}).get("login"),
+                "description": status.get("description"),
             }
     return latest
 
@@ -79,6 +75,8 @@ def validate(
             errors.append(f"verified head lacks a latest successful required status: {context}")
         elif result.get("creator") != creator:
             errors.append(f"required status has an untrusted creator: {context}")
+        elif "pr:" not in str(result.get("description") or "") or "binding:" not in str(result.get("description") or ""):
+            errors.append(f"required status lacks PR and contract binding: {context}")
         else:
             selected[context] = result
     for context in REQUIRED_CHECK_CONTEXTS:

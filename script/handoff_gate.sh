@@ -64,6 +64,10 @@ PR_HEAD_SHA="$(printf '%s' "$PR_JSON" | jq -r .head.sha)"
   echo "The pull request head advanced beyond local HEAD; stale handoff refused." >&2
   exit 1
 }
+python3 "$CONTROL_DIR/scripts/verify_repository_gate_state.py" --repo "$REPO"
+python3 "$CONTROL_DIR/scripts/verify_control_bundle.py" \
+  --manifest "$CONTROL_DIR/control-manifest.json" \
+  --control-dir "$CONTROL_DIR" --repo-root "$ROOT_DIR" --base-sha "$BASE_SHA"
 python3 "$CONTROL_DIR/scripts/validate_acceptance_contract.py" \
   --contract-json "$CONTRACT" \
   --repo "$REPO" \
@@ -99,6 +103,11 @@ fi
   exit 1
 }
 
+"$CONTROL_DIR/script/hosted_verification_gate.sh"
+HOSTED_URL="$(gh api "repos/$REPO/commits/$SHA/status" | python3 "$CONTROL_DIR/scripts/require_latest_status.py" --context 'Trusted hosted verification' --description-contains "pr:$PR_NUMBER binding:${EVIDENCE_BINDING:0:24}")" || {
+  echo "Trusted hosted acceptance, tests, static analysis, and CodeQL evidence is unavailable." >&2
+  exit 1
+}
 SOL_URL="$(gh api "repos/$REPO/commits/$SHA/status" | python3 "$CONTROL_DIR/scripts/require_latest_status.py" --context 'GPT-5.6 Sol review' --description-contains "pr:$PR_NUMBER binding:${EVIDENCE_BINDING:0:24}")" || {
   echo "The newest GPT-5.6 Sol review for commit $SHA is not successful; no proposed code was executed." >&2
   exit 1
@@ -277,7 +286,7 @@ UI_RESULT_BUNDLE="$UI_RESULT_BUNDLE" FINAL_UI_RESULT_BUNDLE="$FINAL_UI_RESULT_BU
 FINAL_SCREENSHOT="$FINAL_SCREENSHOT" SATISFACTION_ARTIFACT="$SATISFACTION_ARTIFACT" \
 FINAL_UI_SCREENSHOT="$FINAL_UI_SCREENSHOT" RUNNING_APP_PROOF="$RUNNING_APP_PROOF" \
 MEDIA_PROOF="$MEDIA_PROOF" \
-APP_BUNDLE="$APP_BUNDLE" PID="$PID" SOL_URL="$SOL_URL" ACTUAL_UI_TEST="$UI_TEST" \
+APP_BUNDLE="$APP_BUNDLE" PID="$PID" SOL_URL="$SOL_URL" HOSTED_URL="$HOSTED_URL" ACTUAL_UI_TEST="$UI_TEST" \
 FINAL_ATTACH_TEST="$UI_TEST" FINAL_ACCESSIBILITY_IDENTIFIER="$FINAL_ACCESSIBILITY_IDENTIFIER" \
 APP_IDENTITY="$APP_IDENTITY" \
 CONTRACT_DIGEST="$CONTRACT_DIGEST" \
@@ -348,8 +357,10 @@ manifest = {
         {"name": "macos-ui-tests", "status": "PASS", "test_identifier": os.environ["ACTUAL_UI_TEST"]},
         {"name": "final-relaunch-ui-test", "status": "PASS", "test_identifier": os.environ["FINAL_ATTACH_TEST"]},
         {"name": "live-satisfaction-gate", "status": "PASS"},
+        {"name": "trusted-hosted-verification", "status": "PASS"},
     ],
     "sol_review": {"status": "PASS", "check_run_url": os.environ["SOL_URL"]},
+    "hosted_verification": {"status": "PASS", "check_run_url": os.environ["HOSTED_URL"]},
     "artifacts": artifacts,
     "artifact_sha256": {name: sha256_path(Path(path)) for name, path in artifacts.items()},
 }
@@ -368,9 +379,22 @@ CURRENT_DIGEST="$(python3 -c 'import json,sys;sys.path.insert(0,sys.argv[1]);imp
   exit 1
 }
 
+HANDOFF_COMMENT="$(jq -r '
+  "## Signed Mac handoff — PASS\n\n" +
+  "- Commit: `" + .commit + "`\n" +
+  "- Git tree: `" + .git_tree + "`\n" +
+  "- Exact UI test: `" + .acceptance_test_identifier + "`\n" +
+  "- Final Accessibility identifier: `" + .final_accessibility_identifier + "`\n" +
+  "- App team: `" + .app_team_identifier + "`\n" +
+  "- App CDHash: `" + .app_cdhash + "`\n" +
+  "- Evidence binding: `" + .evidence_binding + "`\n" +
+  "- Manifest SHA-256: `" + .artifact_sha256.media_proof + "` (decoded media proof)\n\n" +
+  "Observed visible result: " + .observed_visible_result
+' "$OUTPUT_DIR/manifest.json")"
+HANDOFF_URL="$(gh api -X POST "repos/$REPO/issues/$PR_NUMBER/comments" -f body="$HANDOFF_COMMENT" --jq .html_url)"
 gh api -X POST "repos/$REPO/statuses/$SHA" \
   -f state=success \
   -f context='Signed Mac handoff' \
   -f description="Signed handoff PASS pr:$PR_NUMBER binding:${EVIDENCE_BINDING:0:24}" \
-  -f target_url="$SOL_URL" >/dev/null
+  -f target_url="$HANDOFF_URL" >/dev/null
 echo "Published the Signed Mac handoff status for $SHA."

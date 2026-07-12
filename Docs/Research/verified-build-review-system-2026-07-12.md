@@ -38,10 +38,12 @@ Branch `codex/verified-build-gates` installs the recommended system as repositor
 - commit-keyed initial/final screenshots, video, unit/UI/final-relaunch result bundles, signature identity, hashes, and a local manifest;
 - a `Signed Mac handoff` commit status which can be required before merge;
 - immutable local Sol, handoff, and Stop controls installed from protected `main`, outside proposed branches;
+- a trusted local hosted-evidence aggregator that verifies protected workflow path, event, run, creator, exact SHA, and CodeQL job identity before Adam's local identity issues merge authority;
+- an installed `harness-merge` command as the only authorized merge path, with direct status names treated as untrusted until creator and acceptance binding are verified;
 - a global Codex `Stop` hook that fails closed for product-change exits except a literal user question or explicit `BLOCKED:` exit;
 - merge-commit-only delivery and a post-merge `Verified release tree` attestation proving the final `main` tree exactly equals the fully verified PR-head tree.
 
-Six independent local GPT-5.6 Sol reviews were used during bootstrap. The first rejected six false-proof paths; the second rejected nine further fail-open or deadlock paths; the third rejected twelve trust-boundary weaknesses; the fourth found fourteen additional blocking paths plus one conflicting rule; the fifth found six PR-binding, installer, artifact-type, static-analysis, authority-route, and Stop-hook gaps; and the sixth found mutable PR-prose authority, an implicit accessibility target, shallow media validation, and an incorrect triple-dot review diff. Actionable findings were converted into code and adversarial regressions. The sixth review also requested resistance to intentional misuse of Adam's own administrator credential; Adam resolved that separately through his explicit no-Touch-ID threat-model decision. This is the intended operating model: Sol supplies adversarial findings, the owner defines the authority boundary, and executable evidence decides whether each correction is real.
+Seven independent local GPT-5.6 Sol reviews were used during bootstrap. The first rejected six false-proof paths; the second rejected nine further fail-open or deadlock paths; the third rejected twelve trust-boundary weaknesses; the fourth found fourteen additional blocking paths plus one conflicting rule; the fifth found six PR-binding, installer, artifact-type, static-analysis, authority-route, and Stop-hook gaps; the sixth found mutable PR-prose authority, an implicit accessibility target, shallow media validation, and an incorrect triple-dot review diff; and the seventh found nine blocking paths involving status-name spoofing, shared verifier processes, stale contracts and controls, symlinked reviewer instructions, malformed Periphery output, Stop routing, and a production change hidden by the infrastructure exemption. Actionable findings were converted into code and adversarial regressions. The production chat change was removed from this infrastructure PR; Fuseki is instead proved by a separate accepted-only live preflight. The sixth review's request for resistance to intentional misuse of Adam's own administrator credential was resolved separately through Adam's explicit no-Touch-ID threat-model decision. This is the intended operating model: Sol supplies adversarial findings, the owner defines the authority boundary, and executable evidence decides whether each correction is real.
 
 Harness deliberately has no repository `OPENAI_API_KEY`. Adam uses an existing paid ChatGPT/Codex subscription and blocks API keys so agents cannot accidentally create separate usage charges. The installed Sol gate therefore runs an ephemeral, read-only local Codex process through that existing authorization, posts its structured result to the pull request, and publishes the commit status. A credential-free GitHub workflow invalidates older Sol evidence whenever the PR head changes. The committed JSON contract is the sole acceptance authority; PR prose is display copy and cannot alter a release decision. Adam's Mac is never registered as a GitHub runner.
 
@@ -115,7 +117,7 @@ Protect `main` with no bypass for ordinary agent credentials and allow GitHub me
 - Require the final head SHA to be the SHA that was reviewed and verified.
 - Require the merge commit tree to equal the verified head tree, then publish that attestation on the final `main` commit.
 
-Required checks:
+Required underlying evidence:
 
 1. `macOS tests, SwiftLint, Periphery` on a clean hosted macOS runner.
 2. `Gate script tests` for the deterministic validators.
@@ -123,6 +125,8 @@ Required checks:
 4. `GPT-5.6 Sol review` from protected-base controls in read-only mode.
 5. `Acceptance contract` from a validator on the protected base, ensuring proposed code cannot weaken its own gate.
 6. `Signed Mac handoff`, published only after the exact named UI test and local evidence certificate pass.
+
+Branch protection does not trust those hosted names directly. A proposal workflow can reuse an Actions check or status name. The installed trusted local aggregator therefore verifies the exact protected workflow path, trigger event, run identity, PR/base/head SHA, creator, and CodeQL job before publishing `Trusted hosted verification` through Adam's local identity. Protected `main` requires that aggregated authority plus `GPT-5.6 Sol review` and `Signed Mac handoff`; the installed `harness-merge` command revalidates all three creators and contract bindings immediately before merge.
 
 Do not treat a native Codex or Copilot review comment as a blocking approval by itself. GitHub documents that Copilot reviews are comments and do not count toward required approvals. OpenAI’s native GitHub review is optimized for serious P0/P1 findings. A custom `openai/codex-action@v1` job is the better enforcement surface because the prompt, model, effort, output artifact, and job exit state can be controlled.
 

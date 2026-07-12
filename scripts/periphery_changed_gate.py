@@ -17,6 +17,7 @@ def command(*args: str) -> subprocess.CompletedProcess[str]:
 
 
 HUNK_PATTERN = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+SUPPORTED_PERIPHERY_VERSION = "3.7.4"
 
 
 def scan_arguments(config: Path, output: Path) -> list[str]:
@@ -50,16 +51,32 @@ def parse_changed_lines(diff: str, root: Path) -> dict[Path, set[int]]:
     return changed
 
 
-def changed_findings(findings: list[dict], changed: dict[Path, set[int]]) -> list[dict]:
+def changed_findings(
+    findings: list[dict],
+    changed: dict[Path, set[int]],
+    root: Path,
+) -> list[dict]:
     relevant: list[dict] = []
-    for finding in findings:
-        location = str(finding.get("location") or "")
+    resolved_root = root.resolve()
+    for index, finding in enumerate(findings):
+        if not isinstance(finding, dict):
+            raise ValueError(f"Periphery finding {index} is not an object")
+        location = finding.get("location")
+        if not isinstance(location, str) or not location:
+            raise ValueError(f"Periphery finding {index} has no parseable location")
         try:
-            path_text, line_text, _ = location.rsplit(":", 2)
-            path = Path(path_text).resolve()
+            path_text, line_text, column_text = location.rsplit(":", 2)
+            raw_path = Path(path_text)
+            if not raw_path.is_absolute():
+                raise ValueError
+            path = raw_path.resolve()
             line = int(line_text)
+            column = int(column_text)
+            if line < 1 or column < 1:
+                raise ValueError
+            path.relative_to(resolved_root)
         except (TypeError, ValueError):
-            continue
+            raise ValueError(f"Periphery finding {index} has an invalid location: {location}") from None
         if line in changed.get(path, set()):
             relevant.append(finding)
     return relevant
@@ -97,6 +114,13 @@ def main() -> int:
         args.output.write_text("[]\n", encoding="utf-8")
         print("No added or changed Swift lines; Periphery has nothing to gate.")
         return 0
+    version = command("periphery", "version")
+    if version.returncode or version.stdout.strip() != SUPPORTED_PERIPHERY_VERSION:
+        print(
+            f"Periphery version must be {SUPPORTED_PERIPHERY_VERSION}; got {version.stdout.strip() or 'unavailable'}",
+            file=sys.stderr,
+        )
+        return 1
     with tempfile.TemporaryDirectory(prefix="harness-periphery-") as directory:
         raw_output = Path(directory) / "all-findings.json"
         scan = command(*scan_arguments(config, raw_output))
@@ -111,7 +135,11 @@ def main() -> int:
     if not isinstance(findings, list):
         print("Periphery evidence must be a JSON list.", file=sys.stderr)
         return 1
-    relevant = changed_findings(findings, changed)
+    try:
+        relevant = changed_findings(findings, changed, root)
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 1
     args.output.write_text(json.dumps(relevant, indent=2) + "\n", encoding="utf-8")
     if relevant:
         print(f"Periphery found {len(relevant)} issue(s) on added or changed Swift lines.", file=sys.stderr)

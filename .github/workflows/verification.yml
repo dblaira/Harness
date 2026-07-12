@@ -32,14 +32,38 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Run protected adversarial tests against proposed validators
-        working-directory: proposed
-        env:
-          HARNESS_SCRIPTS_UNDER_TEST: ${{ github.workspace }}/proposed/scripts
-        run: python3 ../trusted-base/scripts/tests/test_gates.py -v
+        run: >-
+          python3 trusted-base/scripts/run_gate_script_tests.py
+          --tests trusted-base/scripts/tests/test_gates.py
+          --proposal-scripts proposed/scripts
+          --output "$RUNNER_TEMP/gate-test-report.json"
+      - name: Upload protected test inventory
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gate-test-report-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/gate-test-report.json
+  validate-gate-script-evidence:
+    name: Fresh protected gate evidence verifier
+    if: always() && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
+    needs: gate-script-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: gate-test-report-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/gate-evidence
+      - run: >-
+          python3 scripts/validate_gate_test_report.py
+          --report "$RUNNER_TEMP/gate-evidence/gate-test-report.json"
   publish-gate-script-verdict:
     name: Publish gate-script verdict
     if: always() && github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository
-    needs: gate-script-tests
+    needs: validate-gate-script-evidence
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -49,7 +73,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          STATE: ${{ needs.gate-script-tests.result == 'success' && 'success' || 'failure' }}
+          STATE: ${{ needs.validate-gate-script-evidence.result == 'success' && 'success' || 'failure' }}
         run: >-
           gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA"
           -f state="$STATE" -f context='Gate script tests'
@@ -135,10 +159,31 @@ jobs:
           path: |
             ${{ runner.temp }}/HarnessTests.xcresult
             ${{ runner.temp }}/periphery.json
+  validate-macos-evidence:
+    name: Fresh protected macOS evidence verifier
+    if: always() && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
+    needs: macos-verification
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: macos-verification-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/macos-evidence
+      - name: Validate raw evidence with fresh protected controls
+        run: |
+          python3 scripts/validate_xcresult.py \
+            --xcresult "$RUNNER_TEMP/macos-evidence/HarnessTests.xcresult" \
+            --required-bundle HarnessTests
+          python3 scripts/validate_periphery_report.py \
+            --report "$RUNNER_TEMP/macos-evidence/periphery.json"
   publish-macos-verdict:
     name: Publish macOS verdict
     if: always() && github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository
-    needs: macos-verification
+    needs: validate-macos-evidence
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -148,7 +193,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          STATE: ${{ needs.macos-verification.result == 'success' && 'success' || 'failure' }}
+          STATE: ${{ needs.validate-macos-evidence.result == 'success' && 'success' || 'failure' }}
         run: >-
           gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA"
           -f state="$STATE" -f context='macOS tests, SwiftLint, Periphery'

@@ -36,11 +36,21 @@ jobs:
           }
           gh api "repos/$HEAD_REPO/contents/.github/acceptance-contract.json?ref=$HEAD_SHA" \
             --jq .content | tr -d '\n' | base64 --decode > "$RUNNER_TEMP/acceptance-contract.json"
-          python3 scripts/validate_acceptance_contract.py \
-            --contract-json "$RUNNER_TEMP/acceptance-contract.json" \
-            --repo "$GITHUB_REPOSITORY" \
-            --pr-number "$PR_NUMBER" \
+          gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" \
+            --jq '.[].filename' > "$RUNNER_TEMP/changed-paths.txt"
+          ARGS=(
+            --contract-json "$RUNNER_TEMP/acceptance-contract.json"
+            --changed-paths-file "$RUNNER_TEMP/changed-paths.txt"
+            --repo "$GITHUB_REPOSITORY"
+            --pr-number "$PR_NUMBER"
             --base-sha "$BASE_SHA"
+          )
+          if gh api "repos/$GITHUB_REPOSITORY/contents/.github/acceptance-contract.json?ref=$BASE_SHA" \
+            --jq .content > "$RUNNER_TEMP/base-contract.b64" 2>/dev/null; then
+            tr -d '\n' < "$RUNNER_TEMP/base-contract.b64" | base64 --decode > "$RUNNER_TEMP/base-contract.json"
+            ARGS+=(--base-contract-json "$RUNNER_TEMP/base-contract.json")
+          fi
+          python3 scripts/validate_acceptance_contract.py "${ARGS[@]}"
       - name: Publish commit-bound acceptance verdict
         if: always()
         env:

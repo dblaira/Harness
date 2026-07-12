@@ -83,6 +83,39 @@ def contract_digest(contract: dict) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
+def placeholder_present(value: str) -> bool:
+    upper = value.upper()
+    return "REPLACE_WITH_" in upper or bool(re.search(r"\b(?:TBD|TODO)\b", upper))
+
+
+def nested_strings(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [text for item in value for text in nested_strings(item)]
+    if isinstance(value, dict):
+        return [text for item in value.values() for text in nested_strings(item)]
+    return []
+
+
+def freshness_errors(
+    contract: dict,
+    base_contract: dict | None,
+    changed_paths: set[str],
+    *,
+    is_bootstrap: bool,
+) -> list[str]:
+    errors: list[str] = []
+    if base_contract is None:
+        if not is_bootstrap:
+            errors.append("protected-base acceptance contract is required for freshness validation")
+    elif contract_digest(base_contract) == contract_digest(contract):
+        errors.append("acceptance contract is stale and unchanged from the protected base")
+    if ".github/acceptance-contract.json" not in changed_paths and not is_bootstrap:
+        errors.append("every guarded pull request must commit a fresh acceptance contract")
+    return errors
+
+
 def validate_handoff_contract(
     contract: dict,
     *,
@@ -115,12 +148,18 @@ def validate_handoff_contract(
         errors.append("final_accessibility_identifier must be one literal accessibility identifier")
     for key in COMMIT_BOUND_LIST_FIELDS:
         value = contract.get(key)
-        if not isinstance(value, list) or not value or not all(isinstance(item, str) and item.strip() for item in value):
+        if not isinstance(value, list) or not value or not all(
+            isinstance(item, str) and len(item.strip()) >= 12 for item in value
+        ):
             errors.append(f"{key} must be a nonempty list of committed acceptance statements")
     for key in COMMIT_BOUND_TEXT_FIELDS:
         value = contract.get(key)
-        if not isinstance(value, str) or not value.strip():
+        if not isinstance(value, str) or len(value.strip()) < 20:
             errors.append(f"{key} must be committed in the acceptance contract")
+    for text in nested_strings(contract):
+        if placeholder_present(text):
+            errors.append("placeholder remains in committed acceptance contract")
+            break
 
     return errors
 
@@ -133,6 +172,8 @@ def main() -> int:
     parser.add_argument("--repo")
     parser.add_argument("--pr-number", type=int)
     parser.add_argument("--base-sha")
+    parser.add_argument("--base-contract-json", type=Path)
+    parser.add_argument("--changed-paths-file", type=Path)
     args = parser.parse_args()
     if args.body_file:
         errors = validate(args.body_file.read_text(encoding="utf-8"))
@@ -148,6 +189,18 @@ def main() -> int:
             pr_number=args.pr_number,
             base_sha=args.base_sha,
         )
+        is_bootstrap = bootstrap_allowed(args.repo, args.pr_number, args.base_sha)
+        base_contract = None
+        if args.base_contract_json:
+            try:
+                base_contract = json.loads(args.base_contract_json.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as error:
+                errors.append(f"base acceptance contract is invalid: {error}")
+        if args.changed_paths_file:
+            changed_paths = {
+                line.strip() for line in args.changed_paths_file.read_text(encoding="utf-8").splitlines() if line.strip()
+            }
+            errors.extend(freshness_errors(contract, base_contract, changed_paths, is_bootstrap=is_bootstrap))
     if errors:
         print("Acceptance contract failed:", file=sys.stderr)
         for error in errors:

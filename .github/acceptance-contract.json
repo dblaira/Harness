@@ -6,19 +6,20 @@
   "final_accessibility_identifier": "Delegation",
   "critical_flow": [
     "Open an agent-owned pull request whose exact commit contains Adam's literal acceptance contract.",
-    "Run hosted macOS tests, SwiftLint, changed-code Periphery, and Swift/Python CodeQL.",
+    "Run hosted macOS tests, SwiftLint, changed-line Periphery, and Swift/Python CodeQL; revalidate raw test evidence in fresh protected-base jobs.",
     "Run GPT-5.6 Sol through Adam's ChatGPT/Codex subscription against an inert read-only base/head bundle.",
-    "Build and verify the signed app, execute the exact named XCUITest while recording video, and require both accepted-only Fuseki proof and a separate live Ollama synthesis proof.",
+    "Use Adam's trusted local identity to verify exact hosted workflow paths, events, runs, creators, and CodeQL jobs before aggregating hosted evidence.",
+    "Build and verify the signed app, execute the exact named XCUITest while recording video, and require a direct accepted-only Fuseki preflight plus a separate production-route Ollama synthesis proof.",
     "Rerun the exact assertion after a normal launch, bind the exact candidate PID and window, validate decoded nonblank media, and hash all evidence into the manifest.",
-    "Require protected main to reject missing or failed checks, permit merge commits only, and attest the final tree.",
+    "Require protected main and the installed harness-merge command to reject missing, spoofed, stale, or failed evidence; permit merge commits only and attest the final tree.",
     "Require the Stop hook to reject task completion when any repository change lacks current handoff evidence."
   ],
   "required_proof": [
-    "Adversarial gate tests, deterministic Swift tests, macOS tests without skips, SwiftLint, Periphery, and CodeQL.",
+    "Adversarial gate tests with complete inventory, fresh-job macOS evidence validation, deterministic Swift tests, SwiftLint, changed-line Periphery, and CodeQL.",
     "A structured independent GPT-5.6 Sol review bound to the exact commit.",
     "Signed app identity, exact UI xcresults, initial and final screenshots, decoded nonblank video, TCC preflight, exact PID/window Accessibility proof, and live Fuseki/Ollama evidence.",
-    "Read-back of protected-main settings, merge rejection probes, exact release-tree attestation, and zero self-hosted runners."
+    "Read-back of protected-main, Actions, merge-mode, and control-bundle state; trusted-workflow identity proofs; merge rejection probes; exact release-tree attestation; and zero self-hosted runners."
   ],
-  "risk_and_authority_boundaries": "This committed JSON is the sole authoritative acceptance contract; pull-request prose is a display copy and edits cannot change release authority. The Sol reviewer is read-only and is not the release oracle. Adam blocks model API keys and uses his ChatGPT/Codex subscription. Adam's authenticated macOS session and dblaira GitHub administrator identity are trusted operator boundaries; the gates prevent accidental, careless, stale, unreviewed, and proposal-controlled handoffs but do not claim resistance to a malicious actor already controlling that identity. Signing, screen capture, app state, provider state, and accepted-graph authority remain distinct. Adam's Mac is never a self-hosted runner for this public repository.",
+  "risk_and_authority_boundaries": "This committed JSON is the sole authoritative acceptance contract; pull-request prose is a display copy and edits cannot change release authority. Status names alone are never authority: Adam's trusted local aggregator verifies protected workflow identity and exact evidence before his local identity issues merge authority, and only the installed harness-merge command may merge. The Sol reviewer is read-only and is not the release oracle. Adam blocks model API keys and uses his ChatGPT/Codex subscription. Adam's authenticated macOS session and dblaira GitHub administrator identity are trusted operator boundaries; the gates prevent accidental, careless, stale, unreviewed, and proposal-controlled handoffs but do not claim resistance to a malicious actor already controlling that identity. Signing, screen capture, app state, provider state, and accepted-graph authority remain distinct. Adam's Mac is never a self-hosted runner for this public repository.",
   "threat_model": "Adam's authenticated macOS session and dblaira GitHub administrator identity are trusted. The gates prevent accidental, careless, stale, and unreviewed handoffs; they do not claim cryptographic resistance to a malicious actor already controlling Adam's administrator credential, and they do not require Touch ID."
 }

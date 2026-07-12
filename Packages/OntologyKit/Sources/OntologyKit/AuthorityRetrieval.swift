@@ -376,58 +376,20 @@ public struct CanonicalAcceptedGraphAuthorityRetriever: AuthorityRetrieving {
         )) ?? []
         let queryTokens = OntologyAuthorityRetriever.retrievalTokens(prompt)
         let canonicalHits = localAcceptedGraphHits(queryTokens: queryTokens)
-        return Self.mergeAcceptedShelfHits(
-            baseHits: baseHits,
-            canonicalHits: canonicalHits,
-            limit: limit
-        )
-    }
-
-    static func mergeAcceptedShelfHits(
-        baseHits: [GraphAuthorityHit],
-        canonicalHits: [GraphAuthorityHit],
-        limit: Int
-    ) -> [GraphAuthorityHit] {
-        guard limit > 0 else { return [] }
         var seen: Set<String> = []
-        let sourcePreferred = (baseHits + canonicalHits)
-            .filter { $0.authorityLevel == .accepted }
+        return (canonicalHits + baseHits)
+            .filter { seen.insert("\($0.subject)|\($0.predicate)|\($0.object)").inserted }
             .sorted { lhs, rhs in
-                let lhsRank = Self.sourceRank(lhs.source)
-                let rhsRank = Self.sourceRank(rhs.source)
-                if lhsRank != rhsRank { return lhsRank < rhsRank }
                 if lhs.score == rhs.score {
+                    let lhsCanonical = lhs.source.hasPrefix("canonical local accepted graph")
+                    let rhsCanonical = rhs.source.hasPrefix("canonical local accepted graph")
+                    if lhsCanonical != rhsCanonical { return lhsCanonical }
                     return lhs.subject < rhs.subject
                 }
                 return lhs.score > rhs.score
             }
-            .filter { seen.insert("\($0.subject)|\($0.predicate)|\($0.object)").inserted }
-        let ranked = sourcePreferred.sorted { lhs, rhs in
-            if lhs.score != rhs.score { return lhs.score > rhs.score }
-            let lhsRank = Self.sourceRank(lhs.source)
-            let rhsRank = Self.sourceRank(rhs.source)
-            if lhsRank != rhsRank { return lhsRank < rhsRank }
-            return lhs.subject < rhs.subject
-        }
-        var selected = Array(ranked.prefix(limit))
-        if !selected.contains(where: Self.isLiveFusekiHit),
-           let liveHit = ranked.first(where: Self.isLiveFusekiHit) {
-            if selected.count == limit {
-                selected.removeLast()
-            }
-            selected.append(liveHit)
-        }
-        return selected
-    }
-
-    private static func sourceRank(_ source: String) -> Int {
-        if source == "Fuseki /accepted named graph" { return 0 }
-        if source.hasPrefix("canonical local accepted graph") { return 1 }
-        return 2
-    }
-
-    private static func isLiveFusekiHit(_ hit: GraphAuthorityHit) -> Bool {
-        hit.source == "Fuseki /accepted named graph"
+            .prefix(limit)
+            .map { $0 }
     }
 
     private func localAcceptedGraphHits(queryTokens: Set<String>) -> [GraphAuthorityHit] {

@@ -22,6 +22,10 @@ HEAD_SHA="$(printf '%s' "$PR_JSON" | jq -r .head.sha)"
   echo "The open pull request head does not match local HEAD." >&2
   exit 1
 }
+python3 "$CONTROL_DIR/scripts/verify_repository_gate_state.py" --repo "$REPO"
+python3 "$CONTROL_DIR/scripts/verify_control_bundle.py" \
+  --manifest "$CONTROL_DIR/control-manifest.json" \
+  --control-dir "$CONTROL_DIR" --repo-root "$ROOT_DIR" --base-sha "$BASE_SHA"
 
 OUTPUT_DIR="$ROOT_DIR/.local-artifacts/sol-review/$SHA"
 BUNDLE="$OUTPUT_DIR/review-bundle"
@@ -52,7 +56,7 @@ python3 "$CONTROL_DIR/scripts/verify_codex_auth.py" --auth-file "$AUTH_FILE" --o
 git archive "$BASE_SHA" | tar -x -C "$BUNDLE/base"
 git archive "$HEAD_SHA" | tar -x -C "$BUNDLE/head"
 git diff --binary --find-renames "$BASE_SHA" "$HEAD_SHA" > "$BUNDLE/changes.patch"
-find "$BUNDLE/base" "$BUNDLE/head" -name AGENTS.md -type f -delete
+python3 "$CONTROL_DIR/scripts/sanitize_review_bundle.py" "$BUNDLE/base" "$BUNDLE/head"
 git show "$BASE_SHA:AGENTS.md" > "$BUNDLE/AGENTS.md"
 cp "$CONTROL_DIR/.github/codex/sol-review.md" "$PROMPT"
 {

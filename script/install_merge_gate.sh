@@ -21,11 +21,7 @@ gh api -X PATCH "repos/$REPO" \
 python3 - "$OUTPUT_DIR/protection-request.json" <<'PY'
 import json, sys
 contexts = [
-    "Acceptance contract",
-    "Gate script tests",
-    "macOS tests, SwiftLint, Periphery",
-    "CodeQL (swift)",
-    "CodeQL (python)",
+    "Trusted hosted verification",
     "GPT-5.6 Sol review",
     "Signed Mac handoff",
 ]
@@ -58,11 +54,21 @@ PY
 gh api -X PUT "repos/$REPO/branches/main/protection" \
   --input "$OUTPUT_DIR/protection-request.json" > "$OUTPUT_DIR/protection.json"
 
-printf '%s\n' '{"enabled":true,"allowed_actions":"all","sha_pinning_required":true}' \
+printf '%s\n' '{"enabled":true,"allowed_actions":"selected","sha_pinning_required":true}' \
   > "$OUTPUT_DIR/actions-request.json"
 gh api -X PUT "repos/$REPO/actions/permissions" \
   --input "$OUTPUT_DIR/actions-request.json" > "$OUTPUT_DIR/actions-update.json"
+printf '%s\n' '{"github_owned_allowed":true,"verified_allowed":false,"patterns_allowed":[]}' \
+  > "$OUTPUT_DIR/selected-actions-request.json"
+gh api -X PUT "repos/$REPO/actions/permissions/selected-actions" \
+  --input "$OUTPUT_DIR/selected-actions-request.json" > "$OUTPUT_DIR/selected-actions-update.json"
+printf '%s\n' '{"default_workflow_permissions":"read","can_approve_pull_request_reviews":false}' \
+  > "$OUTPUT_DIR/workflow-permissions-request.json"
+gh api -X PUT "repos/$REPO/actions/permissions/workflow" \
+  --input "$OUTPUT_DIR/workflow-permissions-request.json" > "$OUTPUT_DIR/workflow-permissions-update.json"
 gh api "repos/$REPO/actions/permissions" > "$OUTPUT_DIR/actions.json"
+gh api "repos/$REPO/actions/permissions/selected-actions" > "$OUTPUT_DIR/selected-actions.json"
+gh api "repos/$REPO/actions/permissions/workflow" > "$OUTPUT_DIR/workflow-permissions.json"
 gh api "repos/$REPO/actions/runners" > "$OUTPUT_DIR/runners.json"
 gh api "repos/$REPO/branches/main/protection" > "$OUTPUT_DIR/protection-readback.json"
 gh api "repos/$REPO" > "$OUTPUT_DIR/repository-readback.json"
@@ -74,14 +80,16 @@ root = Path(os.environ["EVIDENCE_DIR"])
 repo = json.loads((root / "repository-readback.json").read_text())
 protection = json.loads((root / "protection-readback.json").read_text())
 actions = json.loads((root / "actions.json").read_text())
+selected_actions = json.loads((root / "selected-actions.json").read_text())
+workflow_permissions = json.loads((root / "workflow-permissions.json").read_text())
 runners = json.loads((root / "runners.json").read_text())
 contexts = set(protection["required_status_checks"]["contexts"])
 required = {
-    "Acceptance contract", "Gate script tests", "macOS tests, SwiftLint, Periphery",
-    "CodeQL (swift)", "CodeQL (python)", "GPT-5.6 Sol review", "Signed Mac handoff",
+    "Trusted hosted verification", "GPT-5.6 Sol review", "Signed Mac handoff",
 }
 errors = []
 if contexts != required: errors.append("required status contexts differ")
+if protection.get("required_status_checks", {}).get("strict") is not True: errors.append("strict status checks are disabled")
 if not protection.get("enforce_admins", {}).get("enabled"): errors.append("admins are not enforced")
 if protection.get("allow_force_pushes", {}).get("enabled"): errors.append("force pushes are allowed")
 if protection.get("allow_deletions", {}).get("enabled"): errors.append("branch deletion is allowed")
@@ -90,6 +98,11 @@ if not protection.get("required_conversation_resolution", {}).get("enabled"): er
 if not repo.get("allow_merge_commit") or repo.get("allow_squash_merge") or repo.get("allow_rebase_merge"):
     errors.append("repository does not enforce merge-commit-only delivery")
 if actions.get("sha_pinning_required") is not True: errors.append("Actions SHA pinning is not required")
+if actions.get("allowed_actions") != "selected": errors.append("Actions are not restricted")
+if workflow_permissions.get("default_workflow_permissions") != "read": errors.append("workflow tokens are not read-only by default")
+if workflow_permissions.get("can_approve_pull_request_reviews") is not False: errors.append("workflows can approve pull requests")
+if selected_actions.get("github_owned_allowed") is not True or selected_actions.get("verified_allowed") is not False:
+    errors.append("selected Actions policy differs")
 if runners.get("total_count") != 0: errors.append("public repository has a self-hosted runner")
 attestation = {
     "status": "PASS" if not errors else "FAIL",

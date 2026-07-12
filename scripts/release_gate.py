@@ -309,6 +309,7 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
         "macos-ui-tests",
         "final-relaunch-ui-test",
         "live-satisfaction-gate",
+        "trusted-hosted-verification",
     }
     passed_tests = {
         test.get("name")
@@ -428,13 +429,14 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
             "- Fuseki graph health: healthy",
             "- Accepted-only supporting memory hits: 0",
             "- Accepted-only authority separation: PASS",
+            "- Direct accepted-only Fuseki preflight hits:",
             "- Synthesis authority separation: PASS",
             "## Accepted-only answer as produced",
             "## Answer as produced",
         )
         if satisfaction.stat().st_size < 500 or any(marker not in text for marker in required_markers):
             errors.append("live satisfaction artifact is missing commit-bound healthy Fuseki proof and answer")
-        match = re.search(r"- Fuseki authority hits: (\d+)", text)
+        match = re.search(r"- Direct accepted-only Fuseki preflight hits: (\d+)", text)
         if not match or int(match.group(1)) < 1:
             errors.append("live satisfaction artifact has no Fuseki-sourced authority hit")
     if app_bundle and app_bundle.is_dir():
