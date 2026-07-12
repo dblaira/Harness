@@ -36,6 +36,7 @@ public enum SuiteCaptureAnalysisOutcome: Sendable, Equatable {
 /// that proposal. A model response never enters accepted truth directly.
 public struct SuiteCaptureAnalyzer: Sendable {
     public static let analyzerVersion = "suite-capture-consolidation-v2"
+    public static let responseContract: HarnessResponseContract = .structuredOutput
     public static let decisionTool = ToolSpec(
         name: "submit_capture_decision",
         description: "Required final response for Harness capture consolidation. Call exactly once. This records only Harness's candidate-or-not analysis; it never accepts memory or changes the graph.",
@@ -58,11 +59,17 @@ public struct SuiteCaptureAnalyzer: Sendable {
         ]
     )
 
-    private let runPrompt: @Sendable (String) async throws -> HarnessRunDetail
+    private let runPrompt: @Sendable (
+        String,
+        HarnessResponseContract
+    ) async throws -> HarnessRunDetail
     private let candidateStager: any MemoryCandidateStaging
 
     public init(
-        runPrompt: @escaping @Sendable (String) async throws -> HarnessRunDetail,
+        runPrompt: @escaping @Sendable (
+            String,
+            HarnessResponseContract
+        ) async throws -> HarnessRunDetail,
         candidateStager: any MemoryCandidateStaging = CoordinatedReviewQueueMemoryStager()
     ) {
         self.runPrompt = runPrompt
@@ -102,10 +109,13 @@ public struct SuiteCaptureAnalyzer: Sendable {
             return lhsSize < rhsSize
         } ?? receipt
         let duplicateReceipts = receipts.filter { $0.id != representative.id }
-        let detail = try await runPrompt(Self.prompt(
-            for: representative,
-            relatedReceipts: duplicateReceipts
-        ))
+        let detail = try await runPrompt(
+            Self.prompt(
+                for: representative,
+                relatedReceipts: duplicateReceipts
+            ),
+            Self.responseContract
+        )
         guard detail.run.success else {
             throw SuiteCaptureAnalysisError.backendFailed(detail.run.finalAnswer)
         }

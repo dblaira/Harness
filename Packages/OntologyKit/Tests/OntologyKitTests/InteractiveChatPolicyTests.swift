@@ -273,6 +273,7 @@ private func routePlan(
     #expect(fallback.components(separatedBy: "Shared fact").count == 2)
     #expect(fallback.components(separatedBy: "Accepted fact").count == 2)
     #expect(!fallback.contains("Accepted beyond display cap"))
+    #expect(InteractiveChatPolicy.followsArticulateLeadershipFormat(fallback))
 }
 
 @Test func deadlineFallbackNamesEmptyTrustLayersWithoutInventingEvidence() {
@@ -283,12 +284,89 @@ private func routePlan(
         toolEvidence: []
     )
 
-    #expect(
-        fallback.hasPrefix(
-            "Harness stopped waiting for The selected backend after 12 seconds to protect the 15-second visible response ceiling."
-        )
-    )
+    #expect(fallback.hasPrefix("# ☀️ Harness stopped waiting for The selected backend"))
+    #expect(InteractiveChatPolicy.followsArticulateLeadershipFormat(fallback))
     #expect(
         fallback.components(separatedBy: "- None retrieved before the ceiling.").count == 4
     )
+}
+
+@Test func acceptedAuthorityAnswerAlwaysUsesTheFourChapters() {
+    let answer = InteractiveChatPolicy.acceptedAuthorityAnswer(
+        acceptedEvidence: [
+            "Leverage, then Automation, then Lift decides what Adam builds next — accepted-graph.ttl",
+            "Everything Adam does works in the same direction — accepted-graph.ttl",
+        ]
+    )
+
+    #expect(InteractiveChatPolicy.followsArticulateLeadershipFormat(answer))
+    #expect(answer.contains("(Executive Conclusion)"))
+    #expect(answer.contains("(Consequence)"))
+    #expect(answer.contains("(Recommendation)"))
+    #expect(answer.contains("(Supporting Evidence on Request)"))
+    #expect(answer.contains("Only accepted graph authority shaped this answer."))
+}
+
+@Test func responseFormatGatePreservesCompliantAnswersAndWrapsRawProviderText() {
+    let compliant = try! #require(
+        InteractiveChatPolicy.productHelpAnswer(for: "How do I add a new belief?")
+    )
+    #expect(InteractiveChatPolicy.enforceArticulateLeadershipFormat(compliant) == compliant)
+
+    let raw = "The strongest next move is leverage.\n- Start with the highest-value repeated task."
+    let formatted = InteractiveChatPolicy.enforceArticulateLeadershipFormat(raw)
+    #expect(InteractiveChatPolicy.followsArticulateLeadershipFormat(formatted))
+    #expect(formatted.contains(raw))
+}
+
+@Test func articulateLeadershipValidatorRejectsMalformedChapterSequences() {
+    let executive = "# ☀️ Answer first 💥 (Executive Conclusion)"
+    let consequence = "# What this changes (Consequence)"
+    let recommendation = "# What to do next (Recommendation)"
+    let evidence = "# The full record (Supporting Evidence on Request)"
+
+    #expect(!InteractiveChatPolicy.followsArticulateLeadershipFormat(
+        [executive, recommendation, consequence, evidence].joined(separator: "\n\n")
+    ))
+    #expect(!InteractiveChatPolicy.followsArticulateLeadershipFormat(
+        [executive, consequence, evidence].joined(separator: "\n\n")
+    ))
+    #expect(!InteractiveChatPolicy.followsArticulateLeadershipFormat(
+        [executive, consequence, recommendation, recommendation, evidence].joined(separator: "\n\n")
+    ))
+    #expect(!InteractiveChatPolicy.followsArticulateLeadershipFormat(
+        "Executive Conclusion\nConsequence\nRecommendation\nSupporting Evidence on Request"
+    ))
+}
+
+@Test func responseFormatGateDemotesProviderHeadingsThatCouldBecomeExtraChapters() {
+    let raw = """
+    # A partial provider answer (Executive Conclusion)
+
+    Provider detail stays intact.
+
+    # A misplaced provider section (Recommendation)
+
+    Final evidence sentinel.
+    """
+
+    let formatted = InteractiveChatPolicy.enforceArticulateLeadershipFormat(raw)
+
+    #expect(InteractiveChatPolicy.followsArticulateLeadershipFormat(formatted))
+    #expect(formatted.contains("## A partial provider answer (Executive Conclusion)"))
+    #expect(formatted.contains("## A misplaced provider section (Recommendation)"))
+    #expect(formatted.contains("Final evidence sentinel."))
+}
+
+@Test func terminalFailureAndCancellationUseTheFourChapters() {
+    let failure = InteractiveChatPolicy.enforceArticulateLeadershipFormat(
+        "Backend failed: Grok authorization expired."
+    )
+    let cancellation = InteractiveChatPolicy.cancelledAnswer()
+
+    #expect(InteractiveChatPolicy.followsArticulateLeadershipFormat(failure))
+    #expect(failure.contains("Harness status: backend failure"))
+    #expect(failure.contains("Grok authorization expired."))
+    #expect(InteractiveChatPolicy.followsArticulateLeadershipFormat(cancellation))
+    #expect(cancellation.contains("Cancelled in Harness before completion."))
 }

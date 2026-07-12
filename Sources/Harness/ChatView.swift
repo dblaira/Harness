@@ -147,7 +147,12 @@ struct ChatView: View {
                         hasConfiguredAPIKey = false
                         apiKey = ""
                     }
-                    messages.append(ChatMessage(text: "Error: \(error.localizedDescription)", fromMe: false))
+                    messages.append(ChatMessage(
+                        text: InteractiveChatPolicy.failureAnswer(
+                            "Harness could not complete this request: \(error.localizedDescription)"
+                        ),
+                        fromMe: false
+                    ))
                     ledgerStatus = error.localizedDescription
                     thinking = false
                 }

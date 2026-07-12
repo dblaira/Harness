@@ -45,6 +45,9 @@ struct MacChatView: View {
                 inspector
             }
         }
+        .disabled(model.isAnswerWindowPresented)
+        .allowsHitTesting(!model.isAnswerWindowPresented)
+        .accessibilityHidden(model.isAnswerWindowPresented)
         .frame(minWidth: CGFloat(currentLayout.minimumWindowWidth), minHeight: 680)
         .background(Theme.macBg.ignoresSafeArea())
         .onAppear {
@@ -83,6 +86,31 @@ struct MacChatView: View {
             selectedOpportunityIDs.formIntersection(Set(ids))
             refreshUpNextLock()
         }
+        .overlay {
+            if model.isAnswerWindowPresented {
+                ZStack {
+                    Color.black.opacity(0.48)
+                        .ignoresSafeArea()
+
+                    GeometryReader { geometry in
+                        let size = HarnessAnswerWindowLayout.fittedSize(in: geometry.size)
+
+                        MacAnswerWindowView(model: model)
+                            .frame(width: size.width, height: size.height)
+                            .clipShape(RoundedRectangle(cornerRadius: 18))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 18)
+                                    .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                            )
+                            .shadow(color: .black.opacity(0.42), radius: 30, y: 16)
+                            .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
+                    }
+                }
+                .transition(.opacity.combined(with: .scale(scale: 0.985)))
+                .zIndex(100)
+            }
+        }
+        .animation(.easeOut(duration: 0.16), value: model.isAnswerWindowPresented)
     }
 
     private func refreshUpNextLock() {

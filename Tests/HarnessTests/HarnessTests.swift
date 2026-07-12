@@ -459,6 +459,57 @@ import OntologyKit
     #expect(fascinations.hasPrefix(root))
 }
 
+@Test func answerWindowMakesTheAnswerAPrimaryReadingSurface() {
+    #expect(HarnessAnswerWindowLayout.minimumWidth >= 900)
+    #expect(HarnessAnswerWindowLayout.minimumHeight >= 650)
+    #expect(HarnessAnswerWindowLayout.minimumReadingFraction >= 0.60)
+    #expect(HarnessAnswerWindowLayout.answerBodyPointSize >= 17)
+
+    let compactWindow = CGSize(width: 560, height: 680)
+    let fitted = HarnessAnswerWindowLayout.fittedSize(in: compactWindow)
+    #expect(fitted.width <= compactWindow.width)
+    #expect(fitted.height <= compactWindow.height)
+    #expect(fitted == CGSize(width: 520, height: 640))
+}
+
+@Test @MainActor func chatSendPresentsTheAnswerWindowBeforeBackendWorkCompletes() {
+    let model = MacWorkbenchModel()
+    model.chatThread = []
+    model.draft = "How do I add a new belief?"
+
+    model.send()
+
+    #expect(model.isAnswerWindowPresented)
+    #expect(model.answerWindowPrompt == "How do I add a new belief?")
+    #expect(model.answerWindowStartTurnIndex == 0)
+    #expect(model.isRunning)
+    #expect(model.activeToolLoop == nil)
+
+    model.cancelRun()
+    #expect(model.answerWindowAnswer == InteractiveChatPolicy.cancelledAnswer())
+    #expect(!model.isRunning)
+    model.isAnswerWindowPresented = false
+}
+
+@Test @MainActor func delegationSendPresentsTheAnswerWindowBeforeReceiptWorkBegins() {
+    let model = MacWorkbenchModel()
+    model.chatThread = []
+    model.draft = "Turn this intent into a completed delegation."
+    model.preferredApproach = "Keep the work visible while it runs."
+    model.doneCondition = "A readable answer appears in Harness."
+
+    model.sendDelegation()
+
+    #expect(model.isAnswerWindowPresented)
+    #expect(model.answerWindowPrompt.contains("Turn this intent into a completed delegation."))
+    #expect(model.isRunning)
+    #expect(model.activeToolLoop == nil)
+
+    model.cancelRun()
+    #expect(model.answerWindowAnswer == InteractiveChatPolicy.cancelledAnswer())
+    model.isAnswerWindowPresented = false
+}
+
 private func opportunityBoardRow(id: String, resource: String) -> OpportunityBoardRow {
     let envelope = OpportunityCardEnvelope(
         source: "\(id).md",

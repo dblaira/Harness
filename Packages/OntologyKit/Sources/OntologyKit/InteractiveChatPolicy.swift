@@ -152,9 +152,23 @@ public enum InteractiveChatPolicy {
             : normalizedEvidence(backendName)
 
         return """
-        Harness stopped waiting for \(displayBackend) after \(Int(watchdogBudgetSeconds)) seconds to protect the \(Int(visibleResponseCeilingSeconds))-second visible response ceiling.
+        # ☀️ Harness stopped waiting for \(displayBackend) and kept the evidence visible 💥 (Executive Conclusion)
 
-        A final synthesis was not visible yet. This is the evidence Harness had already retrieved, kept in its original trust layers.
+        - The provider did not finish inside the \(Int(visibleResponseCeilingSeconds))-second visible response ceiling.
+        - Harness preserved the evidence already selected for the visible response instead of leaving the answer area empty.
+
+        # The app stayed responsive without collapsing the trust boundary (Consequence)
+
+        - Accepted graph authority remains separate from supporting memory.
+        - Tool evidence remains explicitly unreviewed.
+
+        # Use the retrieved evidence now while Harness records the provider failure (Recommendation)
+
+        Treat accepted graph authority as confirmed. Use supporting memory and tool evidence only as leads until Adam reviews them.
+
+        # The retrieved evidence remains in its original trust layers (Supporting Evidence on Request)
+
+        Harness stopped waiting for \(displayBackend) after \(Int(watchdogBudgetSeconds)) seconds to protect the \(Int(visibleResponseCeilingSeconds))-second visible response ceiling.
 
         Accepted graph authority:
         \(bullets(accepted))
@@ -164,6 +178,9 @@ public enum InteractiveChatPolicy {
 
         Tool evidence (unreviewed):
         \(bullets(tools))
+
+        Rule: none
+        Adam Pattern Step: 1
         """
     }
 
@@ -175,19 +192,180 @@ public enum InteractiveChatPolicy {
         let accepted = distinctEvidence(acceptedEvidence, seen: &seen, limit: 5)
         guard !accepted.isEmpty else {
             return """
-            Harness did not find accepted graph authority matching this question.
+            # ☀️ Harness found no accepted authority matching this question 💥 (Executive Conclusion)
+
+            - The reviewed graph did not contain a direct match.
+            - Harness did not substitute lower-trust material for an accepted answer.
+
+            # The question remains open instead of being answered with unreviewed material (Consequence)
+
+            - Supporting memory, candidates, and tool evidence were excluded.
+
+            # Refine the question or review a candidate before treating anything new as true (Recommendation)
+
+            Ask the question with a narrower subject, or add the missing belief through candidate review.
+
+            # The authority boundary was preserved (Supporting Evidence on Request)
 
             No supporting memory, candidates, or tool evidence were used.
+
+            Rule: none
+            Adam Pattern Step: 1
             """
         }
 
+        let takeaways = accepted.prefix(2).map(evidenceTakeaway)
+
         return """
-        Here is the accepted graph authority Harness found:
+        # ☀️ Your accepted graph already gives you a direction 💥 (Executive Conclusion)
+
+        \(bullets(Array(takeaways)))
+
+        # You can decide from reviewed beliefs without mixing in lower-trust material (Consequence)
+
+        - Only accepted graph authority shaped this answer.
+        - Supporting memory, candidates, and tool evidence were excluded.
+
+        # Use the strongest matching belief as the next decision filter (Recommendation)
+
+        Start with the first accepted belief below, then use the remaining accepted beliefs to test whether the choice stays aligned.
+
+        # The accepted graph evidence is preserved here (Supporting Evidence on Request)
 
         \(bullets(accepted))
 
         No supporting memory, candidates, or tool evidence were used.
+
+        Rule: none
+        Adam Pattern Step: 1
         """
+    }
+
+    /// The prompt contains Adam's skill verbatim, but a provider can still
+    /// ignore it. This is the runtime gate: compliant answers pass through
+    /// byte-for-byte; noncompliant answers are placed into the required four
+    /// chapters without discarding any of the provider's original content.
+    public static func enforceArticulateLeadershipFormat(_ response: String) -> String {
+        let trimmed = response.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return """
+            # ☀️ Harness did not receive a usable answer 💥 (Executive Conclusion)
+
+            - No substantive response text was returned.
+
+            # There is nothing reliable to act on yet (Consequence)
+
+            - Harness will not present an empty provider response as success.
+
+            # Run the request again after checking provider authorization (Recommendation)
+
+            Keep the original request intact and retry only after the backend is ready.
+
+            # No provider content was available (Supporting Evidence on Request)
+
+            Rule: none
+            Adam Pattern Step: 1
+            """
+        }
+        guard !followsArticulateLeadershipFormat(trimmed) else { return trimmed }
+        if trimmed.hasPrefix("Backend failed:") || trimmed.hasPrefix("Harness could not complete this request:") {
+            return failureAnswer(trimmed)
+        }
+
+        let supportingEvidence = demotingTopLevelHeadings(in: trimmed)
+        return """
+        # ☀️ Harness returned an answer and preserved its complete wording 💥 (Executive Conclusion)
+
+        - The provider returned substantive text.
+        - The original answer is preserved in Supporting Evidence without being promoted into accepted authority.
+
+        # The response is readable without changing its trust level (Consequence)
+
+        - Harness did not invent a conclusion from unreviewed provider wording.
+        - The complete original response remains available below.
+
+        # Read the original response before acting on it (Recommendation)
+
+        Use the provider's full wording below as the answer. Treat any supporting memory or tool output according to the trust labels it carries.
+
+        # The complete original answer is preserved below (Supporting Evidence on Request)
+
+        \(supportingEvidence)
+        """
+    }
+
+    public static func failureAnswer(_ detail: String) -> String {
+        let trimmedDetail = detail.trimmingCharacters(in: .whitespacesAndNewlines)
+        let visibleDetail = demotingTopLevelHeadings(in: trimmedDetail)
+        return """
+        # ☀️ Harness could not complete this response 💥 (Executive Conclusion)
+
+        - The request ended without a usable provider answer.
+        - The exact failure is visible below instead of disappearing.
+
+        # The failure is explicit and the request remains recoverable (Consequence)
+
+        - Harness did not present an empty area as success.
+        - Authorization failures remain identifiable by the answer interface.
+
+        # Fix the named provider problem, then send the same request again (Recommendation)
+
+        Use the exact failure below to repair authorization or availability; keep the original request unchanged when retrying.
+
+        # The exact terminal failure is preserved here (Supporting Evidence on Request)
+
+        \(visibleDetail.isEmpty ? "No failure detail was returned." : visibleDetail)
+
+        Harness status: backend failure
+        """
+    }
+
+    public static func cancelledAnswer() -> String {
+        """
+        # ☀️ The request was cancelled and Harness stopped working on it 💥 (Executive Conclusion)
+
+        - Cancellation completed.
+        - Harness will not keep showing a fake working state.
+
+        # No answer was produced from the cancelled run (Consequence)
+
+        - Pending provider and tool work was stopped.
+
+        # Close this window or send the request again when you want it resumed (Recommendation)
+
+        The original request remains visible above so it can be reused without reconstructing it.
+
+        # Cancellation is the complete terminal record for this run (Supporting Evidence on Request)
+
+        Cancelled in Harness before completion.
+        """
+    }
+
+    public static func followsArticulateLeadershipFormat(_ response: String) -> Bool {
+        let chapterLabels = [
+            "(Executive Conclusion)",
+            "(Consequence)",
+            "(Recommendation)",
+            "(Supporting Evidence on Request)",
+        ]
+        let renderedChapterOrder: [String] = response.components(separatedBy: .newlines).compactMap { line in
+            let heading = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard heading.hasPrefix("# ") else { return nil }
+            return chapterLabels.first { heading.contains($0) }
+        }
+        return renderedChapterOrder == chapterLabels
+    }
+
+    /// Provider text can contain its own level-one headings. Once that text is
+    /// nested inside Supporting Evidence, demote those headings so they cannot
+    /// masquerade as additional response chapters.
+    private static func demotingTopLevelHeadings(in response: String) -> String {
+        response.components(separatedBy: .newlines).map { line in
+            let indentation = line.prefix { $0 == " " || $0 == "\t" }
+            let content = line.dropFirst(indentation.count)
+            guard content.hasPrefix("# ") else { return line }
+            return "\(indentation)## \(content.dropFirst(2))"
+        }.joined(separator: "\n")
     }
 
     private static func words(in prompt: String) -> Set<String> {
@@ -350,6 +528,12 @@ public enum InteractiveChatPolicy {
             .split(whereSeparator: \Character.isWhitespace)
             .joined(separator: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func evidenceTakeaway(_ evidence: String) -> String {
+        let normalized = normalizedEvidence(evidence)
+        let withoutSource = normalized.components(separatedBy: " — ").first ?? normalized
+        return bounded(withoutSource, maxCharacters: 170)
     }
 
     private static func bounded(_ value: String, maxCharacters: Int = 280) -> String {

@@ -112,7 +112,8 @@ private struct CooperativeStalledBackend: ModelBackendAdapter {
     )
 
     #expect(detail.run.success)
-    #expect(detail.run.finalAnswer == "Single-shot answer")
+    #expect(detail.run.finalAnswer.contains("Single-shot answer"))
+    #expect(InteractiveChatPolicy.followsArticulateLeadershipFormat(detail.run.finalAnswer))
     let counts = await backend.counts()
     #expect(counts.direct == 1)
     #expect(counts.tool == 0)

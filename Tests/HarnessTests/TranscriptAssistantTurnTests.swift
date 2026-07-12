@@ -1,4 +1,5 @@
 import Testing
+import OntologyKit
 @testable import Harness
 
 @Test func transcriptAssistantTurnParsesBackendFailureWithoutRuleFooter() {
@@ -26,4 +27,17 @@ import Testing
     #expect(TranscriptAssistantTurn.suggestsReauthorization("Backend failed: Codex session HTTP 400."))
     #expect(TranscriptAssistantTurn.suggestsReauthorization("Grok authorization expired."))
     #expect(!TranscriptAssistantTurn.suggestsReauthorization("Backend failed: network timeout."))
+}
+
+@Test func transcriptAssistantTurnPreservesFormattedBackendFailureState() {
+    let formatted = InteractiveChatPolicy.failureAnswer(
+        "Backend failed: Grok authorization failed. Re-authorize Grok, then send again."
+    )
+
+    let parsed = TranscriptAssistantTurn.parse(formatted)
+
+    #expect(parsed.isBackendFailure)
+    #expect(parsed.displayBody.contains("(Executive Conclusion)"))
+    #expect(parsed.displayBody.contains("Grok authorization failed"))
+    #expect(TranscriptAssistantTurn.suggestsReauthorization(parsed.displayBody))
 }

@@ -47,6 +47,15 @@ final class MacWorkbenchModel: ObservableObject {
     @Published var firecrawlAPIKey = ""
     @Published var hasFirecrawlAPIKey = false
     @Published var isRunning = false
+    /// Captured synchronously at the Send boundary so the large answer window
+    /// is already visible before routing, retrieval, or provider work begins.
+    @Published private(set) var answerWindowPrompt = ""
+    @Published private(set) var answerWindowStartTurnIndex = 0
+    /// Frozen to the Send that opened the answer window. The popup never
+    /// re-queries a mutable session and accidentally displays another chat's
+    /// answer after a session switch.
+    @Published private(set) var answerWindowAnswer: String?
+    @Published var isAnswerWindowPresented = false
     /// WO-Q: a separate flag from isRunning -- a build-and-screenshot
     /// run is not a chat send, and "one builder, no parallelism" only
     /// needs to block a second build, not the whole app.
@@ -117,6 +126,8 @@ final class MacWorkbenchModel: ObservableObject {
     private let suiteCaptureReceiptStore: SuiteCaptureReceiptStore
     private let delegationReceiptStore: DelegationReceiptStore
     private var runTask: Task<Void, Never>?
+    private var sendStartupTask: Task<Void, Never>?
+    private var pendingSendID: UUID?
     private var responseDeadlineTask: Task<Void, Never>?
     private weak var responseDeadlinePresentedMonitor: ToolLoopMonitor?
     private var approvalToastTask: Task<Void, Never>?
@@ -636,12 +647,13 @@ final class MacWorkbenchModel: ObservableObject {
                                 apiKey: key
                             )
                             let analyzer = SuiteCaptureAnalyzer(
-                                runPrompt: { prompt in
+                                runPrompt: { prompt, responseContract in
                                     let detail = try await analysisService.createRun(
                                         prompt: prompt,
                                         ontology: ontologySnapshot,
                                         backend: adapter,
                                         soul: SoulLoader.load(),
+                                        responseContract: responseContract,
                                         tools: [],
                                         sessionId: "suite-capture-consolidation"
                                     )
@@ -2069,6 +2081,9 @@ final class MacWorkbenchModel: ObservableObject {
     /// restore the UI. A stale later approval can never execute cancelled work.
     func cancelRun() {
         guard isRunning else { return }
+        sendStartupTask?.cancel()
+        sendStartupTask = nil
+        pendingSendID = nil
         responseDeadlineTask?.cancel()
         responseDeadlineTask = nil
         responseDeadlinePresentedMonitor = nil
@@ -2081,11 +2096,13 @@ final class MacWorkbenchModel: ObservableObject {
         runTask = nil
         isRunning = false
         status = "Cancelled"
+        let cancellationAnswer = InteractiveChatPolicy.cancelledAnswer()
+        answerWindowAnswer = cancellationAnswer
         if let receiptID = activeDelegationReceiptID {
             finishDelegationReceipt(
                 id: receiptID,
                 state: .cancelled,
-                result: "Cancelled in Harness before completion."
+                result: cancellationAnswer
             )
             activeDelegationReceiptID = nil
         }
@@ -2502,37 +2519,98 @@ final class MacWorkbenchModel: ObservableObject {
         let attachmentsSnapshot = composerAttachments
         guard ComposerAttachment.canSend(userText: draft, attachments: attachmentsSnapshot), !isRunning else { return }
 
+        let prompt = composedDraftPrompt
         let receipt = DelegationReceipt(
             intent: draft,
             preferredApproach: preferredApproach,
             doneCondition: doneCondition,
             state: .submitted
         )
-        do {
-            try delegationReceiptStore.save(receipt)
-            delegationReceipts.removeAll { $0.id == receipt.id }
-            delegationReceipts.insert(receipt, at: 0)
-            delegationSubmissionError = nil
-            activeDelegationReceiptID = receipt.id
-            status = "Saved · Working"
-            send(persistedDelegationReceiptID: receipt.id)
-        } catch {
-            // The draft remains untouched. A failed persistence attempt may
-            // never look like a successful send.
-            let message = "Delegation was not saved: \(error.localizedDescription)"
-            delegationSubmissionError = message
-            status = message
+        let sendID = presentAnswerWindow(prompt: prompt, status: "Saving delegation")
+
+        // Give SwiftUI a render turn before any receipt or scheduler disk I/O.
+        // The durable receipt still completes before the composer is cleared.
+        sendStartupTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(16))
+            guard let self,
+                  !Task.isCancelled,
+                  self.isRunning,
+                  self.pendingSendID == sendID
+            else { return }
+            do {
+                try self.delegationReceiptStore.save(receipt)
+                self.delegationReceipts.removeAll { $0.id == receipt.id }
+                self.delegationReceipts.insert(receipt, at: 0)
+                self.delegationSubmissionError = nil
+                self.activeDelegationReceiptID = receipt.id
+                self.status = "Saved · Working"
+                self.startSend(
+                    id: sendID,
+                    prompt: prompt,
+                    attachmentsSnapshot: attachmentsSnapshot,
+                    persistedDelegationReceiptID: receipt.id
+                )
+            } catch {
+                // The draft remains untouched. A failed persistence attempt
+                // may never look like a successful send.
+                let message = "Delegation was not saved: \(error.localizedDescription)"
+                self.pendingSendID = nil
+                self.sendStartupTask = nil
+                self.delegationSubmissionError = message
+                self.status = message
+                self.isRunning = false
+                self.answerWindowAnswer = InteractiveChatPolicy.failureAnswer(message)
+            }
         }
     }
 
     func send() {
-        send(persistedDelegationReceiptID: nil)
-    }
-
-    private func send(persistedDelegationReceiptID: String?) {
         let prompt = composedDraftPrompt
         let attachmentsSnapshot = composerAttachments
         guard ComposerAttachment.canSend(userText: draft, attachments: attachmentsSnapshot), !isRunning else { return }
+        let sendID = presentAnswerWindow(prompt: prompt, status: "Request received. Starting now.")
+
+        // A render turn is a functional requirement: visible feedback must be
+        // on screen before route registration, Keychain, retrieval, or model
+        // setup can do synchronous work on the main actor.
+        sendStartupTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(16))
+            guard let self,
+                  !Task.isCancelled,
+                  self.isRunning,
+                  self.pendingSendID == sendID
+            else { return }
+            self.startSend(
+                id: sendID,
+                prompt: prompt,
+                attachmentsSnapshot: attachmentsSnapshot,
+                persistedDelegationReceiptID: nil
+            )
+        }
+    }
+
+    @discardableResult
+    private func presentAnswerWindow(prompt: String, status: String) -> UUID {
+        let sendID = UUID()
+        answerWindowPrompt = prompt
+        answerWindowStartTurnIndex = chatThread.count
+        answerWindowAnswer = nil
+        isAnswerWindowPresented = true
+        isRunning = true
+        self.status = status
+        pendingSendID = sendID
+        return sendID
+    }
+
+    private func startSend(
+        id sendID: UUID,
+        prompt: String,
+        attachmentsSnapshot: [ComposerAttachment],
+        persistedDelegationReceiptID: String?
+    ) {
+        guard isRunning, pendingSendID == sendID else { return }
+        pendingSendID = nil
+        sendStartupTask = nil
         // Send-time hook: a Due date or Nudge time also registers a oneshot
         // routine with the scheduler, and the returned copy has the schedule
         // signals consumed so a re-send cannot double-register.
@@ -2544,7 +2622,6 @@ final class MacWorkbenchModel: ObservableObject {
         doneCondition = ""
         composerAttachments = []
         routePlan = plannedRoute
-        isRunning = true
         status = plannedRoute.requiresApproval ? "Route planned; approval-gated steps detected" : "Checking graph authority"
         let selectedBackend = backend
         let trimmedKey = Self.usesAPIKey(selectedBackend) ? apiKey.trimmingCharacters(in: .whitespacesAndNewlines) : ""
@@ -2628,16 +2705,19 @@ final class MacWorkbenchModel: ObservableObject {
             else { return }
 
             let progress = monitor.progressSnapshot()
-            let visibleAnswer = progress.completedAnswer ?? InteractiveChatPolicy.deadlineFallback(
+            let rawVisibleAnswer = progress.completedAnswer ?? InteractiveChatPolicy.deadlineFallback(
                 backendName: selectedBackend.rawValue,
                 acceptedEvidence: progress.acceptedEvidence,
                 supportingEvidence: progress.supportingEvidence,
                 toolEvidence: progress.toolEvidence
             )
+            let visibleAnswer = InteractiveChatPolicy
+                .enforceArticulateLeadershipFormat(rawVisibleAnswer)
 
             // Publish first, then tear down the losing provider/tool work. The
             // visible response contract never awaits a cancellation-ignoring
             // child task.
+            self.answerWindowAnswer = visibleAnswer
             self.chatThread.append(ConversationTurn(role: .assistant, text: visibleAnswer))
             if let receiptID = persistedDelegationReceiptID {
                 self.finishDelegationReceipt(id: receiptID, state: .failed, result: visibleAnswer)
@@ -2701,7 +2781,9 @@ final class MacWorkbenchModel: ObservableObject {
                     interactiveDeadline: chatTools.isEmpty ? interactiveDeadline : nil,
                     sessionId: sessionId
                 )
-                let answer = detail.messages.last(where: { $0.role == .assistant })?.text ?? detail.run.finalAnswer
+                let rawAnswer = detail.messages.last(where: { $0.role == .assistant })?.text ?? detail.run.finalAnswer
+                let answer = InteractiveChatPolicy
+                    .enforceArticulateLeadershipFormat(rawAnswer)
                 await MainActor.run {
                     // Only the still-active run may commit UI state. If this run
                     // was cancelled or superseded by a newer send, activeToolLoop
@@ -2715,6 +2797,9 @@ final class MacWorkbenchModel: ObservableObject {
                     self.activeToolLoop = nil
                     self.isRunning = false
                     self.selectedDetail = detail
+                    if !deadlineAlreadyPresented {
+                        self.answerWindowAnswer = answer
+                    }
                     if self.currentSessionId == sessionId {
                         if !deadlineAlreadyPresented {
                             self.chatThread.append(ConversationTurn(role: .assistant, text: answer))
@@ -2727,7 +2812,7 @@ final class MacWorkbenchModel: ObservableObject {
                                 self.activeDelegationReceiptID = nil
                             }
                         }
-                        self.status = deadlineAlreadyPresented || answer.hasPrefix("Harness stopped ")
+                        self.status = deadlineAlreadyPresented || answer.contains("Harness stopped waiting for")
                             ? "Response ceiling reached; showing retrieved evidence"
                             : (detail.run.success ? "Trace saved" : "Backend failed; trace saved")
                     } else {
@@ -2763,13 +2848,20 @@ final class MacWorkbenchModel: ObservableObject {
                         ? "Response ceiling reached; showing retrieved evidence"
                         : error.localizedDescription
                     self.isRunning = false
-                    if !deadlineAlreadyPresented, let receiptID = persistedDelegationReceiptID {
-                        self.finishDelegationReceipt(
-                            id: receiptID,
-                            state: .failed,
-                            result: "Harness could not complete this delegation: \(error.localizedDescription)"
+                    if !deadlineAlreadyPresented {
+                        let failureAnswer = InteractiveChatPolicy.failureAnswer(
+                            "Harness could not complete this request: \(error.localizedDescription)"
                         )
-                        self.activeDelegationReceiptID = nil
+                        self.answerWindowAnswer = failureAnswer
+                        self.chatThread.append(ConversationTurn(role: .assistant, text: failureAnswer))
+                        if let receiptID = persistedDelegationReceiptID {
+                            self.finishDelegationReceipt(
+                                id: receiptID,
+                                state: .failed,
+                                result: failureAnswer
+                            )
+                            self.activeDelegationReceiptID = nil
+                        }
                     }
                 }
             }

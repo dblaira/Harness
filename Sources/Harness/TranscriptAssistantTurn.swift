@@ -41,7 +41,8 @@ enum TranscriptAssistantTurn {
         let body = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
         return Parsed(
             displayBody: body,
-            isBackendFailure: body.hasPrefix("Backend failed:"),
+            isBackendFailure: body.hasPrefix("Backend failed:")
+                || body.contains("Harness status: backend failure"),
             rule: rule,
             patternStep: patternStep
         )

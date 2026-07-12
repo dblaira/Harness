@@ -506,8 +506,8 @@ struct MacDelegateFormView: View {
             }
             .buttonStyle(.plain)
             .disabled(!model.canSendComposer)
-            .keyboardShortcut(.return, modifiers: .command)
-            .help("Send")
+            .keyboardShortcut(.return, modifiers: [])
+            .help("Send (Return; Shift-Return adds a new line)")
         }
     }
 
@@ -722,6 +722,402 @@ struct MacDelegateFormView: View {
             }
         }
         .padding(.bottom, 6)
+    }
+}
+
+// MARK: - Answer window
+
+/// The answer is the product. These values are shared with tests so a later
+/// layout change cannot quietly squeeze it back into a receipt-sized strip.
+enum HarnessAnswerWindowLayout {
+    static let minimumWidth: CGFloat = 920
+    static let idealWidth: CGFloat = 1_080
+    static let minimumHeight: CGFloat = 680
+    static let idealHeight: CGFloat = 780
+    static let minimumReadingHeight: CGFloat = 420
+    static let contentMaxWidth: CGFloat = 980
+    static let answerBodyPointSize: CGFloat = 18
+
+    static var minimumReadingFraction: CGFloat {
+        minimumReadingHeight / minimumHeight
+    }
+
+    static func fittedSize(in availableSize: CGSize, inset: CGFloat = 20) -> CGSize {
+        CGSize(
+            width: min(idealWidth, max(0, availableSize.width - (inset * 2))),
+            height: min(idealHeight, max(0, availableSize.height - (inset * 2)))
+        )
+    }
+}
+
+/// Presented for every Send from either Chat or Delegation. It opens before
+/// routing begins, keeps observable progress visible, carries approval cards
+/// so the modal never blocks a decision, and gives the final answer the full
+/// reading surface instead of the leftover space beneath the composer.
+struct MacAnswerWindowView: View {
+    @ObservedObject var model: MacWorkbenchModel
+    @ObservedObject private var approvals: ToolApprovalStore
+
+    init(model: MacWorkbenchModel) {
+        self.model = model
+        self.approvals = model.toolApprovals
+    }
+
+    private var latestAnswer: String? {
+        model.answerWindowAnswer
+    }
+
+    private var isWorking: Bool {
+        model.isRunning && latestAnswer == nil
+    }
+
+    private var canClose: Bool {
+        !model.isRunning && approvals.pendingRequests.isEmpty
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            answerWindowHeader
+
+            if isWorking {
+                if let monitor = model.activeToolLoop {
+                    HarnessAnswerProgressView(
+                        monitor: monitor,
+                        fallbackStatus: model.status
+                    )
+                } else {
+                    startingProgress
+                }
+            } else {
+                answerReadyBar
+            }
+
+            Divider().overlay(Color.black.opacity(0.08))
+
+            ScrollView(.vertical, showsIndicators: true) {
+                VStack(alignment: .leading, spacing: 22) {
+                    requestCard
+
+                    ForEach(approvals.pendingRequests) { request in
+                        MacToolApprovalCard(
+                            request: request,
+                            onApprove: { always in
+                                model.approveToolRequest(request, always: always)
+                            },
+                            onDeny: {
+                                model.denyToolRequest(request)
+                            }
+                        )
+                    }
+
+                    if let latestAnswer {
+                        answerContent(latestAnswer)
+                    } else {
+                        waitingForAnswer
+                    }
+                }
+                .padding(.horizontal, 34)
+                .padding(.vertical, 28)
+                .frame(maxWidth: HarnessAnswerWindowLayout.contentMaxWidth, alignment: .leading)
+                .frame(maxWidth: .infinity)
+            }
+            .frame(maxHeight: .infinity)
+            .layoutPriority(1)
+            .accessibilityIdentifier("harness-answer-content")
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Theme.macBg)
+        .accessibilityIdentifier("harness-answer-window")
+    }
+
+    private var answerWindowHeader: some View {
+        HStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(isWorking ? "WORKING NOW" : "ANSWER")
+                    .font(.system(size: 10, weight: .heavy))
+                    .tracking(2)
+                    .foregroundStyle(Theme.macRed)
+                Text(isWorking ? "Harness started when you pressed Send." : "Your answer is ready.")
+                    .font(Theme.recallSerif(24))
+                    .foregroundStyle(Color.white)
+            }
+
+            Spacer(minLength: 16)
+
+            if model.isRunning {
+                Button("Cancel") {
+                    model.cancelRun()
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(Theme.macRed, in: Capsule())
+                .help("Cancel this response")
+            }
+
+            Button {
+                model.isAnswerWindowPresented = false
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(Color.white.opacity(0.85))
+                    .frame(width: 32, height: 32)
+                    .background(Color.white.opacity(0.10), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!canClose)
+            .opacity(canClose ? 1 : 0.45)
+            .keyboardShortcut(.cancelAction)
+            .accessibilityLabel(canClose ? "Close answer window" : "Cancel the response before closing")
+            .help(canClose ? "Close answer window" : "Cancel the response before closing")
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 16)
+        .background(Theme.savyDeepNavy)
+    }
+
+    private var startingProgress: some View {
+        HStack(alignment: .top, spacing: 12) {
+            ProgressView()
+                .controlSize(.small)
+                .tint(Theme.savyCrimson)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Request received. Starting now.")
+                    .font(Theme.recallBody(16, weight: .semibold))
+                    .foregroundStyle(Color.black)
+                Text("The next retrieval or model step will appear here as it begins.")
+                    .font(Theme.recallBody(13))
+                    .foregroundStyle(Color.black.opacity(0.58))
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 14)
+        .background(Theme.savyPaperAccent)
+        .accessibilityIdentifier("harness-answer-progress")
+    }
+
+    private var answerReadyBar: some View {
+        HStack(spacing: 10) {
+            Image(systemName: model.status == "Cancelled" ? "xmark.circle.fill" : "checkmark.circle.fill")
+                .foregroundStyle(model.status == "Cancelled" ? Theme.savyCrimson : Theme.savyGreen)
+            Text(model.status == "Cancelled" ? "Request cancelled" : "Answer ready to read")
+                .font(Theme.recallBody(15, weight: .semibold))
+                .foregroundStyle(Color.black)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 12)
+        .background(Theme.savyPaperAccent)
+        .accessibilityIdentifier("harness-answer-ready")
+    }
+
+    private var requestCard: some View {
+        let parsed = DelegationContext.parsePrompt(model.answerWindowPrompt)
+        let visiblePrompt = parsed.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? model.answerWindowPrompt
+            : parsed.message
+
+        return VStack(alignment: .leading, spacing: 7) {
+            Text("YOUR REQUEST")
+                .font(.system(size: 10, weight: .heavy))
+                .tracking(1.8)
+                .foregroundStyle(Theme.savyCrimson)
+            Text(visiblePrompt)
+                .font(Theme.recallBody(16))
+                .foregroundStyle(Color.black.opacity(0.72))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.savyCard, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.black.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    private var waitingForAnswer: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("ANSWER")
+                .font(.system(size: 10, weight: .heavy))
+                .tracking(1.8)
+                .foregroundStyle(Theme.savyCrimson)
+            Text("Harness is working on the answer now.")
+                .font(Theme.recallSerif(28))
+                .foregroundStyle(Color.black)
+            Text("Live progress stays above. The complete answer will use this reading surface as soon as it is ready.")
+                .font(Theme.recallBody(16))
+                .foregroundStyle(Color.black.opacity(0.58))
+        }
+        .frame(maxWidth: .infinity, minHeight: 260, alignment: .topLeading)
+        .accessibilityIdentifier("harness-answer-waiting")
+    }
+
+    @ViewBuilder
+    private func answerContent(_ text: String) -> some View {
+        let parsed = TranscriptAssistantTurn.parse(text)
+        VStack(alignment: .leading, spacing: 14) {
+            Text("ANSWER")
+                .font(.system(size: 10, weight: .heavy))
+                .tracking(1.8)
+                .foregroundStyle(Theme.savyCrimson)
+
+            if parsed.isBackendFailure {
+                VStack(alignment: .leading, spacing: 12) {
+                    Label("Harness could not finish the response", systemImage: "exclamationmark.triangle.fill")
+                        .font(Theme.recallBody(18, weight: .semibold))
+                        .foregroundStyle(Theme.savyCrimson)
+                    Text(parsed.displayBody)
+                        .font(Theme.recallBody(HarnessAnswerWindowLayout.answerBodyPointSize))
+                        .foregroundStyle(Color.black)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if TranscriptAssistantTurn.suggestsReauthorization(parsed.displayBody) {
+                        Button {
+                            authorizeCurrentBackend()
+                        } label: {
+                            Label("Re-authorize \(model.backend.rawValue)", systemImage: "key.viewfinder")
+                                .font(.system(size: 13, weight: .semibold))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Theme.savyCrimson)
+                    }
+                }
+                .padding(18)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.white, in: RoundedRectangle(cornerRadius: 12))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Theme.savyCrimson.opacity(0.30), lineWidth: 2)
+                )
+            } else {
+                HarnessMarkdownText(
+                    text: parsed.displayBody,
+                    textColor: Color.black,
+                    bodyFont: Theme.recallBody(HarnessAnswerWindowLayout.answerBodyPointSize),
+                    h1Font: Theme.recallSerif(28),
+                    h2Font: Theme.recallBody(22, weight: .semibold)
+                )
+                .textSelection(.enabled)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityIdentifier("harness-answer-result")
+    }
+
+    private func authorizeCurrentBackend() {
+        switch model.backend {
+        case .codex: model.authorizeCodexAccount()
+        case .grok: model.authorizeGrokAccount()
+        default: break
+        }
+    }
+}
+
+private struct HarnessAnswerProgressView: View {
+    @ObservedObject var monitor: ToolLoopMonitor
+    let fallbackStatus: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(Theme.savyCrimson)
+                    .padding(.top, 2)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(phaseCommentary)
+                        .font(Theme.recallBody(16, weight: .semibold))
+                        .foregroundStyle(Color.black)
+                    if let detailLine {
+                        Text(detailLine)
+                            .font(Theme.recallBody(13))
+                            .foregroundStyle(Color.black.opacity(0.58))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+
+            HStack(spacing: 8) {
+                progressChip("Request received", value: nil)
+                if !monitor.progress.acceptedEvidence.isEmpty {
+                    progressChip("Accepted", value: monitor.progress.acceptedEvidence.count)
+                }
+                if !monitor.progress.supportingEvidence.isEmpty {
+                    progressChip("Supporting", value: monitor.progress.supportingEvidence.count)
+                }
+                if !monitor.progress.toolEvidence.isEmpty {
+                    progressChip("Tool evidence", value: monitor.progress.toolEvidence.count)
+                }
+                if monitor.progress.iteration > 0 {
+                    progressChip("Step", value: monitor.progress.iteration)
+                }
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 14)
+        .background(Theme.savyPaperAccent)
+        .accessibilityIdentifier("harness-answer-progress")
+    }
+
+    private var phaseCommentary: String {
+        switch monitor.progress.phase {
+        case .idle:
+            return "Request received. Starting now."
+        case .checkingGraph:
+            return "Checking your accepted graph first."
+        case .retrievingAuthority:
+            return "Finding accepted knowledge that directly supports the answer."
+        case .retrievingMemory:
+            return "Looking for supporting memory without treating it as accepted authority."
+        case .callingModel:
+            return "Building the answer from the evidence now."
+        case .runningTool:
+            return "Using \(monitor.progress.currentTool ?? "a tool") to gather what the answer needs."
+        case .finished:
+            return "Putting the completed answer on screen."
+        case .budgetExhausted:
+            return "The tool budget ended; preserving the evidence already gathered."
+        case .deadlineExceeded:
+            return "The response ceiling was reached; showing the evidence already retrieved."
+        case .cancelled:
+            return "Cancelling the run now."
+        case .failed:
+            return "The run stopped with an error."
+        }
+    }
+
+    private var detailLine: String? {
+        if monitor.progress.phase == .runningTool,
+           let tool = monitor.progress.currentTool,
+           !tool.isEmpty {
+            return "Current tool: \(tool)"
+        }
+        let trimmed = fallbackStatus.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= 180 else { return nil }
+        return trimmed
+    }
+
+    private func progressChip(_ label: String, value: Int?) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Theme.savyGreen)
+            Text(value.map { "\(label) \($0)" } ?? label)
+                .font(Theme.savyRobotoMedium(10))
+                .foregroundStyle(Color.black.opacity(0.62))
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(Color.white.opacity(0.72), in: Capsule())
+        .overlay(Capsule().stroke(Color.black.opacity(0.07), lineWidth: 1))
     }
 }
 

@@ -168,7 +168,8 @@ private func integrityToolExecutor() -> ToolExecutor {
     )
 
     #expect(!detail.run.success)
-    #expect(detail.run.finalAnswer == "Backend failed: Grok authorization failed. Re-authorize Grok, then send again.")
+    #expect(detail.run.finalAnswer.contains("Backend failed: Grok authorization failed. Re-authorize Grok, then send again."))
+    #expect(InteractiveChatPolicy.followsArticulateLeadershipFormat(detail.run.finalAnswer))
     #expect(!detail.run.finalAnswer.lowercased().contains("timed out"))
     #expect(detail.memoryCandidates.isEmpty)
     #expect(detail.traceEvents.contains {
@@ -188,7 +189,8 @@ private func integrityToolExecutor() -> ToolExecutor {
     )
 
     #expect(!detail.run.success)
-    #expect(detail.run.finalAnswer == "Backend failed: Grok returned a progress update instead of a completed answer.")
+    #expect(detail.run.finalAnswer.contains("Backend failed: Grok returned a progress update instead of a completed answer."))
+    #expect(InteractiveChatPolicy.followsArticulateLeadershipFormat(detail.run.finalAnswer))
     #expect(detail.run.tokenCount == 23)
     #expect(detail.run.cost == 0.04)
     #expect(detail.memoryCandidates.isEmpty)
@@ -225,6 +227,33 @@ private func integrityToolExecutor() -> ToolExecutor {
     #expect(detail.run.cost == 0.03)
 }
 
+@Test func structuredOutputContractPreservesExactJSONThroughFinalizationAndPersistence() async throws {
+    let exactJSON = #"{"decision":"not_candidate","reason":"One-off completion; no stable pattern."}"#
+    let service = try integrityService()
+    let detail = try await service.createRun(
+        prompt: "Return the capture decision as exact JSON.",
+        ontology: .empty,
+        backend: FixedIntegrityBackend(response: BackendResponse(
+            text: exactJSON,
+            tokenCount: 17,
+            cost: 0.01
+        )),
+        responseContract: .structuredOutput
+    )
+
+    #expect(detail.run.success)
+    #expect(detail.run.finalAnswer == exactJSON)
+    #expect(detail.messages.last?.text == exactJSON)
+    #expect(SuiteCaptureAnalyzer.containsValidDecision(detail.run.finalAnswer))
+    #expect(detail.traceEvents.contains {
+        $0.stage == .evaluation && $0.message.contains("Structured response contract preserved exact provider output")
+    })
+
+    let persisted = try #require(try await service.ledger.runDetail(id: detail.run.id))
+    #expect(persisted.run.finalAnswer == exactJSON)
+    #expect(persisted.messages.last?.text == exactJSON)
+}
+
 @Test func deterministicLocalAnswerSkipsProviderAndCandidateExtraction() async throws {
     let backend = CountingIntegrityBackend()
     let answer = "Open Candidates, choose Add Belief, review the wording, then approve it."
@@ -236,7 +265,8 @@ private func integrityToolExecutor() -> ToolExecutor {
     )
 
     #expect(detail.run.success)
-    #expect(detail.run.finalAnswer == answer)
+    #expect(detail.run.finalAnswer.contains(answer))
+    #expect(InteractiveChatPolicy.followsArticulateLeadershipFormat(detail.run.finalAnswer))
     #expect(detail.run.tokenCount == 0)
     #expect(detail.run.cost == 0)
     #expect(detail.memoryCandidates.isEmpty)

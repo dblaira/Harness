@@ -175,6 +175,13 @@ public final class ToolLoopMonitor: ObservableObject, @unchecked Sendable {
     }
 }
 
+/// Defines whether a completed run is prose for Adam to read or machine-readable
+/// data whose exact syntax is part of the caller's contract.
+public enum HarnessResponseContract: Sendable, Equatable {
+    case userFacingNarrative
+    case structuredOutput
+}
+
 public struct HarnessRunService: Sendable {
     public let ledger: RunLedgerStore
     public let authorityRetriever: any AuthorityRetrieving
@@ -216,6 +223,7 @@ public struct HarnessRunService: Sendable {
         conversationHistory: [ConversationTurn] = [],
         soul: SoulDocument? = SoulLoader.load(),
         localAnswer: String? = nil,
+        responseContract: HarnessResponseContract = .userFacingNarrative,
         includeSupportingMemory: Bool = true,
         answerFromAcceptedAuthority: Bool = false,
         tools: [ToolSpec] = [],
@@ -451,6 +459,35 @@ public struct HarnessRunService: Sendable {
                 message: "\(backend.metadata.backend.rawValue) returned terminal progress-only text; run recorded as failed."
             ))
         }
+
+        // Prompt injection is not enforcement. Every user-facing terminal
+        // Harness answer passes through Adam's articulate-leadership gate before
+        // evaluation, persistence, session reload, or UI presentation. Structured
+        // callers keep their exact syntax. Preserve the raw semantic response for
+        // candidate extraction so chapter scaffolding can never become ontology content.
+        let candidateSourceText = response.text
+        let formattingTrace: String
+        switch responseContract {
+        case .userFacingNarrative:
+            let formattedResponseText = InteractiveChatPolicy
+                .enforceArticulateLeadershipFormat(response.text)
+            let articulateFormatWasApplied = formattedResponseText != response.text
+            if articulateFormatWasApplied {
+                response = BackendResponse(
+                    text: formattedResponseText,
+                    tokenCount: response.tokenCount,
+                    cost: response.cost
+                )
+            }
+            formattingTrace = articulateFormatWasApplied
+                ? " Articulate-leadership four-chapter format applied before persistence."
+                : " Articulate-leadership four-chapter format already satisfied."
+        case .structuredOutput:
+            formattingTrace = " Structured response contract preserved exact provider output before persistence."
+        }
+        toolLoop?.update {
+            $0.completedAnswer = response.text
+        }
         let duration = Date().timeIntervalSince(start)
 
         let redactedPrompt = redactor.redact(prompt)
@@ -464,13 +501,17 @@ public struct HarnessRunService: Sendable {
             policyDirectives: packet.policyDirectives
         )
         evalResults.insert(graphHealth.evalResult(runId: runId), at: 0)
-        trace.append(TraceEvent(runId: runId, stage: .evaluation, message: "Evaluated \(evalResults.count) deterministic checks."))
+        trace.append(TraceEvent(
+            runId: runId,
+            stage: .evaluation,
+            message: "Evaluated \(evalResults.count) deterministic checks.\(formattingTrace)"
+        ))
 
         let candidates = suppressCandidateExtraction
             ? []
             : candidateExtractor.candidates(
                 prompt: prompt,
-                response: response.text,
+                response: candidateSourceText,
                 runId: runId,
                 redactor: redactor
             )

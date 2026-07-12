@@ -865,8 +865,8 @@ struct MacBlueprintView: View {
                     .background(Theme.macRed, in: Circle())
             }
             .buttonStyle(.plain)
-            .keyboardShortcut(.return, modifiers: .command)
-            .help("Send the delegation")
+            .keyboardShortcut(.return, modifiers: [])
+            .help("Send the delegation (Return; Shift-Return adds a new line)")
 
             Button { showPlusMenu.toggle() } label: {
                 Image(systemName: "plus")

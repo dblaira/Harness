@@ -5,9 +5,12 @@ import Testing
 @Test func captureAnalyzerRetainsNoCandidateWithHarnessReason() async throws {
     let stager = AnalyzerRecordingStager()
     let analyzer = SuiteCaptureAnalyzer(
-        runPrompt: { _ in analyzerRun(
-            answer: #"{"decision":"not_candidate","reason":"A one-off completion is task progress, not a stable pattern."}"#
-        ) },
+        runPrompt: { _, responseContract in
+            #expect(responseContract == .structuredOutput)
+            return analyzerRun(
+                answer: #"{"decision":"not_candidate","reason":"A one-off completion is task progress, not a stable pattern."}"#
+            )
+        },
         candidateStager: stager
     )
 
@@ -23,7 +26,7 @@ import Testing
 @Test func captureAnalyzerStagesHarnessOwnedCandidateWithTrustedProvenance() async throws {
     let stager = AnalyzerRecordingStager()
     let analyzer = SuiteCaptureAnalyzer(
-        runPrompt: { prompt in
+        runPrompt: { prompt, _ in
             #expect(prompt.contains("Its arrival is evidence only; it is not a candidate"))
             return analyzerRun(answer: """
             ```json
@@ -59,7 +62,7 @@ import Testing
 @Test func captureAnalyzerNeverStagesAResponseFromAFailedHarnessRun() async {
     let stager = AnalyzerRecordingStager()
     let analyzer = SuiteCaptureAnalyzer(
-        runPrompt: { _ in analyzerRun(
+        runPrompt: { _, _ in analyzerRun(
             answer: #"{"decision":"candidate","claim":"Wrong","evidence":"Wrong","domain_a":"work","domain_b":"work","connection_type":"wrong"}"#,
             success: false
         ) },
@@ -75,7 +78,7 @@ import Testing
 @Test func captureAnalyzerRefusesRelatedReceiptsFromAnotherTrustedSource() async {
     let stager = AnalyzerRecordingStager()
     let analyzer = SuiteCaptureAnalyzer(
-        runPrompt: { _ in
+        runPrompt: { _, _ in
             Issue.record("Cross-source receipts must be rejected before model analysis")
             return analyzerRun(answer: #"{"decision":"not_candidate","reason":"unused"}"#)
         },
@@ -99,7 +102,7 @@ import Testing
 @Test func legacyTransportDuplicatesAreOneProducerRecordNotExtraEvidence() async throws {
     let stager = AnalyzerRecordingStager()
     let analyzer = SuiteCaptureAnalyzer(
-        runPrompt: { prompt in
+        runPrompt: { prompt, _ in
             #expect(prompt.contains("Duplicate delivery receipts are retained for provenance only"))
             #expect(prompt.contains("not independent observations"))
             return analyzerRun(answer: #"{"decision":"candidate","claim":"Adam prefers brief news.","evidence":"The producer record says brief.","domain_a":"learning","domain_b":"affect","connection_type":"stated_news_preference"}"#)
@@ -134,11 +137,11 @@ import Testing
 
 @Test func candidateIDIsStableAcrossModelWordingForTheSameCapture() async throws {
     let first = SuiteCaptureAnalyzer(
-        runPrompt: { _ in analyzerRun(answer: #"{"decision":"candidate","claim":"Adam prefers brief news.","evidence":"Brief was selected.","domain_a":"learning","domain_b":"affect","connection_type":"preference"}"#) },
+        runPrompt: { _, _ in analyzerRun(answer: #"{"decision":"candidate","claim":"Adam prefers brief news.","evidence":"Brief was selected.","domain_a":"learning","domain_b":"affect","connection_type":"preference"}"#) },
         candidateStager: AnalyzerRecordingStager()
     )
     let second = SuiteCaptureAnalyzer(
-        runPrompt: { _ in analyzerRun(answer: #"{"decision":"candidate","claim":"Brief news is Adam's preference.","evidence":"The tone setting is brief.","domain_a":"learning","domain_b":"affect","connection_type":"preference"}"#) },
+        runPrompt: { _, _ in analyzerRun(answer: #"{"decision":"candidate","claim":"Brief news is Adam's preference.","evidence":"The tone setting is brief.","domain_a":"learning","domain_b":"affect","connection_type":"preference"}"#) },
         candidateStager: AnalyzerRecordingStager()
     )
 
@@ -156,11 +159,11 @@ import Testing
 @Test func lateDuplicateTransportDoesNotChangeCandidateIdentity() async throws {
     let answer = #"{"decision":"candidate","claim":"Adam prefers brief news.","evidence":"The producer record says brief.","domain_a":"learning","domain_b":"affect","connection_type":"preference"}"#
     let singleAnalyzer = SuiteCaptureAnalyzer(
-        runPrompt: { _ in analyzerRun(answer: answer) },
+        runPrompt: { _, _ in analyzerRun(answer: answer) },
         candidateStager: AnalyzerRecordingStager()
     )
     let groupedAnalyzer = SuiteCaptureAnalyzer(
-        runPrompt: { _ in analyzerRun(answer: answer) },
+        runPrompt: { _, _ in analyzerRun(answer: answer) },
         candidateStager: AnalyzerRecordingStager()
     )
     let primary = legacyAnalyzerReceipt(
