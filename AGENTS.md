@@ -24,3 +24,14 @@ Stack (when editing matching files): see `.cursor/rules/stack-*.mdc` — nextjs 
 
 If the same mistake happens twice: create a rule. Prefer system over apology.
 
+## Review guidelines
+
+- Treat Adam's literal requirement and named visible surface as the acceptance test.
+- Report a missing or weakened acceptance contract as P1.
+- Report a skipped dependency, fail-open guard, swallowed error, or success claim without proof as P1.
+- A build, typecheck, backend response, or unit test does not prove visible app behavior.
+- Every changed critical flow needs UI automation or recorded execution in the signed app on Adam's Mac.
+- Evidence must identify the exact reviewed commit. Evidence from another commit is invalid.
+- Review relevant signing, entitlement, TCC, stale-process, provider/auth, and accepted-graph authority boundaries.
+- Independent review is a merge gate, not the release oracle. The signed visible handoff is a separate gate.
+- Never configure Adam's Mac as a GitHub self-hosted runner for this public repository.

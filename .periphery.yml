@@ -1,0 +1,6 @@
+project: Harness.xcodeproj
+schemes:
+  - Harness
+retain_public: true
+retain_objc_annotated: true
+format: json

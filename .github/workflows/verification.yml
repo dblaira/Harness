@@ -1,0 +1,75 @@
+name: Verification
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verification-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  acceptance-contract:
+    name: Acceptance contract
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - name: Validate literal requirement and proof plan
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
+          python3 scripts/validate_acceptance_contract.py --body-file "$RUNNER_TEMP/pr-body.md"
+
+  gate-script-tests:
+    name: Gate script tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - run: python3 -m unittest discover -s scripts/tests -v
+
+  macos-verification:
+    name: macOS tests, SwiftLint, Periphery
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+      - name: Install gate tools
+        run: brew install xcodegen swiftlint periphery
+      - name: Generate project
+        run: xcodegen generate
+      - name: SwiftLint changed Swift files
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: scripts/lint_changed_swift.sh "$BASE_SHA"
+      - name: Periphery changed-code gate
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: scripts/periphery_changed_gate.py --base "$BASE_SHA" --output "$RUNNER_TEMP/periphery.json"
+      - name: OntologyKit tests
+        run: swift test --package-path Packages/OntologyKit
+      - name: Harness macOS unit tests
+        run: |
+          xcodebuild test \
+            -project Harness.xcodeproj \
+            -scheme Harness \
+            -destination 'platform=macOS' \
+            -derivedDataPath .build/ci \
+            -resultBundlePath "$RUNNER_TEMP/HarnessTests.xcresult" \
+            -only-testing:HarnessTests \
+            CODE_SIGNING_ALLOWED=NO
+      - name: Preserve test and static-analysis evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-verification-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/HarnessTests.xcresult
+            ${{ runner.temp }}/periphery.json

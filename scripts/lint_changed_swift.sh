@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+BASE_SHA="${1:-origin/main}"
+cd "$ROOT_DIR"
+git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null || {
+  echo "SwiftLint base commit is unavailable: $BASE_SHA" >&2
+  exit 1
+}
+
+SWIFT_FILES=()
+while IFS= read -r line; do
+  [[ -n "$line" ]] && SWIFT_FILES+=("$line")
+done < <(git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD -- '*.swift')
+
+if [[ ${#SWIFT_FILES[@]} -eq 0 ]]; then
+  echo "No changed Swift files to lint."
+  exit 0
+fi
+
+for file in "${SWIFT_FILES[@]}"; do
+  swiftlint lint --strict --config .swiftlint.yml "$file"
+done

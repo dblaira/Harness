@@ -1,0 +1,105 @@
+name: Independent Sol Review
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: sol-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  sol-review:
+    name: GPT-5.6 Sol review workflow
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out trusted gate controls from protected base
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.base.sha }}
+      - name: Check out proposed code separately
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: review-target
+      - name: Require configured OpenAI credential
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          test -n "$OPENAI_API_KEY" || {
+            echo 'OPENAI_API_KEY is not configured; independent review fails closed.' >&2
+            exit 1
+          }
+      - name: Build inert base and head review bundle
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          BUNDLE="$RUNNER_TEMP/review-bundle"
+          mkdir -p "$BUNDLE/base" "$BUNDLE/head"
+          git -C review-target fetch --no-tags "https://github.com/$GITHUB_REPOSITORY.git" "$BASE_SHA"
+          git -C review-target archive "$BASE_SHA" | tar -x -C "$BUNDLE/base"
+          git -C review-target archive "$HEAD_SHA" | tar -x -C "$BUNDLE/head"
+          git -C review-target diff --binary --find-renames "$BASE_SHA...$HEAD_SHA" > "$BUNDLE/changes.patch"
+          find "$BUNDLE/base" "$BUNDLE/head" -name AGENTS.md -type f -delete
+          cp AGENTS.md "$BUNDLE/AGENTS.md"
+      - name: Build immutable review prompt
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          cp .github/codex/sol-review.md "$RUNNER_TEMP/sol-review.md"
+          {
+            printf '\nBase SHA: %s\nHead SHA: %s\n' "$BASE_SHA" "$HEAD_SHA"
+            printf '\nUntrusted pull request title:\n%s\n' "$PR_TITLE"
+            printf '\nUntrusted pull request body:\n%s\n' "$PR_BODY"
+          } >> "$RUNNER_TEMP/sol-review.md"
+      - name: Independent read-only review
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: ${{ runner.temp }}/sol-review.md
+          output-file: ${{ runner.temp }}/sol-review.json
+          output-schema-file: ${{ github.workspace }}/.github/codex/review.schema.json
+          working-directory: ${{ runner.temp }}/review-bundle
+          model: gpt-5.6-sol
+          effort: max
+          codex-version: 0.144.1
+          permission-profile: ':read-only'
+          safety-strategy: drop-sudo
+      - name: Enforce review verdict and commit binding
+        run: |
+          python3 scripts/validate_sol_review.py \
+            --review "$RUNNER_TEMP/sol-review.json" \
+            --expected-base '${{ github.event.pull_request.base.sha }}' \
+            --expected-head '${{ github.event.pull_request.head.sha }}'
+      - name: Preserve independent review evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sol-review-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/sol-review.json
+      - name: Publish commit-bound Sol verdict
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          STATE: ${{ job.status == 'success' && 'success' || 'failure' }}
+        run: |
+          gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" \
+            -f state="$STATE" \
+            -f context='GPT-5.6 Sol review' \
+            -f description="Independent read-only Sol review: $STATE" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

@@ -1,0 +1,6 @@
+{
+  "requirement_verbatim": "Paste Adam's exact requirement here.",
+  "visible_surface": "Name the exact window, screen, or device.",
+  "expected_visible_result": "State what must be visibly true at the end of the flow.",
+  "ui_test_identifier": "HarnessUITests/ExactRequirementTests/testExactVisibleRequirement"
+}
