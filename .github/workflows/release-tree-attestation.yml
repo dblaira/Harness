@@ -33,7 +33,7 @@ jobs:
           }
           git rev-parse "$MERGE_SHA^{tree}" > merge-tree.txt
           git rev-parse "$VERIFIED_HEAD^{tree}" > verified-tree.txt
-          gh api "repos/$REPO/commits/$VERIFIED_HEAD/status" > statuses.json
+          gh api "repos/$REPO/commits/$VERIFIED_HEAD/statuses?per_page=100" > statuses.json
           gh api \
             -H 'Accept: application/vnd.github+json' \
             "repos/$REPO/commits/$VERIFIED_HEAD/check-runs?filter=latest&per_page=100" > checks.json

@@ -37,10 +37,11 @@ Branch `codex/verified-build-gates` installs the recommended system as repositor
 - a fail-closed live Ollama + Fuseki satisfaction proof, excluded by name from deterministic hosted tests and required by the signed local handoff;
 - commit-keyed initial/final screenshots, video, unit/UI/final-relaunch result bundles, signature identity, hashes, and a local manifest;
 - a `Signed Mac handoff` commit status which can be required before merge;
-- a Codex `Stop` hook that refuses product completion claims without valid evidence while permitting intermediate questions and explicit blocked exits;
+- immutable local Sol, handoff, and Stop controls installed from protected `main`, outside proposed branches;
+- a global Codex `Stop` hook that fails closed for product-change exits except a literal user question or explicit `BLOCKED:` exit;
 - merge-commit-only delivery and a post-merge `Verified release tree` attestation proving the final `main` tree exactly equals the fully verified PR-head tree.
 
-Two independent local GPT-5.6 Sol reviews were used to bootstrap the reviewer. The first rejected six false-proof paths; the second rejected nine further fail-open or deadlock paths. Every finding was converted into code and a regression check before a third review. This is the intended operating model: Sol supplies adversarial findings, executable evidence decides whether each correction is real.
+Three independent local GPT-5.6 Sol reviews were used to bootstrap the reviewer. The first rejected six false-proof paths; the second rejected nine further fail-open or deadlock paths; the third rejected twelve trust-boundary weaknesses, including head-controlled status issuers, stale acceptance text, counterfeit artifacts, and API-auth ambiguity. Every finding was converted into code and an adversarial regression before the next review. This is the intended operating model: Sol supplies adversarial findings, executable evidence decides whether each correction is real.
 
 Harness deliberately has no repository `OPENAI_API_KEY`. Adam uses an existing paid ChatGPT/Codex subscription and blocks API keys so agents cannot accidentally create separate usage charges. The installed Sol gate therefore runs an ephemeral, read-only local Codex process through that existing authorization, posts its structured result to the pull request, and publishes the commit status. A credential-free GitHub workflow invalidates older Sol evidence whenever the PR head or acceptance text changes. Adam's Mac is never registered as a GitHub runner.
 
@@ -218,6 +219,8 @@ For an organization that intentionally uses API billing, `openai/codex-action@v1
 
 The Harness gate instead builds an inert local `base/`, `head/`, and `changes.patch` bundle; removes proposed `AGENTS.md` files as instructions; runs an ephemeral `gpt-5.6-sol` process at `max` in a read-only sandbox through Adam's existing Codex login; validates strict structured output; posts the review to the PR; and publishes the `GPT-5.6 Sol review` status on the exact head SHA. The hosted GitHub workflow does only one credential-free job: publish `pending` after every PR edit or new commit so an older local review cannot remain valid.
 
+The status issuer, prompt, schema, validator, signed handoff, manifest parser, and Stop hook are copied into a versioned local control directory only from protected `main`. Pull-request code cannot replace those installed commands. The one bootstrap exception is restricted to repository `dblaira/Harness`, PR #19, and its original base SHA; after merge, the controls are reinstalled from protected `main` and the exception cannot apply to another PR.
+
 Both configurations must preserve base/head identifiers, use read-only execution, and archive or publish the final review output. Benchmark `xhigh` against `max`; only consider Pro through the API if Adam later changes the explicit billing boundary.
 
 The job should fail only on a strict schema such as:
@@ -313,7 +316,9 @@ Best paid use: purchase a human Apple-platform audit after the internal gate is 
 2. Start with the macOS Harness surface because that is the current handoff surface. iOS proof remains a separate extension when an iOS requirement changes.
 3. Seed the review guidance with the observed escaped-bug classes: fail-open dependency checks, stale-app verification, folder/TCC/signing problems, provider/auth failures, silent waits, and accepted-graph authority confusion.
 4. Preserve Adam's no-API-key boundary: use the existing ChatGPT/Codex subscription for local Sol review, never add a repository OpenAI key as a shortcut, and never register Adam's Mac as a public-repository runner.
-5. Do not add another paid AI-review vendor before GPT-5.6 Sol is evaluated on Harness's escaped bugs. A human Apple audit remains the highest-value paid second layer after the internal gate is operational.
+5. Bind acceptance to a checked-in contract digest plus the matching PR sections; PR edits invalidate both local statuses and in-flight issuers re-read the digest before publishing.
+6. Parse evidence again from the trusted verifier: xcresults, named screenshot attachments, PNG/QuickTime formats, live Fuseki markers, app CDHash/team, PID path, current Sol status, and artifact hashes are never accepted from manifest labels alone.
+7. Do not add another paid AI-review vendor before GPT-5.6 Sol is evaluated on Harness's escaped bugs. A human Apple audit remains the highest-value paid second layer after the internal gate is operational.
 
 ## Sources
 

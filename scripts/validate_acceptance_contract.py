@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -16,6 +17,7 @@ REQUIRED_SECTIONS = (
     "Expected visible result",
     "Critical flow",
     "Exact UI test",
+    "Final accessibility identifier",
     "Required proof",
     "Risk and authority boundaries",
 )
@@ -25,8 +27,13 @@ HANDOFF_EXAMPLES = {
     "visible_surface": "Name the exact window, screen, or device.",
     "expected_visible_result": "State what must be visibly true at the end of the flow.",
     "ui_test_identifier": "HarnessUITests/ExactRequirementTests/testExactVisibleRequirement",
+    "final_accessibility_identifier": "REPLACE_WITH_ACCESSIBILITY_IDENTIFIER",
 }
 UI_TEST_PATTERN = re.compile(r"^HarnessUITests/[A-Za-z_][A-Za-z0-9_]*/test[A-Za-z0-9_]+$")
+ACCESSIBILITY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._:/-]{0,127}$")
+BOOTSTRAP_REPO = "dblaira/Harness"
+BOOTSTRAP_PR = 19
+BOOTSTRAP_BASE = "0ce97219a340d9a53f5afb2a773bb2c9eb81b807"
 
 
 def section(body: str, name: str) -> str | None:
@@ -59,10 +66,35 @@ def validate(body: str) -> list[str]:
     exact_ui_test = section(body, "Exact UI test") or ""
     if exact_ui_test and exact_ui_test != "INFRASTRUCTURE_ONLY" and not UI_TEST_PATTERN.fullmatch(exact_ui_test):
         errors.append("Exact UI test must be INFRASTRUCTURE_ONLY or one HarnessUITests test identifier")
+    final_identifier = section(body, "Final accessibility identifier") or ""
+    if final_identifier and not ACCESSIBILITY_PATTERN.fullmatch(final_identifier):
+        errors.append("Final accessibility identifier must be one literal accessibility identifier")
     return errors
 
 
-def validate_handoff_contract(contract: dict, pr_body: str | None = None) -> list[str]:
+def bootstrap_allowed(repo: str | None, pr_number: int | None, base_sha: str | None) -> bool:
+    return repo == BOOTSTRAP_REPO and pr_number == BOOTSTRAP_PR and base_sha == BOOTSTRAP_BASE
+
+
+def contract_digest(contract: dict) -> str:
+    canonical = json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def pr_contract_digest(body: str) -> str:
+    bound = {name: section(body, name) for name in REQUIRED_SECTIONS}
+    canonical = json.dumps(bound, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def validate_handoff_contract(
+    contract: dict,
+    pr_body: str | None = None,
+    *,
+    repo: str | None = None,
+    pr_number: int | None = None,
+    base_sha: str | None = None,
+) -> list[str]:
     if not isinstance(contract, dict):
         return ["handoff contract must be a JSON object"]
     errors: list[str] = []
@@ -81,6 +113,11 @@ def validate_handoff_contract(contract: dict, pr_body: str | None = None) -> lis
         and not UI_TEST_PATTERN.fullmatch(ui_test)
     ):
         errors.append("ui_test_identifier must be INFRASTRUCTURE_ONLY or name one exact HarnessUITests test method")
+    if ui_test == "INFRASTRUCTURE_ONLY" and not bootstrap_allowed(repo, pr_number, base_sha):
+        errors.append("INFRASTRUCTURE_ONLY is restricted to the one reviewed bootstrap pull request")
+    final_identifier = contract.get("final_accessibility_identifier", "")
+    if not isinstance(final_identifier, str) or not ACCESSIBILITY_PATTERN.fullmatch(final_identifier):
+        errors.append("final_accessibility_identifier must be one literal accessibility identifier")
 
     if pr_body is not None:
         mapping = {
@@ -88,6 +125,7 @@ def validate_handoff_contract(contract: dict, pr_body: str | None = None) -> lis
             "visible_surface": "Visible surface",
             "expected_visible_result": "Expected visible result",
             "ui_test_identifier": "Exact UI test",
+            "final_accessibility_identifier": "Final accessibility identifier",
         }
         markdown_errors = validate(pr_body)
         errors.extend(f"reviewed PR: {error}" for error in markdown_errors)
@@ -103,6 +141,9 @@ def main() -> int:
     inputs.add_argument("--body-file", type=Path)
     inputs.add_argument("--contract-json", type=Path)
     parser.add_argument("--pr-body-file", type=Path)
+    parser.add_argument("--repo")
+    parser.add_argument("--pr-number", type=int)
+    parser.add_argument("--base-sha")
     args = parser.parse_args()
     if args.body_file:
         errors = validate(args.body_file.read_text(encoding="utf-8"))
@@ -113,13 +154,22 @@ def main() -> int:
             print(f"Invalid handoff contract: {error}", file=sys.stderr)
             return 1
         pr_body = args.pr_body_file.read_text(encoding="utf-8") if args.pr_body_file else None
-        errors = validate_handoff_contract(contract, pr_body)
+        errors = validate_handoff_contract(
+            contract,
+            pr_body,
+            repo=args.repo,
+            pr_number=args.pr_number,
+            base_sha=args.base_sha,
+        )
     if errors:
         print("Acceptance contract failed:", file=sys.stderr)
         for error in errors:
             print(f"- {error}", file=sys.stderr)
         return 1
-    print("Acceptance contract is complete and bound to its reviewed text.")
+    if args.contract_json:
+        print(f"Acceptance contract is complete and bound to its reviewed text: {contract_digest(contract)}")
+    else:
+        print("Acceptance contract is complete and bound to its reviewed text.")
     return 0
 
 

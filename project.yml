@@ -118,3 +118,6 @@ schemes:
     test:
       targets:
         - HarnessUITests
+      environmentVariables:
+        HARNESS_EXPECTED_PID: ${HARNESS_EXPECTED_PID}
+        HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER: ${HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER}

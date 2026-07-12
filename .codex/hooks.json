@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/scripts/release_gate.py\" hook",
+            "command": "/Users/adamblair/.local/bin/harness-stop-gate",
             "timeout": 30
           }
         ]

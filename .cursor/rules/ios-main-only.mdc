@@ -11,7 +11,7 @@ Adam reviews a finished, visibly proven result. Agents own the branch, pull requ
 
 - **Never push directly to `main`.** Work on an agent-owned `codex/*` branch and open a pull request.
 - **Do not merge until every required GitHub check is green**, including independent GPT-5.6 Sol review and the signed Mac handoff status.
-- Run `script/sol_review_gate.sh` for the independent review. It uses Adam's existing ChatGPT/Codex authorization locally; never add or request an `OPENAI_API_KEY` as a substitute.
+- Run `harness-sol-review` from the immutable controls installed from protected `main`. It uses Adam's existing ChatGPT/Codex authorization locally; never add or request an `OPENAI_API_KEY` as a substitute.
 - **Never tell Adam to pull, push, fetch, sync, or open GitHub Desktop** to test or pick up your work.
 - **Never tell Adam to run `xcodegen`, Terminal commands, or "Open in Xcode" links** for routine app changes.
 
@@ -19,7 +19,7 @@ Adam reviews a finished, visibly proven result. Agents own the branch, pull requ
 
 - A build or unit-test result is not proof that a visible requirement works.
 - Before a feature handoff, launch the signed app on Adam's Mac and execute Adam's exact visible requirement.
-- Bind the tested app's signature, the exact named UI test, initial and final-relaunch window screenshots, the test-time video, all Xcode result bundles, the fail-closed live satisfaction artifact, and the independent review result to the exact commit with `script/handoff_gate.sh`.
+- Bind the tested app's signature, the exact named UI test, initial and final-relaunch window screenshots, the test-time video, all Xcode result bundles, the fail-closed live satisfaction artifact, and the independent review result to the exact commit with the immutable `harness-handoff` command.
 - Never claim done, fixed, ready, verified, or working while the required handoff certificate is absent or invalid.
 - Do not use Adam's Mac as a GitHub self-hosted runner for this public repository.
 

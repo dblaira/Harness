@@ -34,6 +34,7 @@ If the same mistake happens twice: create a rule. Prefer system over apology.
 - Evidence must identify the exact reviewed commit. Evidence from another commit is invalid.
 - Review relevant signing, entitlement, TCC, stale-process, provider/auth, and accepted-graph authority boundaries.
 - Independent review is a merge gate, not the release oracle. The signed visible handoff is a separate gate.
-- Run independent review with `script/sol_review_gate.sh`; it must use Adam's existing ChatGPT/Codex authorization in a read-only local process.
+- Run independent review only with the immutable installed command `harness-sol-review`; never execute a pull request's copy of the issuer.
+- Run signed handoff only with the immutable installed command `harness-handoff`; never let proposed code publish its own required status.
 - Never add or request an `OPENAI_API_KEY` for review. Adam intentionally blocks API keys so agents cannot choose separate API billing over his subscription.
 - Never configure Adam's Mac as a GitHub self-hosted runner for this public repository.

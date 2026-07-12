@@ -24,10 +24,22 @@ jobs:
           persist-credentials: false
       - name: Validate literal requirement and proof plan
         env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           printf '%s' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
-          python3 scripts/validate_acceptance_contract.py --body-file "$RUNNER_TEMP/pr-body.md"
+          gh api "repos/$HEAD_REPO/contents/.github/acceptance-contract.json?ref=$HEAD_SHA" \
+            --jq .content | tr -d '\n' | base64 --decode > "$RUNNER_TEMP/acceptance-contract.json"
+          python3 scripts/validate_acceptance_contract.py \
+            --contract-json "$RUNNER_TEMP/acceptance-contract.json" \
+            --pr-body-file "$RUNNER_TEMP/pr-body.md" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pr-number "$PR_NUMBER" \
+            --base-sha "$BASE_SHA"
       - name: Publish commit-bound acceptance verdict
         if: always()
         env:
@@ -40,3 +52,12 @@ jobs:
             -f context='Acceptance contract' \
             -f description="Protected-base acceptance validation: $STATE" \
             -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          if [[ "$STATE" != success ]]; then
+            for CONTEXT in 'GPT-5.6 Sol review' 'Signed Mac handoff'; do
+              gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" \
+                -f state=pending \
+                -f context="$CONTEXT" \
+                -f description='Acceptance contract changed; fresh local evidence required' \
+                -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/pull/${{ github.event.pull_request.number }}"
+            done
+          fi

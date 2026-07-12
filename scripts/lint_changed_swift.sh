@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel)"
 BASE_SHA="${1:-origin/main}"
+CONFIG="${SWIFTLINT_CONFIG:-$ROOT_DIR/.swiftlint.yml}"
 cd "$ROOT_DIR"
 git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null || {
   echo "SwiftLint base commit is unavailable: $BASE_SHA" >&2
@@ -20,5 +21,5 @@ if [[ ${#SWIFT_FILES[@]} -eq 0 ]]; then
 fi
 
 for file in "${SWIFT_FILES[@]}"; do
-  swiftlint lint --strict --config .swiftlint.yml "$file"
+  swiftlint lint --strict --config "$CONFIG" "$file"
 done

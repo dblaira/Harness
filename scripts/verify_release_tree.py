@@ -9,26 +9,31 @@ import sys
 from pathlib import Path
 
 
-REQUIRED_CONTEXTS = (
-    "Acceptance contract",
+REQUIRED_STATUS_CONTEXTS = {
+    "Acceptance contract": "github-actions[bot]",
+    "GPT-5.6 Sol review": "dblaira",
+    "Signed Mac handoff": "dblaira",
+}
+REQUIRED_CHECK_CONTEXTS = {
     "Gate script tests",
     "macOS tests, SwiftLint, Periphery",
     "CodeQL (swift)",
     "CodeQL (python)",
-    "GPT-5.6 Sol review",
-    "Signed Mac handoff",
-)
+}
+REQUIRED_CONTEXTS = tuple(REQUIRED_STATUS_CONTEXTS) + tuple(sorted(REQUIRED_CHECK_CONTEXTS))
 
 
 def latest_statuses(payload: dict) -> dict[str, dict]:
     latest: dict[str, dict] = {}
-    for status in payload.get("statuses", []):
+    statuses = payload if isinstance(payload, list) else payload.get("statuses", [])
+    for status in statuses:
         context = status.get("context")
         if isinstance(context, str) and context not in latest:
             latest[context] = {
                 "state": status.get("state"),
                 "url": status.get("target_url"),
                 "source": "commit-status",
+                "creator": (status.get("creator") or {}).get("login"),
             }
     return latest
 
@@ -42,6 +47,7 @@ def latest_checks(payload: dict) -> dict[str, dict]:
                 "state": check.get("conclusion") if check.get("status") == "completed" else check.get("status"),
                 "url": check.get("html_url"),
                 "source": "check-run",
+                "app": (check.get("app") or {}).get("slug"),
             }
     return latest
 
@@ -62,13 +68,27 @@ def validate(
     if not merge_tree or merge_tree != verified_tree:
         errors.append("main merge tree does not exactly match the verified pull-request head tree")
 
-    evidence = latest_checks(checks)
-    evidence.update(latest_statuses(statuses))
+    status_evidence = latest_statuses(statuses)
+    check_evidence = latest_checks(checks)
     selected: dict[str, dict] = {}
-    for context in REQUIRED_CONTEXTS:
-        result = evidence.get(context)
+    for context, creator in REQUIRED_STATUS_CONTEXTS.items():
+        if context in check_evidence:
+            errors.append(f"required status context is duplicated by a check run: {context}")
+        result = status_evidence.get(context)
+        if not result or result.get("state") != "success":
+            errors.append(f"verified head lacks a latest successful required status: {context}")
+        elif result.get("creator") != creator:
+            errors.append(f"required status has an untrusted creator: {context}")
+        else:
+            selected[context] = result
+    for context in REQUIRED_CHECK_CONTEXTS:
+        if context in status_evidence:
+            errors.append(f"required check context is duplicated by a commit status: {context}")
+        result = check_evidence.get(context)
         if not result or result.get("state") != "success":
             errors.append(f"verified head lacks a latest successful required check: {context}")
+        elif result.get("app") != "github-actions":
+            errors.append(f"required check has an untrusted GitHub app: {context}")
         else:
             selected[context] = result
 

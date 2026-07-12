@@ -16,16 +16,59 @@ private func liveEndpointUp(_ urlString: String) async -> Bool {
     request.timeoutInterval = 3
     guard let (_, response) = try? await URLSession.shared.data(for: request) else { return false }
     guard let status = (response as? HTTPURLResponse)?.statusCode else { return false }
-    return (200..<500).contains(status)
+    return (200..<300).contains(status)
+}
+
+private func requiredLiveEvidenceErrors(
+    health: GraphHealthReport,
+    authorityHits: [GraphAuthorityHit]
+) -> [String] {
+    var errors: [String] = []
+    if health.status != .healthy {
+        errors.append("accepted Fuseki named graph is not healthy: \(health.status.rawValue)")
+    }
+    if !authorityHits.contains(where: { $0.source == "Fuseki /accepted named graph" }) {
+        errors.append("answer has no relevant authority hit sourced from the live Fuseki accepted graph")
+    }
+    return errors
+}
+
+@Test func requiredLiveEvidenceRejectsUnavailableMissingAndFallbackOnlyGraphs() {
+    let statuses: [GraphHealthStatus] = [.unavailable, .missingAcceptedNamedGraph]
+    for status in statuses {
+        let report = GraphHealthReport(
+            status: status,
+            acceptedGraphIRI: "https://understood.app/graph/accepted",
+            sparqlEndpoint: "http://127.0.0.1:3030/understood/sparql",
+            namedGraphCount: nil,
+            defaultGraphTripleCount: nil,
+            detail: "fixture"
+        )
+        #expect(!requiredLiveEvidenceErrors(health: report, authorityHits: []).isEmpty)
+    }
+    let healthyButFallbackOnly = GraphHealthReport(
+        status: .healthy,
+        acceptedGraphIRI: "https://understood.app/graph/accepted",
+        sparqlEndpoint: "http://127.0.0.1:3030/understood/sparql",
+        namedGraphCount: 1,
+        defaultGraphTripleCount: 0,
+        detail: "fixture"
+    )
+    let fallback = GraphAuthorityHit(
+        subject: "fixture",
+        predicate: "fixture",
+        object: "capturing value",
+        source: "offline bundled TTL fallback",
+        queryTrace: "fixture"
+    )
+    #expect(!requiredLiveEvidenceErrors(health: healthyButFallbackOnly, authorityHits: [fallback]).isEmpty)
 }
 
 @Test func satisfactionGateAdamRealQuestionGetsCompleteAnswer() async throws {
     let environment = ProcessInfo.processInfo.environment
     let requireLiveProof = environment["HARNESS_REQUIRE_LIVE_SATISFACTION"] == "1"
     let ollamaAvailable = await liveEndpointUp("http://127.0.0.1:11434/api/tags")
-    let fusekiAvailable = await liveEndpointUp("http://127.0.0.1:3030/$/ping")
-    let dependenciesAvailable = ollamaAvailable && fusekiAvailable
-    guard dependenciesAvailable else {
+    guard ollamaAvailable else {
         if requireLiveProof {
             struct MissingLiveDependency: Error {}
             throw MissingLiveDependency()
@@ -34,11 +77,25 @@ private func liveEndpointUp(_ urlString: String) async -> Bool {
     }
 
     let ledger = try RunLedgerStore.inMemory()
+    let graphHealthChecker = FusekiGraphHealthChecker()
+    let graphHealth = await graphHealthChecker.checkAcceptedGraph()
+    let ontology = OntologyLoader.load()
+    let liveFusekiHits = try await OntologyAuthorityRetriever().retrieve(
+        prompt: "what information do I have approved already that confirms the importance of capturing value?",
+        ontology: ontology,
+        limit: 6
+    )
+    let liveEvidenceErrors = requiredLiveEvidenceErrors(
+        health: graphHealth,
+        authorityHits: liveFusekiHits
+    )
+    try #require(liveEvidenceErrors.isEmpty, Comment(rawValue: liveEvidenceErrors.joined(separator: "; ")))
+
     let service = HarnessRunService(
         ledger: ledger,
-        authorityRetriever: CanonicalAcceptedGraphAuthorityRetriever()
+        authorityRetriever: CanonicalAcceptedGraphAuthorityRetriever(),
+        graphHealthChecker: graphHealthChecker
     )
-    let ontology = OntologyLoader.load()
     let backend = AgentRunnerBackendAdapter(backend: .hermes, apiKey: nil)
 
     // Adam's own question, verbatim from the app ledger — the one that
@@ -75,6 +132,9 @@ private func liveEndpointUp(_ urlString: String) async -> Bool {
     - Elapsed: \(String(format: "%.1f", elapsed)) seconds
     - Run id: \(detail.run.id)
     - Run success: \(detail.run.success)
+    - Commit: \(environment["HARNESS_SATISFACTION_COMMIT"] ?? "UNBOUND")
+    - Fuseki graph health: \(graphHealth.status.rawValue)
+    - Fuseki authority hits: \(liveFusekiHits.filter { $0.source == "Fuseki /accepted named graph" }.count)
 
     ## Answer as produced
 

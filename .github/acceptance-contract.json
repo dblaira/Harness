@@ -1,0 +1,7 @@
+{
+  "requirement_verbatim": "Install two mandatory gates before another feature handoff. The merge gate should require an agent-owned PR, protected main, clean macOS tests, SwiftLint, Periphery, CodeQL, and an independent read-only GPT-5.6 Sol review. The handoff gate should launch the signed app on Adam's Mac, execute the exact visible requirement, capture screenshots/video and test results bound to the commit, and prevent the agent from ending its task without that evidence. Keep the public repository off Adam's Mac as a GitHub self-hosted runner.",
+  "visible_surface": "The Harness GitHub pull request checks and protection state, followed by the signed Harness macOS app on Adam's Mac for every product change.",
+  "expected_visible_result": "No product pull request can merge without the hosted checks, independent Sol verdict, and signed Mac handoff status; no agent can end a product-change task without a valid commit-bound evidence manifest; the final main commit visibly attests that its tree exactly matches the verified pull-request head.",
+  "ui_test_identifier": "INFRASTRUCTURE_ONLY",
+  "final_accessibility_identifier": "Delegation"
+}

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CONTROL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="${HARNESS_REPO_ROOT:-$(pwd)}"
+ROOT_DIR="$(cd "$ROOT_DIR" && pwd)"
 cd "$ROOT_DIR"
 
 [[ -z "$(git status --porcelain --untracked-files=normal)" ]] || {
@@ -29,15 +31,31 @@ PROMPT="$OUTPUT_DIR/sol-review-prompt.md"
 REVIEW="$OUTPUT_DIR/sol-review.json"
 LOG="$OUTPUT_DIR/codex-review.log"
 COMMENT="$OUTPUT_DIR/github-comment.md"
+AUTH_PROOF="$OUTPUT_DIR/authorization.json"
+CONTRACT="$ROOT_DIR/.github/acceptance-contract.json"
 rm -rf "$OUTPUT_DIR"
 mkdir -p "$BUNDLE/base" "$BUNDLE/head"
+
+[[ -f "$CONTRACT" ]] || { echo "Checked-in acceptance contract is missing." >&2; exit 1; }
+gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .body > "$OUTPUT_DIR/reviewed-pr-body.md"
+python3 "$CONTROL_DIR/scripts/validate_acceptance_contract.py" \
+  --contract-json "$CONTRACT" \
+  --pr-body-file "$OUTPUT_DIR/reviewed-pr-body.md" \
+  --repo "$REPO" \
+  --pr-number "$PR_NUMBER" \
+  --base-sha "$BASE_SHA"
+CONTRACT_DIGEST="$(python3 -c 'import json,sys;sys.path.insert(0,sys.argv[1]);import validate_acceptance_contract as v;print(v.contract_digest(json.load(open(sys.argv[2]))))' "$CONTROL_DIR/scripts" "$CONTRACT")"
+PR_CONTRACT_DIGEST="$(python3 -c 'import sys;sys.path.insert(0,sys.argv[1]);import validate_acceptance_contract as v;print(v.pr_contract_digest(open(sys.argv[2]).read()))' "$CONTROL_DIR/scripts" "$OUTPUT_DIR/reviewed-pr-body.md")"
+
+AUTH_FILE="${CODEX_HOME:-$HOME/.codex}/auth.json"
+python3 "$CONTROL_DIR/scripts/verify_codex_auth.py" --auth-file "$AUTH_FILE" --output "$AUTH_PROOF"
 
 git archive "$BASE_SHA" | tar -x -C "$BUNDLE/base"
 git archive "$HEAD_SHA" | tar -x -C "$BUNDLE/head"
 git diff --binary --find-renames "$BASE_SHA...$HEAD_SHA" > "$BUNDLE/changes.patch"
 find "$BUNDLE/base" "$BUNDLE/head" -name AGENTS.md -type f -delete
 git show "$BASE_SHA:AGENTS.md" > "$BUNDLE/AGENTS.md"
-cp .github/codex/sol-review.md "$PROMPT"
+cp "$CONTROL_DIR/.github/codex/sol-review.md" "$PROMPT"
 {
   printf '\nBase SHA: %s\nHead SHA: %s\n' "$BASE_SHA" "$HEAD_SHA"
   printf '\nUntrusted pull request title:\n'
@@ -49,23 +67,23 @@ cp .github/codex/sol-review.md "$PROMPT"
 gh api -X POST "repos/$REPO/statuses/$SHA" \
   -f state=pending \
   -f context='GPT-5.6 Sol review' \
-  -f description='Independent local ChatGPT-authorized review is running' \
+  -f description="ChatGPT Sol review pending contract:${CONTRACT_DIGEST:0:12}" \
   -f target_url="https://github.com/$REPO/pull/$PR_NUMBER" >/dev/null
 
 set +e
-codex exec \
+env -u OPENAI_API_KEY -u OPENAI_BASE_URL -u OPENAI_API_BASE -u AZURE_OPENAI_API_KEY codex exec \
   --cd "$BUNDLE" \
   --model gpt-5.6-sol \
   --sandbox read-only \
   --ephemeral \
   --config 'model_reasoning_effort="max"' \
-  --output-schema "$ROOT_DIR/.github/codex/review.schema.json" \
+  --output-schema "$CONTROL_DIR/.github/codex/review.schema.json" \
   --output-last-message "$REVIEW" \
-  - < "$PROMPT" 2>&1 | tee "$LOG"
-CODEX_RESULT=${PIPESTATUS[0]}
+  - < "$PROMPT" > "$LOG" 2>&1
+CODEX_RESULT=$?
 VALIDATION_RESULT=1
 if [[ $CODEX_RESULT -eq 0 && -s "$REVIEW" ]]; then
-  python3 scripts/validate_sol_review.py \
+  python3 "$CONTROL_DIR/scripts/validate_sol_review.py" \
     --review "$REVIEW" \
     --expected-base "$BASE_SHA" \
     --expected-head "$HEAD_SHA"
@@ -73,11 +91,19 @@ if [[ $CODEX_RESULT -eq 0 && -s "$REVIEW" ]]; then
 fi
 set -e
 
+gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .body > "$OUTPUT_DIR/current-pr-body.md"
+CURRENT_DIGEST="$(python3 -c 'import json,sys;sys.path.insert(0,sys.argv[1]);import validate_acceptance_contract as v;print(v.contract_digest(json.load(open(sys.argv[2]))))' "$CONTROL_DIR/scripts" "$CONTRACT")"
+CURRENT_PR_CONTRACT_DIGEST="$(python3 -c 'import sys;sys.path.insert(0,sys.argv[1]);import validate_acceptance_contract as v;print(v.pr_contract_digest(open(sys.argv[2]).read()))' "$CONTROL_DIR/scripts" "$OUTPUT_DIR/current-pr-body.md")"
+if [[ "$CURRENT_PR_CONTRACT_DIGEST" != "$PR_CONTRACT_DIGEST" || "$CURRENT_DIGEST" != "$CONTRACT_DIGEST" ]]; then
+  CODEX_RESULT=1
+  echo "Pull request or checked-in contract changed during review; stale result rejected." >> "$LOG"
+fi
+
 STATE=failure
 if [[ $CODEX_RESULT -eq 0 && $VALIDATION_RESULT -eq 0 ]]; then
   STATE=success
 fi
-python3 scripts/render_sol_review.py \
+python3 "$CONTROL_DIR/scripts/render_sol_review.py" \
   --review "$REVIEW" \
   --output "$COMMENT" \
   --base "$BASE_SHA" \
@@ -87,8 +113,19 @@ COMMENT_URL="$(gh api -X POST "repos/$REPO/issues/$PR_NUMBER/comments" -f body="
 gh api -X POST "repos/$REPO/statuses/$SHA" \
   -f state="$STATE" \
   -f context='GPT-5.6 Sol review' \
-  -f description="Independent read-only Sol review: $STATE" \
+  -f description="ChatGPT Sol $STATE contract:${CONTRACT_DIGEST:0:12}" \
   -f target_url="$COMMENT_URL" >/dev/null
+
+gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .body > "$OUTPUT_DIR/final-pr-body.md"
+FINAL_PR_CONTRACT_DIGEST="$(python3 -c 'import sys;sys.path.insert(0,sys.argv[1]);import validate_acceptance_contract as v;print(v.pr_contract_digest(open(sys.argv[2]).read()))' "$CONTROL_DIR/scripts" "$OUTPUT_DIR/final-pr-body.md")"
+if [[ "$FINAL_PR_CONTRACT_DIGEST" != "$PR_CONTRACT_DIGEST" ]]; then
+  gh api -X POST "repos/$REPO/statuses/$SHA" \
+    -f state=pending \
+    -f context='GPT-5.6 Sol review' \
+    -f description='PR changed during review publication; fresh review required' \
+    -f target_url="https://github.com/$REPO/pull/$PR_NUMBER" >/dev/null
+  exit 1
+fi
 
 [[ "$STATE" == success ]] || exit 1
 echo "Published passing independent Sol review for $SHA: $COMMENT_URL"

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CONTROL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="${HARNESS_REPO_ROOT:-$(pwd)}"
+ROOT_DIR="$(cd "$ROOT_DIR" && pwd)"
 cd "$ROOT_DIR"
 
 usage() {
@@ -22,6 +24,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -f "$CONTRACT" && -f "$OBSERVED" && -n "$VERIFIER" ]] || usage
+[[ "$(cd "$(dirname "$CONTRACT")" && pwd)/$(basename "$CONTRACT")" == "$ROOT_DIR/.github/acceptance-contract.json" ]] || {
+  echo "Handoff must use the checked-in .github/acceptance-contract.json." >&2
+  exit 1
+}
 [[ -z "$(git status --porcelain --untracked-files=normal)" ]] || {
   echo "Commit or remove every working-tree change before capturing release evidence." >&2
   exit 1
@@ -51,10 +57,16 @@ PR_NUMBER="$(gh api "repos/$REPO/commits/$SHA/pulls" --jq '[.[] | select(.state 
   exit 1
 }
 PR_BODY_FILE="$OUTPUT_DIR/reviewed-pr-body.md"
+BASE_SHA="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .base.sha)"
 gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .body > "$PR_BODY_FILE"
-python3 scripts/validate_acceptance_contract.py \
+python3 "$CONTROL_DIR/scripts/validate_acceptance_contract.py" \
   --contract-json "$CONTRACT" \
-  --pr-body-file "$PR_BODY_FILE"
+  --pr-body-file "$PR_BODY_FILE" \
+  --repo "$REPO" \
+  --pr-number "$PR_NUMBER" \
+  --base-sha "$BASE_SHA"
+CONTRACT_DIGEST="$(python3 -c 'import json,sys;sys.path.insert(0,sys.argv[1]);import validate_acceptance_contract as v;print(v.contract_digest(json.load(open(sys.argv[2]))))' "$CONTROL_DIR/scripts" "$CONTRACT")"
+PR_CONTRACT_DIGEST="$(python3 -c 'import sys;sys.path.insert(0,sys.argv[1]);import validate_acceptance_contract as v;print(v.pr_contract_digest(open(sys.argv[2]).read()))' "$CONTROL_DIR/scripts" "$PR_BODY_FILE")"
 
 CONTRACT_UI_TEST="$(CONTRACT="$CONTRACT" /usr/bin/python3 - <<'PY'
 import json, os
@@ -62,6 +74,13 @@ from pathlib import Path
 print(json.loads(Path(os.environ["CONTRACT"]).read_text(encoding="utf-8"))["ui_test_identifier"])
 PY
 )"
+FINAL_ACCESSIBILITY_IDENTIFIER="$(CONTRACT="$CONTRACT" /usr/bin/python3 - <<'PY'
+import json, os
+from pathlib import Path
+print(json.loads(Path(os.environ["CONTRACT"]).read_text(encoding="utf-8"))["final_accessibility_identifier"])
+PY
+)"
+FINAL_ATTACH_TEST="HarnessUITests/HarnessCriticalFlowTests/testFinalNormalRelaunchPreservesProcessAndVisibleIdentifier"
 UI_TEST="$CONTRACT_UI_TEST"
 if [[ "$CONTRACT_UI_TEST" == "INFRASTRUCTURE_ONLY" ]]; then
   UI_TEST="HarnessUITests/HarnessCriticalFlowTests/testSignedAppLaunchesItsVisibleDelegationSurface"
@@ -75,7 +94,7 @@ fi
   exit 1
 }
 
-xcodegen generate
+HARNESS_EXPECTED_PID=0 HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER=UNSET xcodegen generate
 xcodebuild build-for-testing \
   -project Harness.xcodeproj \
   -scheme HarnessUIVerification \
@@ -90,12 +109,13 @@ xcodebuild test \
   -derivedDataPath "$UNIT_DERIVED_DATA" \
   -resultBundlePath "$UNIT_RESULT_BUNDLE" \
   -only-testing:HarnessTests
-python3 scripts/validate_xcresult.py \
+python3 "$CONTROL_DIR/scripts/validate_xcresult.py" \
   --xcresult "$UNIT_RESULT_BUNDLE" \
   --required-bundle HarnessTests
 
 HARNESS_REQUIRE_LIVE_SATISFACTION=1 \
 HARNESS_SATISFACTION_OUTPUT_DIR="$SATISFACTION_DIR" \
+HARNESS_SATISFACTION_COMMIT="$SHA" \
 swift test \
   --package-path Packages/OntologyKit \
   --filter satisfactionGateAdamRealQuestionGetsCompleteAnswer | tee "$OUTPUT_DIR/live-satisfaction.log"
@@ -116,7 +136,7 @@ video_cleanup() {
 }
 trap video_cleanup EXIT
 
-python3 scripts/run_with_timeout.py --seconds 110 -- xcodebuild test-without-building \
+python3 "$CONTROL_DIR/scripts/run_with_timeout.py" --seconds 110 -- xcodebuild test-without-building \
   -project Harness.xcodeproj \
   -scheme HarnessUIVerification \
   -destination 'platform=macOS' \
@@ -130,7 +150,7 @@ kill -0 "$VIDEO_PID" 2>/dev/null || {
 }
 wait "$VIDEO_PID"
 trap - EXIT
-python3 scripts/validate_xcresult.py \
+python3 "$CONTROL_DIR/scripts/validate_xcresult.py" \
   --xcresult "$UI_RESULT_BUNDLE" \
   --required-test "$UI_TEST" \
   --max-duration 55 \
@@ -166,31 +186,31 @@ PROCESS_COMMAND="$(ps -p "$PID" -o command=)"
 }
 
 rm -rf "$FINAL_UI_RESULT_BUNDLE"
-python3 scripts/run_with_timeout.py --seconds 110 -- xcodebuild test-without-building \
+HARNESS_EXPECTED_PID="$PID" HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER="$FINAL_ACCESSIBILITY_IDENTIFIER" xcodegen generate
+python3 "$CONTROL_DIR/scripts/run_with_timeout.py" --seconds 110 -- xcodebuild test-without-building \
   -project Harness.xcodeproj \
   -scheme HarnessUIVerification \
   -destination 'platform=macOS' \
   -derivedDataPath "$CANDIDATE_DERIVED_DATA" \
   -resultBundlePath "$FINAL_UI_RESULT_BUNDLE" \
-  "-only-testing:$UI_TEST"
-python3 scripts/validate_xcresult.py \
+  "-only-testing:$FINAL_ATTACH_TEST"
+python3 "$CONTROL_DIR/scripts/validate_xcresult.py" \
   --xcresult "$FINAL_UI_RESULT_BUNDLE" \
-  --required-test "$UI_TEST" \
+  --required-test "$FINAL_ATTACH_TEST" \
   --max-duration 55 \
   --screenshot-output "$FINAL_SCREENSHOT"
 [[ -s "$FINAL_SCREENSHOT" ]] || {
   echo "The final normal relaunch did not produce visible requirement evidence." >&2
   exit 1
 }
-PID="$(pgrep -x Harness | head -1 || true)"
-[[ -n "$PID" ]] || { echo "Harness is not running after final visible verification." >&2; exit 1; }
+kill -0 "$PID" 2>/dev/null || { echo "The normal relaunched Harness PID exited during final verification." >&2; exit 1; }
 PROCESS_COMMAND="$(ps -p "$PID" -o command=)"
 [[ "$PROCESS_COMMAND" == "$APP_BUNDLE/Contents/MacOS/Harness"* ]] || {
   echo "Final verified Harness process is not the signed and UI-tested app bundle." >&2
   exit 1
 }
 
-SOL_URL="$(gh api "repos/$REPO/commits/$SHA/status" | python3 scripts/require_latest_status.py --context 'GPT-5.6 Sol review')" || {
+SOL_URL="$(gh api "repos/$REPO/commits/$SHA/status" | python3 "$CONTROL_DIR/scripts/require_latest_status.py" --context 'GPT-5.6 Sol review' --description-contains "contract:${CONTRACT_DIGEST:0:12}")" || {
   echo "The newest GPT-5.6 Sol review for commit $SHA is not successful." >&2
   exit 1
 }
@@ -200,6 +220,8 @@ VERIFIER="$VERIFIER" SHA="$SHA" OUTPUT_DIR="$OUTPUT_DIR" UNIT_RESULT_BUNDLE="$UN
 UI_RESULT_BUNDLE="$UI_RESULT_BUNDLE" FINAL_UI_RESULT_BUNDLE="$FINAL_UI_RESULT_BUNDLE" \
 FINAL_SCREENSHOT="$FINAL_SCREENSHOT" SATISFACTION_ARTIFACT="$SATISFACTION_ARTIFACT" \
 APP_BUNDLE="$APP_BUNDLE" PID="$PID" SOL_URL="$SOL_URL" ACTUAL_UI_TEST="$UI_TEST" \
+FINAL_ATTACH_TEST="$FINAL_ATTACH_TEST" FINAL_ACCESSIBILITY_IDENTIFIER="$FINAL_ACCESSIBILITY_IDENTIFIER" \
+CONTRACT_DIGEST="$CONTRACT_DIGEST" PR_CONTRACT_DIGEST="$PR_CONTRACT_DIGEST" \
 TEAM_IDENTIFIER="$TEAM_IDENTIFIER" CDHASH="$CDHASH" /usr/bin/python3 - <<'PY'
 import datetime
 import hashlib
@@ -231,18 +253,22 @@ artifacts = {
     "final_screenshot": os.environ["FINAL_SCREENSHOT"],
     "final_ui_xcresult": os.environ["FINAL_UI_RESULT_BUNDLE"],
     "satisfaction_artifact": os.environ["SATISFACTION_ARTIFACT"],
+    "app_bundle": os.environ["APP_BUNDLE"],
 }
 manifest = {
     "schema_version": 1,
     "status": "PASS",
     "commit": os.environ["SHA"],
     "git_tree": os.popen("git rev-parse 'HEAD^{tree}'").read().strip(),
+    "contract_digest": os.environ["CONTRACT_DIGEST"],
+    "pr_contract_digest": os.environ["PR_CONTRACT_DIGEST"],
     "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     "requirement_verbatim": contract["requirement_verbatim"],
     "visible_surface": contract["visible_surface"],
     "expected_visible_result": contract["expected_visible_result"],
     "acceptance_test_identifier": contract["ui_test_identifier"],
     "ui_test_identifier": os.environ["ACTUAL_UI_TEST"],
+    "final_accessibility_identifier": os.environ["FINAL_ACCESSIBILITY_IDENTIFIER"],
     "observed_visible_result": observed,
     "app_bundle": os.environ["APP_BUNDLE"],
     "app_pid": int(os.environ["PID"]),
@@ -254,7 +280,7 @@ manifest = {
     "tests": [
         {"name": "macos-unit-tests", "status": "PASS"},
         {"name": "macos-ui-tests", "status": "PASS", "test_identifier": os.environ["ACTUAL_UI_TEST"]},
-        {"name": "final-relaunch-ui-test", "status": "PASS", "test_identifier": os.environ["ACTUAL_UI_TEST"]},
+        {"name": "final-relaunch-ui-test", "status": "PASS", "test_identifier": os.environ["FINAL_ATTACH_TEST"]},
         {"name": "live-satisfaction-gate", "status": "PASS"},
     ],
     "sol_review": {"status": "PASS", "check_run_url": os.environ["SOL_URL"]},
@@ -266,11 +292,19 @@ path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 print(path)
 PY
 
-python3 scripts/release_gate.py validate --manifest "$OUTPUT_DIR/manifest.json"
+python3 "$CONTROL_DIR/scripts/release_gate.py" validate --manifest "$OUTPUT_DIR/manifest.json"
+
+gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .body > "$OUTPUT_DIR/final-pr-body.md"
+CURRENT_DIGEST="$(python3 -c 'import json,sys;sys.path.insert(0,sys.argv[1]);import validate_acceptance_contract as v;print(v.contract_digest(json.load(open(sys.argv[2]))))' "$CONTROL_DIR/scripts" "$CONTRACT")"
+CURRENT_PR_CONTRACT_DIGEST="$(python3 -c 'import sys;sys.path.insert(0,sys.argv[1]);import validate_acceptance_contract as v;print(v.pr_contract_digest(open(sys.argv[2]).read()))' "$CONTROL_DIR/scripts" "$OUTPUT_DIR/final-pr-body.md")"
+[[ "$CURRENT_PR_CONTRACT_DIGEST" == "$PR_CONTRACT_DIGEST" && "$CURRENT_DIGEST" == "$CONTRACT_DIGEST" ]] || {
+  echo "Pull request or acceptance contract changed during handoff; stale evidence rejected." >&2
+  exit 1
+}
 
 gh api -X POST "repos/$REPO/statuses/$SHA" \
   -f state=success \
   -f context='Signed Mac handoff' \
-  -f description='Signed app, exact XCUITest, screenshot, video, and results passed' \
+  -f description="Signed handoff PASS contract:${CONTRACT_DIGEST:0:12}" \
   -f target_url="$SOL_URL" >/dev/null
 echo "Published the Signed Mac handoff status for $SHA."

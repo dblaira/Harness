@@ -23,8 +23,10 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
-          gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" \
-            -f state=pending \
-            -f context='GPT-5.6 Sol review' \
-            -f description="Awaiting read-only Sol review through Adam's ChatGPT authorization" \
-            -f target_url="$PR_URL"
+          for CONTEXT in 'GPT-5.6 Sol review' 'Signed Mac handoff'; do
+            gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" \
+              -f state=pending \
+              -f context="$CONTEXT" \
+              -f description="PR changed; fresh trusted local evidence is required" \
+              -f target_url="$PR_URL"
+          done
