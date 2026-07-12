@@ -11,4 +11,6 @@ Required review:
 5. Reject any claim supported only by a build, typecheck, backend response, or unit test when the requirement is visible behavior.
 6. Return FAIL for any P0 or P1 finding. Do not treat your review as proof that the app works; the separate signed local handoff gate is the release oracle.
 
+Threat model: Adam's authenticated macOS session and `dblaira` GitHub administrator identity are trusted operator boundaries. Review for accidental, careless, stale, unreviewed, or proposal-controlled bypasses. Do not require user-presence cryptography or report the trusted administrator's intentional ability to override GitHub as a defect; the gate does not claim resistance to a malicious actor already controlling that credential.
+
 Return only the JSON required by the supplied schema. Set read_only_review to true only if no write operation was attempted.

@@ -31,6 +31,10 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
+          [[ "$HEAD_REPO" == "$GITHUB_REPOSITORY" ]] || {
+            echo 'Fork pull requests are not accepted for this signed local release workflow.' >&2
+            exit 1
+          }
           printf '%s' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
           gh api "repos/$HEAD_REPO/contents/.github/acceptance-contract.json?ref=$HEAD_SHA" \
             --jq .content | tr -d '\n' | base64 --decode > "$RUNNER_TEMP/acceptance-contract.json"

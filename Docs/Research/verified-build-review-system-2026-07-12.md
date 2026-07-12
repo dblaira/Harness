@@ -41,7 +41,7 @@ Branch `codex/verified-build-gates` installs the recommended system as repositor
 - a global Codex `Stop` hook that fails closed for product-change exits except a literal user question or explicit `BLOCKED:` exit;
 - merge-commit-only delivery and a post-merge `Verified release tree` attestation proving the final `main` tree exactly equals the fully verified PR-head tree.
 
-Three independent local GPT-5.6 Sol reviews were used to bootstrap the reviewer. The first rejected six false-proof paths; the second rejected nine further fail-open or deadlock paths; the third rejected twelve trust-boundary weaknesses, including head-controlled status issuers, stale acceptance text, counterfeit artifacts, and API-auth ambiguity. Every finding was converted into code and an adversarial regression before the next review. This is the intended operating model: Sol supplies adversarial findings, executable evidence decides whether each correction is real.
+Four independent local GPT-5.6 Sol reviews were used during bootstrap. The first rejected six false-proof paths; the second rejected nine further fail-open or deadlock paths; the third rejected twelve trust-boundary weaknesses; and the fourth found fourteen additional blocking paths plus one conflicting rule. Actionable findings were converted into code and adversarial regressions. The request for cryptographic resistance to Adam's own administrator credential was resolved instead by Adam's explicit no-Touch-ID threat-model decision. This is the intended operating model: Sol supplies adversarial findings, the owner defines the authority boundary, and executable evidence decides whether each correction is real.
 
 Harness deliberately has no repository `OPENAI_API_KEY`. Adam uses an existing paid ChatGPT/Codex subscription and blocks API keys so agents cannot accidentally create separate usage charges. The installed Sol gate therefore runs an ephemeral, read-only local Codex process through that existing authorization, posts its structured result to the pull request, and publishes the commit status. A credential-free GitHub workflow invalidates older Sol evidence whenever the PR head or acceptance text changes. Adam's Mac is never registered as a GitHub runner.
 
@@ -219,7 +219,11 @@ For an organization that intentionally uses API billing, `openai/codex-action@v1
 
 The Harness gate instead builds an inert local `base/`, `head/`, and `changes.patch` bundle; removes proposed `AGENTS.md` files as instructions; runs an ephemeral `gpt-5.6-sol` process at `max` in a read-only sandbox through Adam's existing Codex login; validates strict structured output; posts the review to the PR; and publishes the `GPT-5.6 Sol review` status on the exact head SHA. The hosted GitHub workflow does only one credential-free job: publish `pending` after every PR edit or new commit so an older local review cannot remain valid.
 
-The status issuer, prompt, schema, validator, signed handoff, manifest parser, and Stop hook are copied into a versioned local control directory only from protected `main`. Pull-request code cannot replace those installed commands. The one bootstrap exception is restricted to repository `dblaira/Harness`, PR #19, and its original base SHA; after merge, the controls are reinstalled from protected `main` and the exception cannot apply to another PR.
+The status issuer, prompt, schema, validator, signed handoff, manifest parser, and Stop hook are copied into a versioned local control directory only from protected `main`. Pull-request code cannot replace those installed commands. The bootstrap installer exception was removed: after infrastructure PR #19 is independently reviewed and visibly proven under the one-time trusted-operator bootstrap, it is merged, full protection is installed and read back, and only then are the permanent controls installed from `main`.
+
+### Trusted-operator boundary (no Touch ID)
+
+Adam chose not to add Touch ID or a separate signing principal. His authenticated macOS session and `dblaira` GitHub administrator identity are therefore trusted operator boundaries. The system is mandatory operationally: it blocks accidental, careless, stale, unreviewed, and proposal-controlled paths. It does not claim cryptographic resistance to a malicious actor who already controls Adam's administrator credential. A stronger claim would require a separate GitHub App, another trusted principal, or user-presence signing; that is intentionally outside this gate.
 
 Both configurations must preserve base/head identifiers, use read-only execution, and archive or publish the final review output. Benchmark `xhigh` against `max`; only consider Pro through the API if Adam later changes the explicit billing boundary.
 
@@ -319,6 +323,7 @@ Best paid use: purchase a human Apple-platform audit after the internal gate is 
 5. Bind acceptance to a checked-in contract digest plus the matching PR sections; PR edits invalidate both local statuses and in-flight issuers re-read the digest before publishing.
 6. Parse evidence again from the trusted verifier: xcresults, named screenshot attachments, PNG/QuickTime formats, live Fuseki markers, app CDHash/team, PID path, current Sol status, and artifact hashes are never accepted from manifest labels alone.
 7. Do not add another paid AI-review vendor before GPT-5.6 Sol is evaluated on Harness's escaped bugs. A human Apple audit remains the highest-value paid second layer after the internal gate is operational.
+8. Keep Adam's administrator identity as the explicit trusted-operator boundary; do not add Touch ID unless Adam later asks for malicious-admin resistance.
 
 ## Sources
 

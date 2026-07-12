@@ -33,7 +33,26 @@ private func requiredLiveEvidenceErrors(
     return errors
 }
 
-@Test func requiredLiveEvidenceRejectsUnavailableMissingAndFallbackOnlyGraphs() {
+private actor RecordingGraphHealthChecker: GraphHealthChecking {
+    private let wrapped: any GraphHealthChecking
+    private var latest: GraphHealthReport?
+
+    init(wrapped: any GraphHealthChecking) {
+        self.wrapped = wrapped
+    }
+
+    func checkAcceptedGraph() async -> GraphHealthReport {
+        let report = await wrapped.checkAcceptedGraph()
+        latest = report
+        return report
+    }
+
+    func recordedReport() -> GraphHealthReport? {
+        latest
+    }
+}
+
+@Test func answerRunEvidenceRejectsUnavailableMissingAndHealthyPreflightWithFallbackOnlyAnswer() {
     let statuses: [GraphHealthStatus] = [.unavailable, .missingAcceptedNamedGraph]
     for status in statuses {
         let report = GraphHealthReport(
@@ -77,19 +96,8 @@ private func requiredLiveEvidenceErrors(
     }
 
     let ledger = try RunLedgerStore.inMemory()
-    let graphHealthChecker = FusekiGraphHealthChecker()
-    let graphHealth = await graphHealthChecker.checkAcceptedGraph()
+    let graphHealthChecker = RecordingGraphHealthChecker(wrapped: FusekiGraphHealthChecker())
     let ontology = OntologyLoader.load()
-    let liveFusekiHits = try await OntologyAuthorityRetriever().retrieve(
-        prompt: "what information do I have approved already that confirms the importance of capturing value?",
-        ontology: ontology,
-        limit: 6
-    )
-    let liveEvidenceErrors = requiredLiveEvidenceErrors(
-        health: graphHealth,
-        authorityHits: liveFusekiHits
-    )
-    try #require(liveEvidenceErrors.isEmpty, Comment(rawValue: liveEvidenceErrors.joined(separator: "; ")))
 
     let service = HarnessRunService(
         ledger: ledger,
@@ -109,6 +117,13 @@ private func requiredLiveEvidenceErrors(
         backend: backend
     )
     let elapsed = Date().timeIntervalSince(started)
+    let recordedGraphHealth = await graphHealthChecker.recordedReport()
+    let graphHealth = try #require(recordedGraphHealth)
+    let liveEvidenceErrors = requiredLiveEvidenceErrors(
+        health: graphHealth,
+        authorityHits: detail.authorityHits
+    )
+    try #require(liveEvidenceErrors.isEmpty, Comment(rawValue: liveEvidenceErrors.joined(separator: "; ")))
 
     let answer = detail.messages.last(where: { $0.role == .assistant })?.text
         ?? detail.run.finalAnswer
@@ -134,7 +149,7 @@ private func requiredLiveEvidenceErrors(
     - Run success: \(detail.run.success)
     - Commit: \(environment["HARNESS_SATISFACTION_COMMIT"] ?? "UNBOUND")
     - Fuseki graph health: \(graphHealth.status.rawValue)
-    - Fuseki authority hits: \(liveFusekiHits.filter { $0.source == "Fuseki /accepted named graph" }.count)
+    - Fuseki authority hits: \(detail.authorityHits.filter { $0.source == "Fuseki /accepted named graph" }.count)
 
     ## Answer as produced
 

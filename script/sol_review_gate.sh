@@ -32,6 +32,7 @@ REVIEW="$OUTPUT_DIR/sol-review.json"
 LOG="$OUTPUT_DIR/codex-review.log"
 COMMENT="$OUTPUT_DIR/github-comment.md"
 AUTH_PROOF="$OUTPUT_DIR/authorization.json"
+RUNTIME_PROOF="$OUTPUT_DIR/codex-runtime.json"
 CONTRACT="$ROOT_DIR/.github/acceptance-contract.json"
 rm -rf "$OUTPUT_DIR"
 mkdir -p "$BUNDLE/base" "$BUNDLE/head"
@@ -71,16 +72,25 @@ gh api -X POST "repos/$REPO/statuses/$SHA" \
   -f target_url="https://github.com/$REPO/pull/$PR_NUMBER" >/dev/null
 
 set +e
-env -u OPENAI_API_KEY -u OPENAI_BASE_URL -u OPENAI_API_BASE -u AZURE_OPENAI_API_KEY codex exec \
+env -u OPENAI_API_KEY -u OPENAI_BASE_URL -u OPENAI_API_BASE -u AZURE_OPENAI_API_KEY \
+  -u ANTHROPIC_API_KEY -u GEMINI_API_KEY -u GOOGLE_API_KEY -u GROQ_API_KEY \
+  -u MISTRAL_API_KEY -u TOGETHER_API_KEY -u DEEPSEEK_API_KEY -u XAI_API_KEY \
+  codex exec \
   --cd "$BUNDLE" \
   --model gpt-5.6-sol \
   --sandbox read-only \
   --ephemeral \
+  --ignore-user-config \
+  --config 'model_provider="openai"' \
   --config 'model_reasoning_effort="max"' \
   --output-schema "$CONTROL_DIR/.github/codex/review.schema.json" \
   --output-last-message "$REVIEW" \
   - < "$PROMPT" > "$LOG" 2>&1
 CODEX_RESULT=$?
+if ! python3 "$CONTROL_DIR/scripts/verify_codex_runtime.py" \
+  --log "$LOG" --output "$RUNTIME_PROOF"; then
+  CODEX_RESULT=1
+fi
 VALIDATION_RESULT=1
 if [[ $CODEX_RESULT -eq 0 && -s "$REVIEW" ]]; then
   python3 "$CONTROL_DIR/scripts/validate_sol_review.py" \

@@ -29,8 +29,29 @@ PRODUCT_FILES.update(
         "Packages/OntologyKit/Package.resolved",
     }
 )
+GATE_PREFIXES = (
+    ".github/workflows/",
+    ".github/codex/",
+    "script/",
+    "scripts/tests/",
+    "scripts/validate_",
+    "scripts/verify_",
+)
+GATE_FILES = {
+    ".github/acceptance-contract.json",
+    ".github/pull_request_template.md",
+    ".cursor/rules/ios-main-only.mdc",
+    ".cursor/rules/stack-ios.mdc",
+    "scripts/lint_changed_swift.sh",
+    "scripts/release_gate.py",
+    "scripts/resolve_harness_repo.py",
+    "scripts/verify_app_identity.py",
+    "scripts/verify_codex_auth.py",
+    "scripts/verify_codex_runtime.py",
+}
 COMPLETION_WORDS = re.compile(
-    r"\b(done|fixed|implemented|installed|ready|verified|working|shipped|complete|completed)\b",
+    r"\b(done|fixed|implemented|installed|ready|verified|working|works|passes|passed|"
+    r"resolved|successful|succeeded|shipped|complete|completed)\b",
     re.IGNORECASE,
 )
 NON_COMPLETION = re.compile(
@@ -38,7 +59,11 @@ NON_COMPLETION = re.compile(
     re.IGNORECASE,
 )
 UI_TEST_PATTERN = re.compile(r"^HarnessUITests/[A-Za-z_][A-Za-z0-9_]*/test[A-Za-z0-9_]+$")
-USER_QUESTION = re.compile(r"\?\s*$")
+USER_QUESTION = re.compile(
+    r"^(?:adam[,:—\s]+)?(?:who|what|when|where|why|how|which|should|could|would|"
+    r"can|may|is|are|do|does|did|will)\b.*\?\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 class GitInspectionError(RuntimeError):
@@ -74,6 +99,17 @@ def product_changes(root: Path) -> list[str]:
         path
         for path in changed_files(root)
         if path in PRODUCT_FILES or path.startswith(PRODUCT_PREFIXES)
+    )
+
+
+def guarded_changes(root: Path) -> list[str]:
+    return sorted(
+        path
+        for path in changed_files(root)
+        if path in PRODUCT_FILES
+        or path in GATE_FILES
+        or path.startswith(PRODUCT_PREFIXES)
+        or path.startswith(GATE_PREFIXES)
     )
 
 
@@ -263,9 +299,9 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
         test for test in tests or []
         if isinstance(test, dict) and test.get("name") == "final-relaunch-ui-test"
     ]
-    final_attach_test = "HarnessUITests/HarnessCriticalFlowTests/testFinalNormalRelaunchPreservesProcessAndVisibleIdentifier"
+    final_attach_test = ui_test_identifier
     if len(final_results) != 1 or final_results[0].get("test_identifier") != final_attach_test:
-        errors.append("final relaunch result is not bound to the manifest requirement test")
+        errors.append("final relaunch did not rerun the exact manifest requirement test")
 
     review = manifest.get("sol_review") or {}
     if not isinstance(review, dict):
@@ -288,9 +324,12 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
         "unit_xcresult",
         "ui_xcresult",
         "final_screenshot",
+        "final_ui_screenshot",
         "final_ui_xcresult",
+        "running_app_proof",
         "satisfaction_artifact",
         "app_bundle",
+        "app_identity",
     ):
         path = resolve_artifact(root, artifacts.get(name))
         if path is None or not path.exists():
@@ -304,24 +343,29 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
 
     screenshot = resolve_artifact(root, artifacts.get("screenshot"))
     final_screenshot = resolve_artifact(root, artifacts.get("final_screenshot"))
+    final_ui_screenshot = resolve_artifact(root, artifacts.get("final_ui_screenshot"))
     video = resolve_artifact(root, artifacts.get("video"))
     unit_xcresult = resolve_artifact(root, artifacts.get("unit_xcresult"))
     ui_xcresult = resolve_artifact(root, artifacts.get("ui_xcresult"))
     final_ui_xcresult = resolve_artifact(root, artifacts.get("final_ui_xcresult"))
     satisfaction = resolve_artifact(root, artifacts.get("satisfaction_artifact"))
     app_bundle = resolve_artifact(root, artifacts.get("app_bundle"))
+    app_identity = resolve_artifact(root, artifacts.get("app_identity"))
+    running_app_proof = resolve_artifact(root, artifacts.get("running_app_proof"))
     if screenshot and screenshot.is_file():
         errors.extend(validate_png(screenshot))
     if final_screenshot and final_screenshot.is_file():
         errors.extend(validate_png(final_screenshot))
+    if final_ui_screenshot and final_ui_screenshot.is_file():
+        errors.extend(validate_png(final_ui_screenshot))
     if video and video.is_file():
         errors.extend(validate_quicktime(video))
     if unit_xcresult and unit_xcresult.is_dir():
         errors.extend(validate_xcresult(unit_xcresult, required_bundle="HarnessTests"))
     if ui_xcresult and ui_xcresult.is_dir() and screenshot and screenshot.is_file():
         errors.extend(validate_xcresult(ui_xcresult, required_test=ui_test_identifier, expected_screenshot=screenshot))
-    if final_ui_xcresult and final_ui_xcresult.is_dir() and final_screenshot and final_screenshot.is_file():
-        errors.extend(validate_xcresult(final_ui_xcresult, required_test=final_attach_test, expected_screenshot=final_screenshot))
+    if final_ui_xcresult and final_ui_xcresult.is_dir() and final_ui_screenshot and final_ui_screenshot.is_file():
+        errors.extend(validate_xcresult(final_ui_xcresult, required_test=final_attach_test, expected_screenshot=final_ui_screenshot))
     if satisfaction and satisfaction.is_file():
         text = satisfaction.read_text(encoding="utf-8", errors="replace")
         required_markers = (
@@ -347,12 +391,42 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
         executable = app_bundle / "Contents" / "MacOS" / "Harness"
         if not executable.is_file():
             errors.append("current app bundle lacks the Harness executable")
+        if app_identity and app_identity.is_file():
+            validator = Path(__file__).with_name("verify_app_identity.py")
+            with tempfile.TemporaryDirectory(prefix="harness-identity-") as directory:
+                fresh_proof = Path(directory) / "identity.json"
+                identity_result = run_command(
+                    sys.executable,
+                    str(validator),
+                    "--app",
+                    str(app_bundle),
+                    "--output",
+                    str(fresh_proof),
+                )
+                if identity_result.returncode:
+                    errors.append(identity_result.stdout.strip() or identity_result.stderr.strip())
+                elif sha256_path(fresh_proof) != sha256_path(app_identity):
+                    errors.append("app identity proof does not match current signature and entitlements")
     pid = manifest.get("app_pid")
     if isinstance(pid, int) and pid > 0 and app_bundle:
         process = run_command("/bin/ps", "-p", str(pid), "-o", "command=")
         expected_command = str(app_bundle / "Contents" / "MacOS" / "Harness")
         if process.returncode or not process.stdout.strip().startswith(expected_command):
             errors.append("manifest PID is not the current signed Harness app process")
+        if running_app_proof and running_app_proof.is_file():
+            try:
+                proof = json.loads(running_app_proof.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                proof = {}
+            if (
+                proof.get("status") != "PASS"
+                or proof.get("pid") != pid
+                or proof.get("accessibility_pid") != pid
+                or proof.get("bundle_identifier") != "com.adamblair.Harness"
+                or proof.get("executable") != expected_command
+                or proof.get("accessibility_identifier") != manifest.get("final_accessibility_identifier")
+            ):
+                errors.append("final Accessibility proof is not bound to the exact candidate PID and requirement")
 
     try:
         repo = run_command("gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner", cwd=root)
@@ -409,13 +483,17 @@ def explicit_blocked_exit(message: str) -> bool:
 
 
 def explicit_user_question(message: str) -> bool:
-    return bool(message.strip()) and bool(USER_QUESTION.search(message)) and not bool(COMPLETION_WORDS.search(message))
+    return (
+        bool(message.strip())
+        and bool(USER_QUESTION.fullmatch(message.strip()))
+        and not completion_claim(message)
+    )
 
 
 def hook(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
     message = str(payload.get("last_assistant_message", ""))
     try:
-        changes = product_changes(root)
+        changes = guarded_changes(root)
     except GitInspectionError as error:
         return {"decision": "block", "reason": f"Task completion is blocked. {error}"}
     if not changes:

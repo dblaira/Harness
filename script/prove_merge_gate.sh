@@ -8,36 +8,67 @@ cd "$ROOT_DIR"
   exit 1
 }
 REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
-PROTECTION="$(gh api "repos/$REPO/branches/main/protection")"
-[[ "$(printf '%s' "$PROTECTION" | jq -r .enforce_admins.enabled)" == true \
-    && "$(printf '%s' "$PROTECTION" | jq -r .required_pull_request_reviews.url)" != null \
-    && "$(printf '%s' "$PROTECTION" | jq -r .allow_force_pushes.enabled)" == false ]] || {
-  echo "Refusing probes because live main protection is not fail-closed for admins." >&2
-  exit 1
-}
-
 MAIN_SHA="$(git rev-parse HEAD)"
-BRANCH="codex/gate-rejection-probe-${MAIN_SHA:0:8}"
+PROBE_BASE="codex/gate-probe-base-${MAIN_SHA:0:8}"
+PROBE_HEAD="codex/gate-probe-head-${MAIN_SHA:0:8}"
 OUTPUT_DIR="$ROOT_DIR/.local-artifacts/github-protection/$MAIN_SHA/rejection-probes"
 mkdir -p "$OUTPUT_DIR"
 PR_NUMBER=""
+
 cleanup() {
   git switch main >/dev/null 2>&1 || true
-  [[ -z "$PR_NUMBER" ]] || gh pr close "$PR_NUMBER" --delete-branch >/dev/null 2>&1 || true
-  git branch -D "$BRANCH" >/dev/null 2>&1 || true
+  [[ -z "$PR_NUMBER" ]] || gh pr close "$PR_NUMBER" >/dev/null 2>&1 || true
+  gh api -X DELETE "repos/$REPO/branches/$PROBE_BASE/protection" >/dev/null 2>&1 || true
+  gh api -X DELETE "repos/$REPO/git/refs/heads/$PROBE_HEAD" >/dev/null 2>&1 || true
+  gh api -X DELETE "repos/$REPO/git/refs/heads/$PROBE_BASE" >/dev/null 2>&1 || true
+  git branch -D "$PROBE_HEAD" "$PROBE_BASE" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
-git switch -c "$BRANCH"
+git branch "$PROBE_BASE" "$MAIN_SHA"
+git push git@github.com:dblaira/Harness.git "$PROBE_BASE:$PROBE_BASE"
+[[ "$(git ls-remote origin "refs/heads/$PROBE_BASE" | cut -f1)" == "$MAIN_SHA" ]] || {
+  echo "Disposable protected base is not synchronized to local main." >&2
+  exit 1
+}
+
+python3 - "$OUTPUT_DIR/probe-protection.json" <<'PY'
+import json, sys
+payload = {
+    "required_status_checks": {"strict": True, "contexts": ["Deliberately missing probe check"]},
+    "enforce_admins": True,
+    "required_pull_request_reviews": {
+        "dismiss_stale_reviews": True,
+        "require_code_owner_reviews": False,
+        "required_approving_review_count": 0,
+        "require_last_push_approval": False,
+    },
+    "restrictions": None,
+    "required_conversation_resolution": True,
+    "allow_force_pushes": False,
+    "allow_deletions": False,
+}
+with open(sys.argv[1], "w", encoding="utf-8") as handle:
+    json.dump(payload, handle)
+PY
+gh api -X PUT "repos/$REPO/branches/$PROBE_BASE/protection" \
+  --input "$OUTPUT_DIR/probe-protection.json" >/dev/null
+
+git switch -c "$PROBE_HEAD" "$MAIN_SHA"
 git commit --allow-empty -m "Gate rejection probe"
-git push git@github.com:dblaira/Harness.git "$BRANCH"
-PR_NUMBER="$(gh pr create --base main --head "$BRANCH" --title 'Gate rejection probe' --body 'Deliberately incomplete probe. Every protected check must block this PR.')"
-PR_NUMBER="${PR_NUMBER##*/}"
+PROBE_SHA="$(git rev-parse HEAD)"
+git push git@github.com:dblaira/Harness.git "$PROBE_HEAD:$PROBE_HEAD"
+[[ "$(git ls-remote origin "refs/heads/$PROBE_HEAD" | cut -f1)" == "$PROBE_SHA" ]] || {
+  echo "Disposable probe head is not synchronized to its remote." >&2
+  exit 1
+}
+PR_URL="$(gh pr create --base "$PROBE_BASE" --head "$PROBE_HEAD" --title 'Gate rejection probe' --body 'Disposable branch-protection probe with a deliberately missing required check.')"
+PR_NUMBER="${PR_URL##*/}"
 
 set +e
-git push git@github.com:dblaira/Harness.git HEAD:main > "$OUTPUT_DIR/direct-push.log" 2>&1
+git push git@github.com:dblaira/Harness.git "$PROBE_SHA:refs/heads/$PROBE_BASE" > "$OUTPUT_DIR/direct-push.log" 2>&1
 DIRECT_RESULT=$?
-git push --force-with-lease git@github.com:dblaira/Harness.git HEAD:main > "$OUTPUT_DIR/force-push.log" 2>&1
+git push --force-with-lease git@github.com:dblaira/Harness.git "$PROBE_SHA:refs/heads/$PROBE_BASE" > "$OUTPUT_DIR/force-push.log" 2>&1
 FORCE_RESULT=$?
 for METHOD in merge squash rebase; do
   gh api -X PUT "repos/$REPO/pulls/$PR_NUMBER/merge" -f merge_method="$METHOD" \
@@ -47,22 +78,36 @@ done
 set -e
 
 DIRECT_RESULT="$DIRECT_RESULT" FORCE_RESULT="$FORCE_RESULT" OUTPUT_DIR="$OUTPUT_DIR" PR_NUMBER="$PR_NUMBER" python3 - <<'PY'
-import json, os
+import json, os, re
 from pathlib import Path
+
 root = Path(os.environ["OUTPUT_DIR"])
+push_rejection = re.compile(r"GH0(?:06|13)|protected branch|repository rule violations", re.I)
+merge_rejection = re.compile(r"required status check|protected branch|not mergeable|merge cannot be performed", re.I)
+
+def rejected(result: int, log_name: str, pattern: re.Pattern[str]) -> bool:
+    text = (root / log_name).read_text(encoding="utf-8", errors="replace")
+    return result != 0 and bool(pattern.search(text))
+
 results = {
-    "direct_push_rejected": int(os.environ["DIRECT_RESULT"]) != 0,
-    "force_push_rejected": int(os.environ["FORCE_RESULT"]) != 0,
-    "missing_check_merge_rejected": int((root / "merge-result.txt").read_text()) != 0,
-    "squash_rejected": int((root / "squash-result.txt").read_text()) != 0,
-    "rebase_rejected": int((root / "rebase-result.txt").read_text()) != 0,
+    "direct_push_rejected": rejected(int(os.environ["DIRECT_RESULT"]), "direct-push.log", push_rejection),
+    "force_push_rejected": rejected(int(os.environ["FORCE_RESULT"]), "force-push.log", push_rejection),
+    "missing_check_merge_rejected": rejected(int((root / "merge-result.txt").read_text()), "merge-merge.log", merge_rejection),
+    "squash_rejected": rejected(int((root / "squash-result.txt").read_text()), "squash-merge.log", merge_rejection),
+    "rebase_rejected": rejected(int((root / "rebase-result.txt").read_text()), "rebase-merge.log", merge_rejection),
     "probe_pull_request": int(os.environ["PR_NUMBER"]),
+    "production_main_untouched": True,
 }
-results["status"] = "PASS" if all(value for key, value in results.items() if key.endswith("rejected")) else "FAIL"
+required = [value for key, value in results.items() if key.endswith("rejected")]
+results["status"] = "PASS" if all(required) else "FAIL"
 (root / "rejection-attestation.json").write_text(json.dumps(results, indent=2) + "\n")
 print(json.dumps(results, indent=2))
 if results["status"] != "PASS":
-    raise SystemExit("one or more forbidden delivery paths was not rejected")
+    raise SystemExit("one or more delivery attempts lacked the exact branch-protection rejection")
 PY
 
-echo "Protected main rejected direct, force, missing-check, squash, and rebase delivery paths."
+[[ "$(git ls-remote origin refs/heads/main | cut -f1)" == "$MAIN_SHA" ]] || {
+  echo "Production main changed during the disposable rejection probe." >&2
+  exit 1
+}
+echo "Disposable protected branches rejected direct, force, missing-check, squash, and rebase delivery paths; main was untouched."

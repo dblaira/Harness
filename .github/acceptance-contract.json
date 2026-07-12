@@ -3,5 +3,6 @@
   "visible_surface": "The Harness GitHub pull request checks and protection state, followed by the signed Harness macOS app on Adam's Mac for every product change.",
   "expected_visible_result": "No product pull request can merge without the hosted checks, independent Sol verdict, and signed Mac handoff status; no agent can end a product-change task without a valid commit-bound evidence manifest; the final main commit visibly attests that its tree exactly matches the verified pull-request head.",
   "ui_test_identifier": "INFRASTRUCTURE_ONLY",
-  "final_accessibility_identifier": "Delegation"
+  "final_accessibility_identifier": "Delegation",
+  "threat_model": "Adam's authenticated macOS session and dblaira GitHub administrator identity are trusted. The gates prevent accidental, careless, stale, and unreviewed handoffs; they do not claim cryptographic resistance to a malicious actor already controlling Adam's administrator credential, and they do not require Touch ID."
 }

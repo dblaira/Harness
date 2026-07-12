@@ -11,9 +11,15 @@ git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null || {
 }
 
 SWIFT_FILES=()
+CHANGED_FILES="$(mktemp)"
+trap 'rm -f "$CHANGED_FILES"' EXIT
+if ! git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD -- '*.swift' > "$CHANGED_FILES"; then
+  echo "Unable to inspect Swift changes from $BASE_SHA to HEAD." >&2
+  exit 1
+fi
 while IFS= read -r line; do
   [[ -n "$line" ]] && SWIFT_FILES+=("$line")
-done < <(git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD -- '*.swift')
+done < "$CHANGED_FILES"
 
 if [[ ${#SWIFT_FILES[@]} -eq 0 ]]; then
   echo "No changed Swift files to lint."

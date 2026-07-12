@@ -3,27 +3,33 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
-BRANCH="$(git branch --show-current)"
-if [[ "$BRANCH" != "main" ]]; then
-  [[ "${1:-}" == "--bootstrap-pr" && "${2:-}" == "19" ]] || {
-    echo "Trusted local gates may be installed only from protected main." >&2
-    exit 1
-  }
-  REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
-  SHA="$(git rev-parse HEAD)"
-  PR_JSON="$(gh api "repos/$REPO/pulls/19")"
-  [[ "$REPO" == "dblaira/Harness" \
-      && "$(printf '%s' "$PR_JSON" | jq -r .base.sha)" == "0ce97219a340d9a53f5afb2a773bb2c9eb81b807" \
-      && "$(printf '%s' "$PR_JSON" | jq -r .head.sha)" == "$SHA" \
-      && "$(printf '%s' "$PR_JSON" | jq -r .state)" == "open" ]] || {
-    echo "Bootstrap install is restricted to the reviewed Harness PR #19 revisions." >&2
-    exit 1
-  }
-fi
+[[ "$(git branch --show-current)" == "main" ]] || {
+  echo "Trusted local gates may be installed only from protected main." >&2
+  exit 1
+}
 [[ -z "$(git status --porcelain --untracked-files=normal)" ]] || {
   echo "Trusted local gates require a clean main checkout." >&2
   exit 1
 }
+
+REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
+PROTECTION="$(gh api "repos/$REPO/branches/main/protection")"
+RUNNERS="$(gh api "repos/$REPO/actions/runners")"
+PROTECTION="$PROTECTION" RUNNERS="$RUNNERS" python3 - <<'PY'
+import json, os
+required = {
+    "Acceptance contract", "Gate script tests", "macOS tests, SwiftLint, Periphery",
+    "CodeQL (swift)", "CodeQL (python)", "GPT-5.6 Sol review", "Signed Mac handoff",
+}
+protection = json.loads(os.environ["PROTECTION"])
+runners = json.loads(os.environ["RUNNERS"])
+actual = set(protection.get("required_status_checks", {}).get("contexts", []))
+errors = []
+if actual != required: errors.append("full required status context set is not installed")
+if not protection.get("enforce_admins", {}).get("enabled"): errors.append("branch protection does not enforce administrators")
+if runners.get("total_count") != 0: errors.append("public repository has a self-hosted runner")
+if errors: raise SystemExit("; ".join(errors))
+PY
 
 VERSION="$(git rev-parse HEAD)"
 DEST="$HOME/.local/share/harness-release-gates/$VERSION"
@@ -39,26 +45,36 @@ install -m 0755 \
   scripts/validate_sol_review.py \
   scripts/validate_xcresult.py \
   scripts/verify_codex_auth.py \
+  scripts/verify_codex_runtime.py \
+  scripts/verify_app_identity.py \
+  scripts/resolve_harness_repo.py \
   "$DEST/scripts/"
+install -m 0644 scripts/verify_running_app.swift "$DEST/scripts/"
 install -m 0644 .github/codex/review.schema.json .github/codex/sol-review.md "$DEST/.github/codex/"
 
+# shellcheck disable=SC2016 # Generated wrapper expands ROOT when it runs.
 printf '%s\n' \
   '#!/usr/bin/env bash' \
   'set -euo pipefail' \
-  "export HARNESS_REPO_ROOT='$ROOT_DIR'" \
+  "ROOT=\$(/usr/bin/python3 '$DEST/scripts/resolve_harness_repo.py' --cwd \"\$PWD\")" \
+  'export HARNESS_REPO_ROOT="$ROOT"' \
   "exec '$DEST/script/sol_review_gate.sh' \"\$@\"" \
   > "$BIN/harness-sol-review"
+# shellcheck disable=SC2016 # Generated wrapper expands ROOT when it runs.
 printf '%s\n' \
   '#!/usr/bin/env bash' \
   'set -euo pipefail' \
-  "export HARNESS_REPO_ROOT='$ROOT_DIR'" \
+  "ROOT=\$(/usr/bin/python3 '$DEST/scripts/resolve_harness_repo.py' --cwd \"\$PWD\")" \
+  'export HARNESS_REPO_ROOT="$ROOT"' \
   "exec '$DEST/script/handoff_gate.sh' \"\$@\"" \
   > "$BIN/harness-handoff"
+# shellcheck disable=SC2016 # Generated wrapper expands ROOT when it runs.
 printf '%s\n' \
   '#!/usr/bin/env bash' \
   'set -euo pipefail' \
-  "ROOT='\$(git rev-parse --show-toplevel 2>/dev/null || true)'" \
-  "if [[ \"\$ROOT\" != '$ROOT_DIR' ]]; then printf '%s\\n' '{\"continue\":true}'; exit 0; fi" \
+  "ROOT=\$(/usr/bin/python3 '$DEST/scripts/resolve_harness_repo.py' --cwd \"\$PWD\" 2>/dev/null || true)" \
+  'if [[ -z "$ROOT" ]]; then printf '\''%s\n'\'' '\''{"continue":true}'\''; exit 0; fi' \
+  'cd "$ROOT"' \
   "exec /usr/bin/python3 '$DEST/scripts/release_gate.py' hook" \
   > "$BIN/harness-stop-gate"
 chmod 0755 "$BIN/harness-sol-review" "$BIN/harness-handoff" "$BIN/harness-stop-gate"

@@ -3,8 +3,10 @@ set -euo pipefail
 
 ROOT_DIR="${HARNESS_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$ROOT_DIR"
-PHASE=full
-[[ "${1:-}" != "--bootstrap" ]] || PHASE=bootstrap
+[[ $# -eq 0 ]] || {
+  echo "usage: $0" >&2
+  exit 2
+}
 REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
 SHA="$(git rev-parse HEAD)"
 OUTPUT_DIR="$ROOT_DIR/.local-artifacts/github-protection/$SHA"
@@ -16,9 +18,9 @@ gh api -X PATCH "repos/$REPO" \
   -F allow_rebase_merge=false \
   -F delete_branch_on_merge=true > "$OUTPUT_DIR/repository.json"
 
-python3 - "$OUTPUT_DIR/protection-request.json" "$PHASE" <<'PY'
+python3 - "$OUTPUT_DIR/protection-request.json" <<'PY'
 import json, sys
-contexts = [] if sys.argv[2] == "bootstrap" else [
+contexts = [
     "Acceptance contract",
     "Gate script tests",
     "macOS tests, SwiftLint, Periphery",
@@ -65,7 +67,7 @@ gh api "repos/$REPO/actions/runners" > "$OUTPUT_DIR/runners.json"
 gh api "repos/$REPO/branches/main/protection" > "$OUTPUT_DIR/protection-readback.json"
 gh api "repos/$REPO" > "$OUTPUT_DIR/repository-readback.json"
 
-EVIDENCE_DIR="$OUTPUT_DIR" PHASE="$PHASE" python3 - <<'PY'
+EVIDENCE_DIR="$OUTPUT_DIR" python3 - <<'PY'
 import json, os
 from pathlib import Path
 root = Path(os.environ["EVIDENCE_DIR"])
@@ -74,7 +76,7 @@ protection = json.loads((root / "protection-readback.json").read_text())
 actions = json.loads((root / "actions.json").read_text())
 runners = json.loads((root / "runners.json").read_text())
 contexts = set(protection["required_status_checks"]["contexts"])
-required = set() if os.environ["PHASE"] == "bootstrap" else {
+required = {
     "Acceptance contract", "Gate script tests", "macOS tests, SwiftLint, Periphery",
     "CodeQL (swift)", "CodeQL (python)", "GPT-5.6 Sol review", "Signed Mac handoff",
 }
@@ -91,7 +93,7 @@ if actions.get("sha_pinning_required") is not True: errors.append("Actions SHA p
 if runners.get("total_count") != 0: errors.append("public repository has a self-hosted runner")
 attestation = {
     "status": "PASS" if not errors else "FAIL",
-    "phase": os.environ["PHASE"],
+    "phase": "full",
     "required_contexts": sorted(contexts),
     "merge_commit_only": repo.get("allow_merge_commit") and not repo.get("allow_squash_merge") and not repo.get("allow_rebase_merge"),
     "force_pushes_blocked": not protection.get("allow_force_pushes", {}).get("enabled"),
@@ -106,4 +108,4 @@ if errors:
 print(json.dumps(attestation, indent=2))
 PY
 
-echo "Installed and read back $PHASE protected main for $REPO at $SHA."
+echo "Installed and read back full protected main for $REPO at $SHA."

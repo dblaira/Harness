@@ -1,5 +1,5 @@
 ---
-description: iOS / SwiftUI stack — load Figma-SwiftUI and ship on main
+description: iOS / SwiftUI stack — load Figma-SwiftUI and deliver by agent-owned PR
 globs: "**/*.{swift,yml,pbxproj,xcconfig}"
 alwaysApply: false
 ---
@@ -8,6 +8,6 @@ alwaysApply: false
 
 When editing SwiftUI / Xcode / `project.yml`:
 - Load and follow **figma-swiftui** for design ↔ Swift work
-- Commit and push to **main** only unless Adam asks for a branch
+- Work on an agent-owned `codex/*` branch and deliver only through the protected pull-request workflow; never push directly to `main`
 - Never tell Adam to open Xcode, run xcodegen, or wait for TestFlight to verify routine changes
 - Prefer `ssh studio` for builds when not already on a Mac worker

@@ -11,12 +11,12 @@ from pathlib import Path
 
 REQUIRED_STATUS_CONTEXTS = {
     "Acceptance contract": "github-actions[bot]",
+    "Gate script tests": "github-actions[bot]",
+    "macOS tests, SwiftLint, Periphery": "github-actions[bot]",
     "GPT-5.6 Sol review": "dblaira",
     "Signed Mac handoff": "dblaira",
 }
 REQUIRED_CHECK_CONTEXTS = {
-    "Gate script tests",
-    "macOS tests, SwiftLint, Periphery",
     "CodeQL (swift)",
     "CodeQL (python)",
 }

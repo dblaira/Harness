@@ -38,3 +38,4 @@ If the same mistake happens twice: create a rule. Prefer system over apology.
 - Run signed handoff only with the immutable installed command `harness-handoff`; never let proposed code publish its own required status.
 - Never add or request an `OPENAI_API_KEY` for review. Adam intentionally blocks API keys so agents cannot choose separate API billing over his subscription.
 - Never configure Adam's Mac as a GitHub self-hosted runner for this public repository.
+- Threat model: Adam's authenticated macOS session and `dblaira` GitHub administrator identity are trusted operator boundaries. The gates prevent accidental, careless, stale, or unreviewed handoffs; they do not claim cryptographic resistance to a malicious actor already controlling Adam's administrator credential. Do not require Touch ID or classify that explicitly accepted operator capability as a release defect.

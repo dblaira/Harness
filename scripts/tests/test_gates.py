@@ -1,22 +1,27 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 
-SCRIPTS = Path(__file__).resolve().parents[1]
+SCRIPTS = Path(os.environ.get("HARNESS_SCRIPTS_UNDER_TEST", Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(SCRIPTS))
 
 import release_gate  # noqa: E402
+import resolve_harness_repo  # noqa: E402
 import require_latest_status  # noqa: E402
 import validate_acceptance_contract  # noqa: E402
 import validate_sol_review  # noqa: E402
 import validate_xcresult  # noqa: E402
 import verify_release_tree  # noqa: E402
 import verify_codex_auth  # noqa: E402
+import verify_codex_runtime  # noqa: E402
+import verify_app_identity  # noqa: E402
 
 
 class AcceptanceContractTests(unittest.TestCase):
@@ -161,26 +166,51 @@ class ReleaseGateTests(unittest.TestCase):
         self.assertFalse(release_gate.completion_claim("Blocked; this is not verified."))
 
     def test_hook_allows_only_explicit_blocked_exit_without_evidence(self) -> None:
-        original = release_gate.product_changes
-        release_gate.product_changes = lambda _root: ["Sources/Harness/Feature.swift"]
+        original = release_gate.guarded_changes
+        release_gate.guarded_changes = lambda _root: ["Sources/Harness/Feature.swift"]
         try:
             result = release_gate.hook(Path("."), {"last_assistant_message": "BLOCKED: missing external authority"})
             self.assertEqual(result, {"continue": True})
         finally:
-            release_gate.product_changes = original
+            release_gate.guarded_changes = original
 
     def test_hook_allows_intermediate_non_completion_message(self) -> None:
-        original = release_gate.product_changes
-        release_gate.product_changes = lambda _root: ["Sources/Harness/Feature.swift"]
+        original = release_gate.guarded_changes
+        release_gate.guarded_changes = lambda _root: ["Sources/Harness/Feature.swift"]
         try:
             result = release_gate.hook(Path("."), {"last_assistant_message": "Adam, should I use A or B?"})
             self.assertEqual(result, {"continue": True})
         finally:
-            release_gate.product_changes = original
+            release_gate.guarded_changes = original
+
+    def test_question_shaped_completion_claims_are_blocked(self) -> None:
+        original = release_gate.guarded_changes
+        release_gate.guarded_changes = lambda _root: ["Sources/Harness/Feature.swift"]
+        try:
+            for message in (
+                "Everything passes; does that look right?",
+                "The issue now works; anything else?",
+                "The repair was successful; should I stop?",
+            ):
+                result = release_gate.hook(Path("."), {"last_assistant_message": message})
+                self.assertEqual(result["decision"], "block")
+        finally:
+            release_gate.guarded_changes = original
+
+    def test_genuine_information_question_is_allowed(self) -> None:
+        original = release_gate.guarded_changes
+        release_gate.guarded_changes = lambda _root: ["Sources/Harness/Feature.swift"]
+        try:
+            result = release_gate.hook(
+                Path("."), {"last_assistant_message": "Adam, should I use the signed Debug or Release identity?"}
+            )
+            self.assertEqual(result, {"continue": True})
+        finally:
+            release_gate.guarded_changes = original
 
     def test_hook_blocks_malformed_paraphrased_and_mixed_completion(self) -> None:
-        original = release_gate.product_changes
-        release_gate.product_changes = lambda _root: ["Sources/Harness/Feature.swift"]
+        original = release_gate.guarded_changes
+        release_gate.guarded_changes = lambda _root: ["Sources/Harness/Feature.swift"]
         try:
             messages = (
                 "",
@@ -191,7 +221,7 @@ class ReleaseGateTests(unittest.TestCase):
                 result = release_gate.hook(Path("."), {"last_assistant_message": message})
                 self.assertEqual(result["decision"], "block")
         finally:
-            release_gate.product_changes = original
+            release_gate.guarded_changes = original
 
     def test_missing_base_fails_closed(self) -> None:
         original = release_gate.run_git
@@ -205,8 +235,8 @@ class ReleaseGateTests(unittest.TestCase):
             release_gate.run_git = original
 
     def test_git_inspection_failure_blocks_completion(self) -> None:
-        original = release_gate.product_changes
-        release_gate.product_changes = lambda _root: (_ for _ in ()).throw(
+        original = release_gate.guarded_changes
+        release_gate.guarded_changes = lambda _root: (_ for _ in ()).throw(
             release_gate.GitInspectionError("git status failed: repository unreadable")
         )
         try:
@@ -214,7 +244,7 @@ class ReleaseGateTests(unittest.TestCase):
             self.assertEqual(result["decision"], "block")
             self.assertIn("repository unreadable", result["reason"])
         finally:
-            release_gate.product_changes = original
+            release_gate.guarded_changes = original
 
     def test_package_manifests_are_product_changes(self) -> None:
         original = release_gate.changed_files
@@ -308,11 +338,157 @@ class CodexAuthorizationTests(unittest.TestCase):
         api = {"auth_mode": "apikey", "OPENAI_API_KEY": "key", "tokens": {}}
         self.assertTrue(verify_codex_auth.validate(api, {}))
 
+    def test_effective_runtime_rejects_custom_provider(self) -> None:
+        log = """model: gpt-5.6-sol
+provider: custom-proxy
+sandbox: read-only
+reasoning effort: max
+"""
+        errors, _ = verify_codex_runtime.validate(log)
+        self.assertIn(
+            "effective Codex provider is custom-proxy, expected openai",
+            errors,
+        )
+        self.assertIn(
+            "ANTHROPIC_API_KEY must be absent",
+            verify_codex_auth.validate(
+                {"auth_mode": "chatgpt", "OPENAI_API_KEY": None, "tokens": {"access_token": "t", "account_id": "a"}},
+                {"ANTHROPIC_API_KEY": "unexpected"},
+            ),
+        )
+
+
+class RepositoryBindingTests(unittest.TestCase):
+    def test_github_remote_formats_resolve_to_harness(self) -> None:
+        for remote in (
+            "https://github.com/dblaira/Harness.git",
+            "git@github.com:dblaira/Harness.git",
+            "ssh://git@github.com/dblaira/Harness.git",
+        ):
+            self.assertEqual(resolve_harness_repo.repository_from_remote(remote), "dblaira/Harness")
+
+    def test_second_worktree_resolves_to_its_own_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory) / "Harness"
+            worktree = Path(directory) / "Harness-worktree"
+            subprocess.run(["git", "init", "-q", str(base)], check=True)
+            subprocess.run(["git", "-C", str(base), "config", "user.email", "test@example.com"], check=True)
+            subprocess.run(["git", "-C", str(base), "config", "user.name", "Gate Test"], check=True)
+            (base / "README.md").write_text("fixture\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(base), "add", "README.md"], check=True)
+            subprocess.run(["git", "-C", str(base), "commit", "-qm", "fixture"], check=True)
+            subprocess.run(
+                ["git", "-C", str(base), "remote", "add", "origin", "git@github.com:dblaira/Harness.git"],
+                check=True,
+            )
+            subprocess.run(["git", "-C", str(base), "worktree", "add", "-qb", "codex/probe", str(worktree)], check=True)
+            self.assertEqual(resolve_harness_repo.resolve(worktree), worktree.resolve())
+
+
+class AppIdentityTests(unittest.TestCase):
+    def test_wrong_bundle_identifier_is_rejected_before_launch(self) -> None:
+        entitlements = dict(verify_app_identity.REQUIRED_ENTITLEMENTS)
+        signature = "TeamIdentifier=7FKUS5M5QS\nCDHash=abc123\n"
+        requirement = 'designated => identifier "com.adamblair.Harness" and anchor apple generic'
+        errors, _ = verify_app_identity.validate_identity(
+            "com.attacker.Substitute", signature, requirement, entitlements
+        )
+        self.assertIn(
+            "bundle identifier is com.attacker.Substitute, expected com.adamblair.Harness",
+            errors,
+        )
+
+
+class SwiftLintGateTests(unittest.TestCase):
+    def test_changed_file_discovery_failure_cannot_report_success(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            fake_git = fake_bin / "git"
+            fake_git.write_text(
+                "#!/usr/bin/env bash\n"
+                "if [[ \"$1 $2\" == \"rev-parse --show-toplevel\" ]]; then pwd; exit 0; fi\n"
+                "if [[ \"$1\" == \"cat-file\" ]]; then exit 0; fi\n"
+                "if [[ \"$1\" == \"diff\" ]]; then echo 'sentinel diff failure' >&2; exit 7; fi\n"
+                "exit 1\n",
+                encoding="utf-8",
+            )
+            fake_git.chmod(0o755)
+            environment = dict(os.environ)
+            environment["PATH"] = f"{fake_bin}:{environment.get('PATH', '')}"
+            result = subprocess.run(
+                ["/bin/bash", str(SCRIPTS / "lint_changed_swift.sh"), "fixture-base"],
+                cwd=root,
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Unable to inspect Swift changes", result.stderr)
+
+
+class InstructionConsistencyTests(unittest.TestCase):
+    def test_swift_rules_require_agent_owned_pull_request(self) -> None:
+        root = Path.cwd()
+        combined = "\n".join(
+            (root / path).read_text(encoding="utf-8")
+            for path in (".cursor/rules/ios-main-only.mdc", ".cursor/rules/stack-ios.mdc")
+        )
+        self.assertIn("agent-owned", combined)
+        self.assertNotIn("push to **main**", combined)
+
+
+class GateStructureTests(unittest.TestCase):
+    def test_handoff_checks_sol_and_head_before_proposed_execution(self) -> None:
+        handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
+        self.assertLess(handoff.index("SOL_URL="), handoff.index("xcodegen generate"))
+        self.assertLess(handoff.index("PR_HEAD_SHA="), handoff.index("xcodegen generate"))
+        self.assertGreaterEqual(handoff.count("--jq .head.sha"), 1)
+        self.assertIn("FINAL_PR_HEAD=", handoff)
+
+    def test_signature_identity_precedes_first_app_test_or_launch(self) -> None:
+        handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
+        identity = handoff.index("verify_app_identity.py")
+        unit_test = handoff.index("xcodebuild test \\")
+        ui_test = handoff.index("xcodebuild test-without-building")
+        normal_launch = handoff.index("/usr/bin/open -n")
+        self.assertLess(identity, unit_test)
+        self.assertLess(identity, ui_test)
+        self.assertLess(identity, normal_launch)
+
+    def test_permanent_installer_has_no_mutable_pr_bootstrap(self) -> None:
+        installer = (Path.cwd() / "script/install_local_gate_controls.sh").read_text(encoding="utf-8")
+        merge_gate = (Path.cwd() / "script/install_merge_gate.sh").read_text(encoding="utf-8")
+        self.assertNotIn("--bootstrap-pr", installer)
+        self.assertNotIn("--bootstrap", merge_gate)
+        self.assertIn("full required status context set is not installed", installer)
+
+    def test_hosted_evidence_is_exact_head_bound_and_forks_are_rejected(self) -> None:
+        verification = (Path.cwd() / ".github/workflows/verification.yml").read_text(encoding="utf-8")
+        acceptance = (Path.cwd() / ".github/workflows/acceptance-contract.yml").read_text(encoding="utf-8")
+        self.assertIn("github.event.pull_request.head.sha", verification)
+        self.assertIn("HARNESS_SCRIPTS_UNDER_TEST", verification)
+        self.assertIn("Fork pull requests are not accepted", acceptance)
+
+    def test_sol_runtime_is_pinned_to_official_provider(self) -> None:
+        reviewer = (Path.cwd() / "script/sol_review_gate.sh").read_text(encoding="utf-8")
+        self.assertIn("--ignore-user-config", reviewer)
+        self.assertIn('model_provider="openai"', reviewer)
+        self.assertIn("verify_codex_runtime.py", reviewer)
+
+    def test_rejection_probe_never_pushes_to_production_main(self) -> None:
+        probe = (Path.cwd() / "script/prove_merge_gate.sh").read_text(encoding="utf-8")
+        self.assertNotIn("HEAD:main", probe)
+        self.assertIn("$PROBE_SHA:refs/heads/$PROBE_BASE", probe)
+        self.assertIn("Production main changed", probe)
+
 
 class ReleaseTreeTests(unittest.TestCase):
     def test_merge_commit_attests_exact_verified_tree_and_checks(self) -> None:
         merge, first, head, tree = "m" * 40, "a" * 40, "b" * 40, "t" * 40
-        status_contexts = {"Acceptance contract", "GPT-5.6 Sol review", "Signed Mac handoff"}
+        status_contexts = set(verify_release_tree.REQUIRED_STATUS_CONTEXTS)
         statuses = [{
             "context": context,
             "state": "success",

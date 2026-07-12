@@ -15,17 +15,49 @@ concurrency:
 
 jobs:
   gate-script-tests:
-    name: Gate script tests
+    name: Protected gate-script verifier
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - name: Check out protected-base adversarial tests
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
-      - run: python3 -m unittest discover -s scripts/tests -v
+          path: trusted-base
+          persist-credentials: false
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: proposed
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run protected adversarial tests against proposed validators
+        working-directory: proposed
+        env:
+          HARNESS_SCRIPTS_UNDER_TEST: ${{ github.workspace }}/proposed/scripts
+        run: python3 ../trusted-base/scripts/tests/test_gates.py -v
+  publish-gate-script-verdict:
+    name: Publish gate-script verdict
+    if: always() && github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository
+    needs: gate-script-tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
+    steps:
+      - name: Publish exact-head gate-script verdict
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          STATE: ${{ needs.gate-script-tests.result == 'success' && 'success' || 'failure' }}
+        run: >-
+          gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA"
+          -f state="$STATE" -f context='Gate script tests'
+          -f description="Protected tests against proposed validators: $STATE"
+          -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
   macos-verification:
-    name: macOS tests, SwiftLint, Periphery
+    name: Protected macOS verifier
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: macos-latest
     steps:
@@ -33,36 +65,43 @@ jobs:
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
-          fetch-depth: 0
-      - name: Preserve trusted gate controls outside the proposal
+          path: trusted-base
+          persist-credentials: false
+      - name: Preserve protected controls outside the proposal
         run: |
           mkdir -p "$RUNNER_TEMP/gate-controls"
-          cp scripts/lint_changed_swift.sh "$RUNNER_TEMP/gate-controls/"
-          cp scripts/periphery_changed_gate.py "$RUNNER_TEMP/gate-controls/"
-          cp scripts/validate_xcresult.py "$RUNNER_TEMP/gate-controls/"
-          cp .swiftlint.yml "$RUNNER_TEMP/gate-controls/swiftlint.yml"
+          cp trusted-base/scripts/lint_changed_swift.sh "$RUNNER_TEMP/gate-controls/"
+          cp trusted-base/scripts/periphery_changed_gate.py "$RUNNER_TEMP/gate-controls/"
+          cp trusted-base/scripts/validate_xcresult.py "$RUNNER_TEMP/gate-controls/"
+          cp trusted-base/.swiftlint.yml "$RUNNER_TEMP/gate-controls/swiftlint.yml"
       - name: Check out exact proposed revision
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: proposed
           fetch-depth: 0
+          persist-credentials: false
       - name: Install gate tools
         run: brew install xcodegen swiftlint periphery
       - name: Generate project
+        working-directory: proposed
         run: xcodegen generate
       - name: SwiftLint changed Swift files
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           SWIFTLINT_CONFIG: ${{ runner.temp }}/gate-controls/swiftlint.yml
+        working-directory: proposed
         run: >-
           "$RUNNER_TEMP/gate-controls/lint_changed_swift.sh" "$BASE_SHA"
       - name: Periphery changed-code gate
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        working-directory: proposed
         run: >-
           python3 "$RUNNER_TEMP/gate-controls/periphery_changed_gate.py"
           --base "$BASE_SHA" --output "$RUNNER_TEMP/periphery.json"
       - name: OntologyKit deterministic tests
+        working-directory: proposed
         run: >-
           swift test --package-path Packages/OntologyKit
           --skip satisfactionGateAdamRealQuestionGetsCompleteAnswer
@@ -71,6 +110,7 @@ jobs:
           echo 'The live Ollama + Fuseki satisfaction test is intentionally excluded here.'
           echo "Signed Mac handoff is a protected required status and runs it fail-closed on Adam's Mac."
       - name: Harness macOS unit tests
+        working-directory: proposed
         run: |
           xcodebuild test \
             -project Harness.xcodeproj \
@@ -89,7 +129,26 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: macos-verification-${{ github.sha }}
+          name: macos-verification-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
             ${{ runner.temp }}/HarnessTests.xcresult
             ${{ runner.temp }}/periphery.json
+  publish-macos-verdict:
+    name: Publish macOS verdict
+    if: always() && github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository
+    needs: macos-verification
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
+    steps:
+      - name: Publish exact-head macOS verdict
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          STATE: ${{ needs.macos-verification.result == 'success' && 'success' || 'failure' }}
+        run: >-
+          gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA"
+          -f state="$STATE" -f context='macOS tests, SwiftLint, Periphery'
+          -f description="Protected macOS verification of exact head: $STATE"
+          -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
