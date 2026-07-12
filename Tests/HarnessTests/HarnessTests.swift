@@ -376,6 +376,89 @@ import OntologyKit
     #expect(records.allSatisfy { $0.action == .pass })
 }
 
+@Test func delegationReceiptPersistsExactThreeFieldsAndReloads() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("harness-delegation-receipt-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = DelegationReceiptStore(directory: root.appendingPathComponent("Delegations", isDirectory: true))
+    let receipt = DelegationReceipt(
+        id: "receipt-exact-words",
+        intent: "I want proof the harness app works.",
+        preferredApproach: "make my intentions clear, so the app can use it’s own system",
+        doneCondition: "A response that shows personalization about me,\ndone within 15 seconds.",
+        state: .submitted,
+        createdAt: Date(timeIntervalSince1970: 1_000)
+    )
+
+    try store.save(receipt)
+
+    let artifact = store.fileURL(for: receipt.id)
+    #expect(FileManager.default.fileExists(atPath: artifact.path))
+    let reloaded = try DelegationReceiptStore(directory: store.directory).load()
+    #expect(reloaded.count == 1)
+    #expect(reloaded.first?.id == receipt.id)
+    #expect(reloaded.first?.intent == receipt.intent)
+    #expect(reloaded.first?.preferredApproach == receipt.preferredApproach)
+    #expect(reloaded.first?.doneCondition == receipt.doneCondition)
+    #expect(reloaded.first?.state == .submitted)
+}
+
+@Test func delegationReceiptResultAtomicallyReplacesSubmittedState() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("harness-delegation-result-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = DelegationReceiptStore(directory: root)
+    var receipt = DelegationReceipt(
+        id: "receipt-result",
+        intent: "Do the work",
+        preferredApproach: "Use Harness",
+        doneCondition: "The result is visible",
+        state: .submitted,
+        createdAt: Date(timeIntervalSince1970: 2_000)
+    )
+    try store.save(receipt)
+
+    receipt.state = .completed
+    receipt.result = "Visible result"
+    receipt.updatedAt = Date(timeIntervalSince1970: 2_001)
+    try store.save(receipt)
+
+    let reloaded = try store.load()
+    #expect(reloaded.count == 1)
+    #expect(reloaded.first?.state == .completed)
+    #expect(reloaded.first?.result == "Visible result")
+}
+
+@Test func delegationReceiptSaveFailureProducesNoFalseArtifact() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("harness-delegation-blocked-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    try Data("not a directory".utf8).write(to: root)
+    let store = DelegationReceiptStore(directory: root)
+    let receipt = DelegationReceipt(
+        intent: "Keep this draft",
+        preferredApproach: "Do not clear it",
+        doneCondition: "A visible save error",
+        state: .submitted
+    )
+
+    #expect(throws: (any Error).self) {
+        try store.save(receipt)
+    }
+    #expect(!FileManager.default.fileExists(atPath: store.fileURL(for: receipt.id).path))
+}
+
+@Test func harnessInternalStorageNeverRequiresDocumentsFolderAccess() {
+    let root = MacWorkbenchModel.defaultHarnessDocumentsDirectory().standardizedFileURL.path
+    let delegations = MacWorkbenchModel.defaultOpportunityBoardDirectory().standardizedFileURL.path
+    let fascinations = MacWorkbenchModel.defaultFascinationsDirectory().standardizedFileURL.path
+
+    #expect(root.contains("/Library/Application Support/Harness"))
+    #expect(!root.contains("/Documents/Harness"))
+    #expect(delegations.hasPrefix(root))
+    #expect(fascinations.hasPrefix(root))
+}
+
 private func opportunityBoardRow(id: String, resource: String) -> OpportunityBoardRow {
     let envelope = OpportunityCardEnvelope(
         source: "\(id).md",

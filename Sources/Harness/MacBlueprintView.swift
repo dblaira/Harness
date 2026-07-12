@@ -329,7 +329,13 @@ struct MacBlueprintView: View {
                 // Adam's memo 20: "the delegation three steps are in the
                 // dead center of the page" -- centered on the PAGE, not
                 // on the leftover space between unequal columns.
-                composerCard
+                VStack(spacing: 10) {
+                    composerCard
+                    if !model.delegationReceipts.isEmpty || model.delegationSubmissionError != nil {
+                        landedStack
+                            .frame(maxHeight: max(120, geo.size.height - 250))
+                    }
+                }
                     .frame(width: min(geo.size.width * 0.44, 660))
                     .padding(.top, 14)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -557,57 +563,78 @@ struct MacBlueprintView: View {
     // (centerColumn retired -- the composer floats dead-center on the
     // page per memo 20; the middle of the column row is open space.)
 
-    /// Newest last, auto-scrolled to the latest turn. Adam's words show
-    /// as the small italic line they are; what agents return comes as a
-    /// bordered card in his lap.
+    /// Durable Delegation receipts live on the page where Adam submitted
+    /// them. Newest first; the stack scrolls when earlier receipts exceed the
+    /// remaining canvas height.
     private var landedStack: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(model.chatThread) { turn in
-                        landedTurn(turn).id(turn.id)
-                    }
-                    if model.isRunning {
-                        HStack(spacing: 6) {
-                            SavyBreathingDot(color: Theme.savyGreen, diameter: 7)
-                            Text("working")
-                                .font(.caption.weight(.bold))
-                                .textCase(.uppercase)
-                                .foregroundStyle(Theme.macFaint)
-                        }
-                        .id("working-indicator")
-                    }
+        ScrollView(.vertical, showsIndicators: true) {
+            VStack(alignment: .leading, spacing: 8) {
+                if let error = model.delegationSubmissionError {
+                    Text(error)
+                        .font(.system(size: 12.5, weight: .bold))
+                        .foregroundStyle(Theme.macRed)
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Theme.macWarmCream, in: Rectangle())
+                        .overlay(Rectangle().stroke(Theme.macRed, lineWidth: 3))
                 }
-                .padding(.trailing, 8)
-            }
-            .frame(maxWidth: .infinity)
-            .onChange(of: model.chatThread.count) {
-                if let lastID = model.chatThread.last?.id {
-                    withAnimation(.easeOut(duration: 0.25)) {
-                        proxy.scrollTo(lastID, anchor: .bottom)
-                    }
+                ForEach(model.delegationReceipts) { receipt in
+                    delegationReceiptCard(receipt)
                 }
             }
+            .padding(.trailing, 8)
         }
+        .frame(maxWidth: .infinity)
     }
 
-    @ViewBuilder
-    private func landedTurn(_ turn: ConversationTurn) -> some View {
-        if turn.role == .user {
-            Text(turn.text)
-                .font(.system(size: 12, design: .serif).italic())
-                .foregroundStyle(Theme.macMuted)
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                .multilineTextAlignment(.trailing)
-        } else {
-            Text(turn.text)
-                .font(.system(size: 12.5))
+    private func delegationReceiptCard(_ receipt: DelegationReceipt) -> some View {
+        let isWorking = receipt.state == .submitted
+            && model.activeDelegationReceiptID == receipt.id
+            && model.isRunning
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 7) {
+                if isWorking {
+                    SavyBreathingDot(color: Theme.savyGreen, diameter: 7)
+                }
+                Text(isWorking ? "SAVED · WORKING" : receipt.state.label)
+                    .font(.system(size: 10, weight: .heavy))
+                    .kerning(1.4)
+                    .foregroundStyle(receipt.state == .failed ? Theme.macRed : Theme.macMuted)
+                Spacer(minLength: 0)
+                Text(receipt.createdAt, style: .time)
+                    .font(.system(size: 10).monospacedDigit())
+                    .foregroundStyle(Theme.macFaint)
+            }
+
+            receiptLine("WHAT I WANT", receipt.intent)
+            receiptLine("WHEN I AM… I LIKE TO", receipt.preferredApproach)
+            receiptLine("DONE LOOKS LIKE", receipt.doneCondition)
+
+            if let result = receipt.result, !result.isEmpty {
+                Divider().overlay(Theme.macRed.opacity(0.35))
+                Text(result)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(Theme.macInk)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.macWarmCream, in: Rectangle())
+        .overlay(Rectangle().stroke(Theme.macRed, lineWidth: 3))
+    }
+
+    private func receiptLine(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(label)
+                .font(.system(size: 8.5, weight: .heavy))
+                .kerning(1.1)
+                .foregroundStyle(Theme.macRed)
+            Text(value.isEmpty ? "—" : value)
+                .font(.system(size: 12, design: .serif))
                 .foregroundStyle(Theme.macInk)
-                .textSelection(.enabled)
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.white, in: Rectangle())
-                .overlay(Rectangle().stroke(Theme.macRed, lineWidth: 3))
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -830,7 +857,7 @@ struct MacBlueprintView: View {
     /// formatting buttons from the audio memo.
     private var composerControlStrip: some View {
         HStack(spacing: 10) {
-            Button { model.send() } label: {
+            Button { model.sendDelegation() } label: {
                 Image(systemName: "arrow.up")
                     .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(.white)
@@ -838,6 +865,7 @@ struct MacBlueprintView: View {
                     .background(Theme.macRed, in: Circle())
             }
             .buttonStyle(.plain)
+            .keyboardShortcut(.return, modifiers: .command)
             .help("Send the delegation")
 
             Button { showPlusMenu.toggle() } label: {
@@ -1303,8 +1331,11 @@ struct MacBlueprintView: View {
     /// "distant operational world leaning into view."
     private func fleetLedgerBand(width: CGFloat) -> some View {
         HStack(alignment: .top, spacing: 26) {
-            ledgerGroup("SPEND") {
+            ledgerGroup("WEB CREDITS") {
                 Text("\(model.delegationAgentDailySpend) of \(model.delegationAgentDailyCreditLimit)")
+            }
+            ledgerGroup("MODEL TOKENS") {
+                Text(modelTokenLedgerSummary)
             }
             ledgerGroup("RUNS") {
                 HStack(spacing: 7) {
@@ -1350,6 +1381,12 @@ struct MacBlueprintView: View {
         }
         .rotation3DEffect(.degrees(16), axis: (x: 1, y: 0, z: 0), anchor: .bottom, perspective: 0.7)
         .offset(y: 6)
+    }
+
+    private var modelTokenLedgerSummary: String {
+        let recorded = model.runs.compactMap(\.tokenCount).reduce(0, +)
+        let untracked = model.runs.filter { $0.tokenCount == nil }.count
+        return "\(recorded.formatted()) recorded · \(untracked) untracked"
     }
 
     private func ledgerGroup<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {

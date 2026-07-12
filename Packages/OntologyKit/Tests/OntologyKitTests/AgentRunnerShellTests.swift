@@ -63,22 +63,4 @@ import Testing
     #expect(output.contains("status-detail"))
 }
 
-@Test func grokSingleTurnFallbackHasNoPlanningOrInteractionTools() throws {
-    let arguments = AgentRunner.grokSingleTurnCLIArguments(prompt: "Answer this.")
-    let toolsIndex = try #require(arguments.firstIndex(of: "--tools"))
-    let deniedIndex = try #require(arguments.firstIndex(of: "--disallowed-tools"))
-
-    #expect(arguments[toolsIndex + 1].isEmpty)
-    #expect(arguments.contains("--no-plan"))
-    #expect(arguments.contains("--no-memory"))
-    #expect(arguments.contains("--verbatim"))
-    #expect(arguments.contains("--max-turns"))
-
-    let denied = Set(arguments[deniedIndex + 1].split(separator: ",").map(String.init))
-    #expect(denied.contains("ask_user_question"))
-    #expect(denied.contains("todo_write"))
-    #expect(denied.contains("task"))
-    #expect(denied.contains("enter_plan_mode"))
-    #expect(denied.contains("exit_plan_mode"))
-}
 #endif

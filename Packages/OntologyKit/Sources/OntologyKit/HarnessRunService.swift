@@ -292,13 +292,14 @@ public struct HarnessRunService: Sendable {
         var response: BackendResponse
         var success: Bool
         var suppressCandidateExtraction: Bool
-        let resolvedLocalAnswer = localAnswer?
+        let trimmedLocalAnswer = localAnswer?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if let resolvedLocalAnswer, !resolvedLocalAnswer.isEmpty {
+        let resolvedLocalAnswer = trimmedLocalAnswer.flatMap { $0.isEmpty ? nil : $0 }
+        if let resolvedLocalAnswer {
             response = BackendResponse(
                 text: resolvedLocalAnswer,
-                tokenCount: nil,
-                cost: nil
+                tokenCount: 0,
+                cost: 0
             )
             success = true
             suppressCandidateExtraction = true
@@ -768,6 +769,165 @@ public struct HarnessRunService: Sendable {
         }
     }
 
+    /// The ledger has one usage slot per run, while an agentic run can make
+    /// several provider requests. Accumulate every provider-reported round so
+    /// the saved value is the run total rather than only the terminal call.
+    private struct UsageAccumulator: Sendable {
+        private var tokens = 0
+        private var observedTokens = false
+        private var cost = 0.0
+        private var observedCost = false
+
+        mutating func record(_ response: BackendResponse) {
+            if let tokenCount = response.tokenCount, tokenCount >= 0 {
+                observedTokens = true
+                let (sum, overflow) = tokens.addingReportingOverflow(tokenCount)
+                tokens = overflow ? Int.max : sum
+            }
+            if let responseCost = response.cost,
+               responseCost.isFinite,
+               responseCost >= 0 {
+                observedCost = true
+                cost += responseCost
+            }
+        }
+
+        func applying(to response: BackendResponse) -> BackendResponse {
+            BackendResponse(
+                text: response.text,
+                tokenCount: observedTokens ? tokens : response.tokenCount,
+                cost: observedCost ? cost : response.cost,
+                toolCalls: response.toolCalls
+            )
+        }
+    }
+
+    /// Authentication takes priority over deadline presentation. A 401 or an
+    /// expired session token can arrive after a slow proxy response; calling it
+    /// a timeout would hide the one action that can actually recover the run.
+    private static func isAuthorizationFailure(_ error: any Error) -> Bool {
+        let message = normalizedEvidence(error.localizedDescription)
+            .lowercased()
+            .replacingOccurrences(of: "’", with: "'")
+        let signals = [
+            "api key",
+            "session token",
+            "access token",
+            "expired token",
+            "invalid token",
+            "bearer",
+            "unauthorized",
+            "authorization",
+            "authentication",
+            "credentials",
+            "auth context",
+            "http 401",
+            "api 401",
+            "session 401",
+        ]
+        return signals.contains { message.contains($0) }
+    }
+
+    private static func isTimeoutFailure(_ error: any Error) -> Bool {
+        if let urlError = error as? URLError, urlError.code == .timedOut {
+            return true
+        }
+        let message = error.localizedDescription.lowercased()
+        return message.contains("timed out") || message.contains("timeout")
+    }
+
+    private static func providerFailureResponse(
+        backend: any ModelBackendAdapter,
+        error: any Error
+    ) -> BackendResponse {
+        BackendResponse(
+            text: providerFailureText(backend: backend, error: error),
+            tokenCount: nil,
+            cost: nil
+        )
+    }
+
+    private static func providerFailureText(
+        backend: any ModelBackendAdapter,
+        error: any Error
+    ) -> String {
+        let provider = backend.metadata.backend.rawValue
+        if isAuthorizationFailure(error) {
+            let lower = error.localizedDescription.lowercased()
+            if lower.contains("api key") {
+                return "Backend failed: \(provider) authorization failed. Add a valid API key, then send again."
+            }
+            return "Backend failed: \(provider) authorization failed. Re-authorize \(provider), then send again."
+        }
+        if isTimeoutFailure(error) {
+            return "Backend failed: \(provider) timed out before returning an answer."
+        }
+
+        let description = conciseErrorDescription(error)
+        if description.isEmpty {
+            return "Backend failed: \(provider) failed before returning an answer."
+        }
+        return "Backend failed: \(provider) failed: \(description)"
+    }
+
+    private static func providerFailureTrace(
+        backend: any ModelBackendAdapter,
+        error: any Error,
+        toolIteration: Int? = nil
+    ) -> String {
+        let provider = backend.metadata.backend.rawValue
+        let location = toolIteration.map { " during tool iteration \($0)" } ?? ""
+        if isAuthorizationFailure(error) {
+            return "\(provider) authorization failed\(location); surfaced a provider-specific recovery message."
+        }
+        if isTimeoutFailure(error) {
+            return "\(provider) timed out\(location) before returning an answer."
+        }
+        return "\(provider) failed\(location): \(conciseErrorDescription(error))"
+    }
+
+    private static func conciseErrorDescription(_ error: any Error) -> String {
+        let normalized = normalizedEvidence(error.localizedDescription)
+        guard normalized.count > 240 else { return normalized }
+        return String(normalized.prefix(239)) + "…"
+    }
+
+    /// Detect terminal process narration, not answers that happen to discuss
+    /// loading or searching. Completed answers normally contain a result
+    /// marker, structure, or more than the short one-step promise emitted by a
+    /// coding-agent CLI when its sole turn was consumed by planning.
+    private static func isTerminalProgressOnly(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= 500 else { return false }
+
+        let lower = trimmed
+            .lowercased()
+            .replacingOccurrences(of: "’", with: "'")
+        let normalized = normalizedEvidence(lower)
+        let progressPrefixes = [
+            "i'll load", "i will load", "i'm loading", "i am loading", "loading ",
+            "i'll inspect", "i will inspect", "i'm inspecting", "i am inspecting",
+            "i'll check", "i will check", "i'm checking", "i am checking",
+            "i'll search", "i will search", "i'm searching", "i am searching",
+            "let me load", "let me inspect", "let me check", "let me search",
+            "working on ", "i'm going to load", "i am going to load",
+        ]
+        guard progressPrefixes.contains(where: { normalized.hasPrefix($0) }) else {
+            return false
+        }
+
+        let completionSignals = [
+            "here is", "here's", "the answer is", "answer:", "result:",
+            "i found", "i completed", "completed:", "done:",
+            "\n#", "\n- ", "\n1. ", "```",
+        ]
+        return !completionSignals.contains { lower.contains($0) }
+    }
+
+    private static func progressOnlyFailureText(backend: any ModelBackendAdapter) -> String {
+        "Backend failed: \(backend.metadata.backend.rawValue) returned a progress update instead of a completed answer."
+    }
+
     private static func summarizeToolInput(_ input: JSONValue) -> String {
         let text = input.jsonString
         guard text.count > 300 else { return text }
@@ -885,7 +1045,7 @@ public struct AgentRunnerBackendAdapter: ModelBackendAdapter {
     }
 
     public func execute(packet: ModelPacket) async throws -> BackendResponse {
-        let text = try await runner.run(
+        try await runner.runResponse(
             backend: backend,
             system: packet.system,
             user: packet.userPrompt,
@@ -893,7 +1053,6 @@ public struct AgentRunnerBackendAdapter: ModelBackendAdapter {
             images: packet.images,
             apiKey: apiKey
         )
-        return BackendResponse(text: text, tokenCount: nil, cost: nil)
     }
 }
 

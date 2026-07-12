@@ -235,29 +235,19 @@ public struct AgentRunner: Sendable {
         }
 
         let history = ConversationTurn.cappedHistory(conversationHistory)
-        let transcriptPrompt = Self.transcriptPrompt(system: system, history: history, user: user)
         switch backend {
         case .codex:
             // Codex is subscription-session only. Never let an explicit or
             // ambient OpenAI API key silently switch this backend to paid API
             // execution.
-            if CodexSessionClient.loadSessionToken() != nil {
-                return try await CodexSessionClient().send(
-                    messages: Self.codexMessages(history: history, user: user, images: images),
-                    system: system
-                )
+            guard let sessionToken = CodexSessionClient.loadSessionToken() else {
+                throw CodexSessionClient.CodexSessionError.noSessionToken
             }
-            #if os(macOS)
-            guard let bin = codexPath else { throw RunError.notFound("codex CLI") }
-            return try shell(
-                bin,
-                ["exec", "--skip-git-repo-check", "--ignore-user-config", "--ephemeral", transcriptPrompt],
-                timeout: 300,
-                scrubSecretEnvironment: true
+            return try await CodexSessionClient().send(
+                messages: Self.codexMessages(history: history, user: user, images: images),
+                system: system,
+                sessionToken: sessionToken
             )
-            #else
-            throw RunError.notFound("codex CLI")
-            #endif
         case .grok:
             let key = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if !key.isEmpty {
@@ -273,24 +263,14 @@ public struct AgentRunner: Sendable {
                     sessionToken: sessionToken
                 )
             }
-            let sessionStatus = GrokSessionClient.sessionStatus()
-            if sessionStatus == .expired {
-                // The coding-agent CLI can refresh its own token, but it also
-                // injects an agent toolset and may spend its one turn planning
-                // instead of answering. Interactive chat must fail explicitly
-                // here rather than silently changing execution surfaces.
+            switch GrokSessionClient.sessionStatus() {
+            case .expired:
                 throw GrokSessionClient.GrokSessionError.expiredSessionToken
+            case .missing, .valid:
+                // `.valid` with no token is a read race; fail closed instead of
+                // changing execution surfaces behind the user's back.
+                throw GrokSessionClient.GrokSessionError.noSessionToken
             }
-            #if os(macOS)
-            guard let bin = grokPath else { throw RunError.notFound("grok CLI") }
-            return try shell(
-                bin,
-                Self.grokSingleTurnCLIArguments(prompt: transcriptPrompt),
-                timeout: 300
-            )
-            #else
-            throw RunError.notFound("xAI API key")
-            #endif
         case .claude:
             let c = ClaudeClient(apiKey: apiKey)
             return try await c.send(
@@ -320,30 +300,18 @@ public struct AgentRunner: Sendable {
         }
 
         let history = ConversationTurn.cappedHistory(conversationHistory)
-        let transcriptPrompt = Self.transcriptPrompt(system: system, history: history, user: user)
         switch backend {
         case .codex:
-            if let sessionToken = CodexSessionClient.loadSessionToken() {
-                return try await CodexSessionClient().send(
-                    messages: Self.codexMessages(history: history, user: user, images: images),
-                    system: system,
-                    tools: [],
-                    toolTranscript: [],
-                    sessionToken: sessionToken
-                )
+            guard let sessionToken = CodexSessionClient.loadSessionToken() else {
+                throw CodexSessionClient.CodexSessionError.noSessionToken
             }
-            #if os(macOS)
-            guard let bin = codexPath else { throw RunError.notFound("codex CLI") }
-            let text = try shell(
-                bin,
-                ["exec", "--skip-git-repo-check", "--ignore-user-config", "--ephemeral", transcriptPrompt],
-                timeout: 300,
-                scrubSecretEnvironment: true
+            return try await CodexSessionClient().send(
+                messages: Self.codexMessages(history: history, user: user, images: images),
+                system: system,
+                tools: [],
+                toolTranscript: [],
+                sessionToken: sessionToken
             )
-            return BackendResponse(text: text, tokenCount: nil, cost: nil)
-            #else
-            throw RunError.notFound("codex CLI")
-            #endif
 
         case .grok:
             let key = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -364,20 +332,12 @@ public struct AgentRunner: Sendable {
                     sessionToken: sessionToken
                 )
             }
-            if GrokSessionClient.sessionStatus() == .expired {
+            switch GrokSessionClient.sessionStatus() {
+            case .expired:
                 throw GrokSessionClient.GrokSessionError.expiredSessionToken
+            case .missing, .valid:
+                throw GrokSessionClient.GrokSessionError.noSessionToken
             }
-            #if os(macOS)
-            guard let bin = grokPath else { throw RunError.notFound("grok CLI") }
-            let text = try shell(
-                bin,
-                Self.grokSingleTurnCLIArguments(prompt: transcriptPrompt),
-                timeout: 300
-            )
-            return BackendResponse(text: text, tokenCount: nil, cost: nil)
-            #else
-            throw RunError.notFound("xAI API key")
-            #endif
 
         case .claude:
             return try await ClaudeClient(apiKey: apiKey).send(
@@ -497,27 +457,6 @@ public struct AgentRunner: Sendable {
         }
         transcript += "User: \(user)\n\nAssistant:"
         return transcript
-    }
-
-    /// Last-resort Grok CLI execution is answer-only. An empty tool allowlist
-    /// disables default tool injection; the explicit denylist protects older
-    /// CLI builds that treat an empty allowlist as unset. In particular,
-    /// `todo_write` and `ask_user_question` previously consumed the sole turn
-    /// and left Harness with only an intention sentence.
-    static func grokSingleTurnCLIArguments(prompt: String) -> [String] {
-        [
-            "-p", prompt,
-            "--output-format", "json",
-            "--max-turns", "1",
-            "--tools", "",
-            "--no-plan",
-            "--no-memory",
-            "--verbatim",
-            "--disable-web-search",
-            "--no-subagents",
-            "--disallowed-tools",
-            "run_terminal_cmd,grep,web_search,web_fetch,Agent,list_dir,read_file,search_replace,write,todo_write,ask_user_question,task,enter_plan_mode,exit_plan_mode",
-        ]
     }
 
     static let hermesStopSequences = ["\nUser:", "\n\nUser:", "\n---\nUser:"]

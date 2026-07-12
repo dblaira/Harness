@@ -53,8 +53,8 @@ final class MacWorkbenchModel: ObservableObject {
     @Published private(set) var isCapturingBuildScreenshot = false
     @Published var status = "Ledger ready"
     /// A Delegation-page send is a durable transaction, not a disappearing
-    /// chat draft. Receipts are loaded from Documents/Harness/Delegations so
-    /// Adam can see the exact three sentences again after relaunch.
+    /// chat draft. Receipts are loaded from Harness's app-owned Application
+    /// Support folder so relaunch persistence never asks for Documents access.
     @Published private(set) var delegationReceipts: [DelegationReceipt] = []
     @Published private(set) var delegationSubmissionError: String?
     @Published private(set) var activeDelegationReceiptID: String?
@@ -82,9 +82,6 @@ final class MacWorkbenchModel: ObservableObject {
     /// quoted sources only, sourced from watched .md files.
     @Published var fascinationCards: [FascinationCard] = []
     @Published private(set) var fascinationLoadIssue: String?
-    private static let harnessDocumentsBookmarkDefaultsKey = "Harness.documentsDirectoryBookmark"
-    private static var scopedHarnessDocumentsURL: URL?
-    private static var harnessDocumentsAccessPanelOpen = false
     @Published var connectors: [HarnessConnector] = HarnessConnectorRegistry.defaultConnectors()
     @Published var capabilities: [HarnessCapability] = HarnessCapabilityRegistry.defaultCapabilities()
     @Published var routePlan = HarnessExecutionRoutePlan(prompt: "", steps: [])
@@ -167,7 +164,6 @@ final class MacWorkbenchModel: ObservableObject {
         self.hasFirecrawlAPIKey = Self.loadFirecrawlAPIKey() != nil
         loadAPIKey(for: backend)
         refreshReadiness(for: backend)
-        Self.restoreHarnessDocumentsDirectoryAccess()
         Task {
             await refreshRuns()
             await restoreMostRecentSession()
@@ -980,9 +976,6 @@ final class MacWorkbenchModel: ObservableObject {
             opportunityBoardLoadIssue = nil
         } catch {
             opportunityBoardLoadIssue = error.localizedDescription
-            if Self.isHarnessDocumentsAccessError(error) {
-                requestHarnessDocumentsDirectoryAccess()
-            }
         }
 
         // Ubiquity container resolution, directory creation, and placeholder
@@ -1069,13 +1062,14 @@ final class MacWorkbenchModel: ObservableObject {
     }
 
     nonisolated static func defaultOpportunityBoardDirectory() -> URL {
-        defaultHarnessDocumentsDirectory()
+        let directory = defaultHarnessDocumentsDirectory()
             .appendingPathComponent("Delegations", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
     }
 
     private static func authorizedOpportunityBoardDirectory() -> URL {
-        (scopedHarnessDocumentsURL ?? defaultHarnessDocumentsDirectory())
-            .appendingPathComponent("Delegations", isDirectory: true)
+        defaultOpportunityBoardDirectory()
     }
 
     nonisolated static func loadOpportunityBoardRows(
@@ -1137,11 +1131,7 @@ final class MacWorkbenchModel: ObservableObject {
     func refreshSourcePool() {
         do {
             sourcePoolCards = try Self.loadSourcePoolCards(from: Self.authorizedOpportunityBoardDirectory())
-        } catch {
-            if Self.isHarnessDocumentsAccessError(error) {
-                requestHarnessDocumentsDirectoryAccess()
-            }
-        }
+        } catch {}
     }
 
     /// WO-N: "Stop discarding .sourceCard rows" -- loadOpportunityBoardRows
@@ -1285,104 +1275,7 @@ final class MacWorkbenchModel: ObservableObject {
             fascinationLoadIssue = nil
         } catch {
             fascinationLoadIssue = error.localizedDescription
-            if Self.isHarnessDocumentsAccessError(error) {
-                requestHarnessDocumentsDirectoryAccess()
-            }
         }
-    }
-
-    /// One user-selected grant owns the existing Harness folder for the
-    /// process lifetime. Both the original carousel and original Mind Map
-    /// are children of this folder; asking twice would create competing
-    /// panels and two independent pieces of permission state.
-    private static func restoreHarnessDocumentsDirectoryAccess(
-        defaults: UserDefaults = .standard
-    ) {
-        guard scopedHarnessDocumentsURL == nil,
-              let bookmark = defaults.data(forKey: harnessDocumentsBookmarkDefaultsKey)
-        else { return }
-        var stale = false
-        do {
-            let url = try URL(
-                resolvingBookmarkData: bookmark,
-                options: [.withSecurityScope],
-                relativeTo: nil,
-                bookmarkDataIsStale: &stale
-            )
-            guard harnessDocumentsDirectoryURLsReferToSameResource(
-                url,
-                defaultHarnessDocumentsDirectory()
-            ),
-                  url.startAccessingSecurityScopedResource() else { return }
-            scopedHarnessDocumentsURL = url
-            if stale {
-                let refreshed = try url.bookmarkData(
-                    options: [.withSecurityScope],
-                    includingResourceValuesForKeys: nil,
-                    relativeTo: nil
-                )
-                defaults.set(refreshed, forKey: harnessDocumentsBookmarkDefaultsKey)
-            }
-        } catch {
-            defaults.removeObject(forKey: harnessDocumentsBookmarkDefaultsKey)
-        }
-    }
-
-    private func requestHarnessDocumentsDirectoryAccess() {
-        guard !Self.harnessDocumentsAccessPanelOpen else { return }
-        Self.harnessDocumentsAccessPanelOpen = true
-        let expected = Self.defaultHarnessDocumentsDirectory().standardizedFileURL
-        let panel = NSOpenPanel()
-        panel.title = "Give Harness access to its existing folder"
-        panel.message = "Select this Harness folder so the original carousel and Mind Map can keep reading their cards."
-        panel.prompt = "Give Access"
-        panel.directoryURL = expected
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.canCreateDirectories = false
-        panel.begin { [weak self] response in
-            Task { @MainActor in
-                Self.harnessDocumentsAccessPanelOpen = false
-                guard let self else { return }
-                guard response == .OK, let selected = panel.url?.standardizedFileURL else {
-                    self.fascinationLoadIssue = "Folder access is required to show the original carousel."
-                    self.opportunityBoardLoadIssue = "Folder access is required to show the original Mind Map."
-                    return
-                }
-                guard Self.harnessDocumentsDirectoryURLsReferToSameResource(selected, expected) else {
-                    self.fascinationLoadIssue = "Choose the existing Documents/Harness folder."
-                    self.opportunityBoardLoadIssue = "Choose the existing Documents/Harness folder."
-                    return
-                }
-                do {
-                    let bookmark = try selected.bookmarkData(
-                        options: [.withSecurityScope],
-                        includingResourceValuesForKeys: nil,
-                        relativeTo: nil
-                    )
-                    UserDefaults.standard.set(bookmark, forKey: Self.harnessDocumentsBookmarkDefaultsKey)
-                    guard selected.startAccessingSecurityScopedResource() else {
-                        throw CocoaError(.fileReadNoPermission)
-                    }
-                    Self.scopedHarnessDocumentsURL = selected
-                    self.refreshFascinationCards()
-                    self.refreshOpportunityBoard()
-                    self.refreshSourcePool()
-                } catch {
-                    self.fascinationLoadIssue = "Harness folder access failed: \(error.localizedDescription)"
-                    self.opportunityBoardLoadIssue = "Harness folder access failed: \(error.localizedDescription)"
-                }
-            }
-        }
-    }
-
-    private static func isHarnessDocumentsAccessError(_ error: Error) -> Bool {
-        let nsError = error as NSError
-        return nsError.domain == NSCocoaErrorDomain && [
-            CocoaError.fileReadNoPermission.rawValue,
-            CocoaError.fileNoSuchFile.rawValue,
-        ].contains(nsError.code)
     }
 
     nonisolated static func harnessDocumentsDirectoryURLsReferToSameResource(
@@ -1394,19 +1287,24 @@ final class MacWorkbenchModel: ObservableObject {
     }
 
     nonisolated static func defaultHarnessDocumentsDirectory() -> URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Documents", isDirectory: true)
+        let root = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first!
             .appendingPathComponent("Harness", isDirectory: true)
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return root
     }
 
     nonisolated static func defaultFascinationsDirectory() -> URL {
-        defaultHarnessDocumentsDirectory()
+        let directory = defaultHarnessDocumentsDirectory()
             .appendingPathComponent("Fascinations", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
     }
 
     private static func authorizedFascinationsDirectory() -> URL {
-        (scopedHarnessDocumentsURL ?? defaultHarnessDocumentsDirectory())
-            .appendingPathComponent("Fascinations", isDirectory: true)
+        defaultFascinationsDirectory()
     }
 
     /// Same watched-folder pattern as loadOpportunityBoardRows, kept as
@@ -2672,6 +2570,7 @@ final class MacWorkbenchModel: ObservableObject {
         let chatMode = InteractiveChatPolicy.mode(prompt: prompt, routePlan: plannedRoute)
         let acceptedAuthorityOnly = InteractiveChatPolicy.requestsAcceptedAuthorityOnly(prompt)
             && chatMode == .singleShot
+        let productHelpAnswer = InteractiveChatPolicy.productHelpAnswer(for: prompt)
         let chatTools = InteractiveChatPolicy.tools(prompt: prompt, routePlan: plannedRoute)
         let maxToolIterations = InteractiveChatPolicy.maxToolIterations(
             prompt: prompt,
@@ -2788,7 +2687,8 @@ final class MacWorkbenchModel: ObservableObject {
                     backend: adapter,
                     images: visionImages,
                     conversationHistory: historySnapshot,
-                    includeSupportingMemory: !acceptedAuthorityOnly,
+                    localAnswer: productHelpAnswer,
+                    includeSupportingMemory: productHelpAnswer == nil && !acceptedAuthorityOnly,
                     answerFromAcceptedAuthority: acceptedAuthorityOnly,
                     tools: chatTools,
                     toolExecutor: executor,
@@ -3351,6 +3251,134 @@ struct WorkbenchToolGroup: Identifiable, Equatable {
         case "adams-words": return "quote.opening"
         default: return "sparkles"
         }
+    }
+}
+
+enum DelegationReceiptState: String, Codable, Sendable, Equatable {
+    case submitted
+    case completed
+    case failed
+    case cancelled
+
+    var label: String {
+        switch self {
+        case .submitted: return "SAVED"
+        case .completed: return "COMPLETED"
+        case .failed: return "FAILED"
+        case .cancelled: return "CANCELLED"
+        }
+    }
+}
+
+struct DelegationReceipt: Identifiable, Codable, Sendable, Equatable {
+    let id: String
+    let intent: String
+    let preferredApproach: String
+    let doneCondition: String
+    var state: DelegationReceiptState
+    var result: String?
+    let createdAt: Date
+    var updatedAt: Date
+
+    init(
+        id: String = UUID().uuidString,
+        intent: String,
+        preferredApproach: String,
+        doneCondition: String,
+        state: DelegationReceiptState = .submitted,
+        result: String? = nil,
+        createdAt: Date = Date(),
+        updatedAt: Date? = nil
+    ) {
+        self.id = id
+        self.intent = intent
+        self.preferredApproach = preferredApproach
+        self.doneCondition = doneCondition
+        self.state = state
+        self.result = result
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt ?? createdAt
+    }
+}
+
+enum DelegationReceiptStoreError: Error, LocalizedError, Equatable {
+    case readbackMismatch
+
+    var errorDescription: String? {
+        switch self {
+        case .readbackMismatch:
+            return "The delegation receipt did not match after atomic write."
+        }
+    }
+}
+
+/// One JSON artifact per Delegation-page submission. `Data.write(.atomic)`
+/// creates and renames a complete temporary file, so fields never clear on a
+/// partial or failed write. The dedicated prefix keeps these receipts separate
+/// from the existing markdown Opportunity Board parser in the same folder.
+struct DelegationReceiptStore: Sendable {
+    static let filenamePrefix = "DELEGATION-RECEIPT-"
+
+    let directory: URL
+
+    init(directory: URL) {
+        self.directory = directory
+    }
+
+    func save(_ receipt: DelegationReceipt) throws {
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        let data = try encoder.encode(receipt)
+        let destination = fileURL(for: receipt.id)
+        try data.write(to: destination, options: .atomic)
+
+        // The return code is not the acceptance test. Read the exact three
+        // fields back before the caller is allowed to clear the composer.
+        let saved = try decode(Data(contentsOf: destination))
+        guard saved.id == receipt.id,
+              saved.intent == receipt.intent,
+              saved.preferredApproach == receipt.preferredApproach,
+              saved.doneCondition == receipt.doneCondition,
+              saved.state == receipt.state,
+              saved.result == receipt.result
+        else {
+            throw DelegationReceiptStoreError.readbackMismatch
+        }
+    }
+
+    func load() throws -> [DelegationReceipt] {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: directory.path) else { return [] }
+        let files = try fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        )
+        return try files
+            .filter {
+                $0.lastPathComponent.hasPrefix(Self.filenamePrefix)
+                    && $0.pathExtension.lowercased() == "json"
+            }
+            .map { try decode(Data(contentsOf: $0)) }
+            .sorted {
+                if $0.createdAt == $1.createdAt { return $0.id > $1.id }
+                return $0.createdAt > $1.createdAt
+            }
+    }
+
+    func fileURL(for receiptID: String) -> URL {
+        directory.appendingPathComponent("\(Self.filenamePrefix)\(receiptID).json")
+    }
+
+    private func decode(_ data: Data) throws -> DelegationReceipt {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(DelegationReceipt.self, from: data)
     }
 }
 
