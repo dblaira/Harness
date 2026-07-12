@@ -40,8 +40,14 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: scripts/periphery_changed_gate.py --base "$BASE_SHA" --output "$RUNNER_TEMP/periphery.json"
-      - name: OntologyKit tests
-        run: swift test --package-path Packages/OntologyKit
+      - name: OntologyKit deterministic tests
+        run: >-
+          swift test --package-path Packages/OntologyKit
+          --skip satisfactionGateAdamRealQuestionGetsCompleteAnswer
+      - name: Require live satisfaction proof in signed handoff
+        run: |
+          echo 'The live Ollama + Fuseki satisfaction test is intentionally excluded here.'
+          echo "Signed Mac handoff is a protected required status and runs it fail-closed on Adam's Mac."
       - name: Harness macOS unit tests
         run: |
           xcodebuild test \

@@ -7,9 +7,9 @@ import Testing
 /// local Hermes model — exactly the path the app's chat uses, with no
 /// interactive deadline so the complete synthesis is captured.
 ///
-/// Skips cleanly when Ollama or Fuseki is down (e.g. CI). When it runs, it
-/// writes an on-disk proof artifact; a verification Pass without an artifact
-/// path is invalid.
+/// Ordinary deterministic CI excludes this test by name. The signed Mac
+/// handoff runs it with `HARNESS_REQUIRE_LIVE_SATISFACTION=1`, making absent
+/// Ollama or Fuseki a hard failure and requiring an on-disk proof artifact.
 private func liveEndpointUp(_ urlString: String) async -> Bool {
     guard let url = URL(string: urlString) else { return false }
     var request = URLRequest(url: url)
@@ -20,8 +20,16 @@ private func liveEndpointUp(_ urlString: String) async -> Bool {
 }
 
 @Test func satisfactionGateAdamRealQuestionGetsCompleteAnswer() async throws {
-    guard await liveEndpointUp("http://127.0.0.1:11434/api/tags"),
-          await liveEndpointUp("http://127.0.0.1:3030/$/ping") else {
+    let environment = ProcessInfo.processInfo.environment
+    let requireLiveProof = environment["HARNESS_REQUIRE_LIVE_SATISFACTION"] == "1"
+    let ollamaAvailable = await liveEndpointUp("http://127.0.0.1:11434/api/tags")
+    let fusekiAvailable = await liveEndpointUp("http://127.0.0.1:3030/$/ping")
+    let dependenciesAvailable = ollamaAvailable && fusekiAvailable
+    guard dependenciesAvailable else {
+        if requireLiveProof {
+            struct MissingLiveDependency: Error {}
+            throw MissingLiveDependency()
+        }
         return
     }
 
@@ -51,7 +59,8 @@ private func liveEndpointUp(_ urlString: String) async -> Bool {
     #expect(detail.run.success)
     #expect(!answer.hasPrefix("Harness stopped "))
 
-    let dir = URL(fileURLWithPath: "/Users/adamblair/Developer/GitHub/Harness/output/satisfaction-gate")
+    let defaultOutput = "/Users/adamblair/Developer/GitHub/Harness/output/satisfaction-gate"
+    let dir = URL(fileURLWithPath: environment["HARNESS_SATISFACTION_OUTPUT_DIR"] ?? defaultOutput)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let stamp = ISO8601DateFormatter().string(from: Date())
         .replacingOccurrences(of: ":", with: "-")

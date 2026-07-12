@@ -1,0 +1,65 @@
+name: Release tree attestation
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+  statuses: write
+
+jobs:
+  attest:
+    name: Verified release tree
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 2
+      - name: Collect verified head evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          MERGE_SHA: ${{ github.sha }}
+        run: |
+          read -r _ FIRST_PARENT VERIFIED_HEAD <<EOF
+          $(git rev-list --parents -n1 "$MERGE_SHA")
+          EOF
+          [[ -n "$FIRST_PARENT" && -n "$VERIFIED_HEAD" ]] || {
+            echo 'main did not receive a two-parent merge commit' >&2
+            exit 1
+          }
+          git rev-parse "$MERGE_SHA^{tree}" > merge-tree.txt
+          git rev-parse "$VERIFIED_HEAD^{tree}" > verified-tree.txt
+          gh api "repos/$REPO/commits/$VERIFIED_HEAD/status" > statuses.json
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            "repos/$REPO/commits/$VERIFIED_HEAD/check-runs?filter=latest&per_page=100" > checks.json
+          python3 scripts/verify_release_tree.py \
+            --merge-sha "$MERGE_SHA" \
+            --parent-line "$(git rev-list --parents -n1 "$MERGE_SHA")" \
+            --merge-tree "$(cat merge-tree.txt)" \
+            --verified-tree "$(cat verified-tree.txt)" \
+            --statuses statuses.json \
+            --checks checks.json \
+            --output release-attestation.json
+      - name: Publish final-commit attestation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          MERGE_SHA: ${{ github.sha }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh api -X POST "repos/$REPO/statuses/$MERGE_SHA" \
+            -f state=success \
+            -f context='Verified release tree' \
+            -f description='Final main commit exactly matches the fully verified PR tree' \
+            -f target_url="$RUN_URL"
+      - name: Preserve release attestation
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-attestation-${{ github.sha }}
+          path: release-attestation.json

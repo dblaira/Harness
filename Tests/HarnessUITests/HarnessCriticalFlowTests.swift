@@ -7,7 +7,6 @@ final class HarnessCriticalFlowTests: XCTestCase {
 
     func testSignedAppLaunchesItsVisibleDelegationSurface() throws {
         let app = XCUIApplication()
-        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
         app.launch()
         app.activate()
 

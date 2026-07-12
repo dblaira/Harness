@@ -31,14 +31,18 @@ SHA="$(git rev-parse HEAD)"
 OUTPUT_DIR="$ROOT_DIR/.local-artifacts/release-gate/$SHA"
 UNIT_RESULT_BUNDLE="$OUTPUT_DIR/HarnessUnitTests.xcresult"
 UI_RESULT_BUNDLE="$OUTPUT_DIR/HarnessRequirementUI.xcresult"
+FINAL_UI_RESULT_BUNDLE="$OUTPUT_DIR/HarnessFinalRelaunchUI.xcresult"
 SCREENSHOT="$OUTPUT_DIR/visible-result.png"
+FINAL_SCREENSHOT="$OUTPUT_DIR/final-relaunch-visible-result.png"
 VIDEO="$OUTPUT_DIR/visible-requirement.mov"
+SATISFACTION_DIR="$OUTPUT_DIR/satisfaction-gate"
 APP_BUNDLE="$ROOT_DIR/.build/HarnessCandidateDerivedData/Build/Products/Debug/Harness.app"
 CANDIDATE_DERIVED_DATA="$ROOT_DIR/.build/HarnessCandidateDerivedData"
 UNIT_DERIVED_DATA="$ROOT_DIR/.build/HarnessUnitDerivedData"
 mkdir -p "$OUTPUT_DIR"
-rm -rf "$UNIT_RESULT_BUNDLE" "$UI_RESULT_BUNDLE"
-rm -f "$SCREENSHOT" "$VIDEO"
+rm -rf "$UNIT_RESULT_BUNDLE" "$UI_RESULT_BUNDLE" "$FINAL_UI_RESULT_BUNDLE" "$SATISFACTION_DIR"
+rm -f "$SCREENSHOT" "$FINAL_SCREENSHOT" "$VIDEO"
+mkdir -p "$SATISFACTION_DIR"
 
 REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
 PR_NUMBER="$(gh api "repos/$REPO/commits/$SHA/pulls" --jq '[.[] | select(.state == "open")] | first | .number')"
@@ -52,17 +56,21 @@ python3 scripts/validate_acceptance_contract.py \
   --contract-json "$CONTRACT" \
   --pr-body-file "$PR_BODY_FILE"
 
-UI_TEST="$(CONTRACT="$CONTRACT" /usr/bin/python3 - <<'PY'
+CONTRACT_UI_TEST="$(CONTRACT="$CONTRACT" /usr/bin/python3 - <<'PY'
 import json, os
 from pathlib import Path
 print(json.loads(Path(os.environ["CONTRACT"]).read_text(encoding="utf-8"))["ui_test_identifier"])
 PY
 )"
+UI_TEST="$CONTRACT_UI_TEST"
+if [[ "$CONTRACT_UI_TEST" == "INFRASTRUCTURE_ONLY" ]]; then
+  UI_TEST="HarnessUITests/HarnessCriticalFlowTests/testSignedAppLaunchesItsVisibleDelegationSurface"
+fi
 [[ "$UI_TEST" == HarnessUITests/*/test* ]] || {
   echo "The handoff test must be one exact HarnessUITests method." >&2
   exit 1
 }
-[[ "$UI_TEST" != "HarnessUITests/HarnessCriticalFlowTests/testSignedAppLaunchesItsVisibleDelegationSurface" ]] || {
+[[ "$CONTRACT_UI_TEST" == "INFRASTRUCTURE_ONLY" || "$UI_TEST" != "HarnessUITests/HarnessCriticalFlowTests/testSignedAppLaunchesItsVisibleDelegationSurface" ]] || {
   echo "The generic launch smoke test cannot prove a feature requirement. Name an exact requirement test." >&2
   exit 1
 }
@@ -86,7 +94,19 @@ python3 scripts/validate_xcresult.py \
   --xcresult "$UNIT_RESULT_BUNDLE" \
   --required-bundle HarnessTests
 
-/usr/sbin/screencapture -v -V60 -m -x -k "$VIDEO" &
+HARNESS_REQUIRE_LIVE_SATISFACTION=1 \
+HARNESS_SATISFACTION_OUTPUT_DIR="$SATISFACTION_DIR" \
+swift test \
+  --package-path Packages/OntologyKit \
+  --filter satisfactionGateAdamRealQuestionGetsCompleteAnswer | tee "$OUTPUT_DIR/live-satisfaction.log"
+SATISFACTION_COUNT="$(find "$SATISFACTION_DIR" -type f -name 'gate-*.md' | wc -l | tr -d ' ')"
+[[ "$SATISFACTION_COUNT" == "1" ]] || {
+  echo "The required live satisfaction test did not produce exactly one proof artifact." >&2
+  exit 1
+}
+SATISFACTION_ARTIFACT="$(find "$SATISFACTION_DIR" -type f -name 'gate-*.md' -print -quit)"
+
+/usr/sbin/screencapture -v -V120 -m -x -k "$VIDEO" &
 VIDEO_PID=$!
 video_cleanup() {
   if kill -0 "$VIDEO_PID" 2>/dev/null; then
@@ -96,7 +116,7 @@ video_cleanup() {
 }
 trap video_cleanup EXIT
 
-xcodebuild test-without-building \
+python3 scripts/run_with_timeout.py --seconds 110 -- xcodebuild test-without-building \
   -project Harness.xcodeproj \
   -scheme HarnessUIVerification \
   -destination 'platform=macOS' \
@@ -104,6 +124,10 @@ xcodebuild test-without-building \
   -resultBundlePath "$UI_RESULT_BUNDLE" \
   "-only-testing:$UI_TEST"
 
+kill -0 "$VIDEO_PID" 2>/dev/null || {
+  echo "The video recording ended before the exact UI test completed." >&2
+  exit 1
+}
 wait "$VIDEO_PID"
 trap - EXIT
 python3 scripts/validate_xcresult.py \
@@ -141,15 +165,41 @@ PROCESS_COMMAND="$(ps -p "$PID" -o command=)"
   exit 1
 }
 
-SOL_URL="$(gh api "repos/$REPO/commits/$SHA/status" --jq '.statuses[] | select(.context == "GPT-5.6 Sol review" and .state == "success") | .target_url' | head -1)"
-[[ -n "$SOL_URL" ]] || {
-  echo "No passing GPT-5.6 Sol review is bound to commit $SHA." >&2
+rm -rf "$FINAL_UI_RESULT_BUNDLE"
+python3 scripts/run_with_timeout.py --seconds 110 -- xcodebuild test-without-building \
+  -project Harness.xcodeproj \
+  -scheme HarnessUIVerification \
+  -destination 'platform=macOS' \
+  -derivedDataPath "$CANDIDATE_DERIVED_DATA" \
+  -resultBundlePath "$FINAL_UI_RESULT_BUNDLE" \
+  "-only-testing:$UI_TEST"
+python3 scripts/validate_xcresult.py \
+  --xcresult "$FINAL_UI_RESULT_BUNDLE" \
+  --required-test "$UI_TEST" \
+  --max-duration 55 \
+  --screenshot-output "$FINAL_SCREENSHOT"
+[[ -s "$FINAL_SCREENSHOT" ]] || {
+  echo "The final normal relaunch did not produce visible requirement evidence." >&2
+  exit 1
+}
+PID="$(pgrep -x Harness | head -1 || true)"
+[[ -n "$PID" ]] || { echo "Harness is not running after final visible verification." >&2; exit 1; }
+PROCESS_COMMAND="$(ps -p "$PID" -o command=)"
+[[ "$PROCESS_COMMAND" == "$APP_BUNDLE/Contents/MacOS/Harness"* ]] || {
+  echo "Final verified Harness process is not the signed and UI-tested app bundle." >&2
+  exit 1
+}
+
+SOL_URL="$(gh api "repos/$REPO/commits/$SHA/status" | python3 scripts/require_latest_status.py --context 'GPT-5.6 Sol review')" || {
+  echo "The newest GPT-5.6 Sol review for commit $SHA is not successful." >&2
   exit 1
 }
 
 CONTRACT="$CONTRACT" OBSERVED="$OBSERVED" SCREENSHOT="$SCREENSHOT" VIDEO="$VIDEO" \
 VERIFIER="$VERIFIER" SHA="$SHA" OUTPUT_DIR="$OUTPUT_DIR" UNIT_RESULT_BUNDLE="$UNIT_RESULT_BUNDLE" \
-UI_RESULT_BUNDLE="$UI_RESULT_BUNDLE" APP_BUNDLE="$APP_BUNDLE" PID="$PID" SOL_URL="$SOL_URL" \
+UI_RESULT_BUNDLE="$UI_RESULT_BUNDLE" FINAL_UI_RESULT_BUNDLE="$FINAL_UI_RESULT_BUNDLE" \
+FINAL_SCREENSHOT="$FINAL_SCREENSHOT" SATISFACTION_ARTIFACT="$SATISFACTION_ARTIFACT" \
+APP_BUNDLE="$APP_BUNDLE" PID="$PID" SOL_URL="$SOL_URL" ACTUAL_UI_TEST="$UI_TEST" \
 TEAM_IDENTIFIER="$TEAM_IDENTIFIER" CDHASH="$CDHASH" /usr/bin/python3 - <<'PY'
 import datetime
 import hashlib
@@ -178,6 +228,9 @@ artifacts = {
     "video": os.environ["VIDEO"],
     "unit_xcresult": os.environ["UNIT_RESULT_BUNDLE"],
     "ui_xcresult": os.environ["UI_RESULT_BUNDLE"],
+    "final_screenshot": os.environ["FINAL_SCREENSHOT"],
+    "final_ui_xcresult": os.environ["FINAL_UI_RESULT_BUNDLE"],
+    "satisfaction_artifact": os.environ["SATISFACTION_ARTIFACT"],
 }
 manifest = {
     "schema_version": 1,
@@ -188,7 +241,8 @@ manifest = {
     "requirement_verbatim": contract["requirement_verbatim"],
     "visible_surface": contract["visible_surface"],
     "expected_visible_result": contract["expected_visible_result"],
-    "ui_test_identifier": contract["ui_test_identifier"],
+    "acceptance_test_identifier": contract["ui_test_identifier"],
+    "ui_test_identifier": os.environ["ACTUAL_UI_TEST"],
     "observed_visible_result": observed,
     "app_bundle": os.environ["APP_BUNDLE"],
     "app_pid": int(os.environ["PID"]),
@@ -199,7 +253,9 @@ manifest = {
     "verifier": os.environ["VERIFIER"],
     "tests": [
         {"name": "macos-unit-tests", "status": "PASS"},
-        {"name": "macos-ui-tests", "status": "PASS", "test_identifier": contract["ui_test_identifier"]},
+        {"name": "macos-ui-tests", "status": "PASS", "test_identifier": os.environ["ACTUAL_UI_TEST"]},
+        {"name": "final-relaunch-ui-test", "status": "PASS", "test_identifier": os.environ["ACTUAL_UI_TEST"]},
+        {"name": "live-satisfaction-gate", "status": "PASS"},
     ],
     "sol_review": {"status": "PASS", "check_run_url": os.environ["SOL_URL"]},
     "artifacts": artifacts,

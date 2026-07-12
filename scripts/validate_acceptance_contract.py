@@ -74,8 +74,13 @@ def validate_handoff_contract(contract: dict, pr_body: str | None = None) -> lis
         if any(marker in value.upper() for marker in PLACEHOLDERS) or value.strip() == example:
             errors.append(f"placeholder remains in {key}")
     ui_test = contract.get("ui_test_identifier", "")
-    if isinstance(ui_test, str) and ui_test and not UI_TEST_PATTERN.fullmatch(ui_test):
-        errors.append("ui_test_identifier must name one exact HarnessUITests test method")
+    if (
+        isinstance(ui_test, str)
+        and ui_test
+        and ui_test != "INFRASTRUCTURE_ONLY"
+        and not UI_TEST_PATTERN.fullmatch(ui_test)
+    ):
+        errors.append("ui_test_identifier must be INFRASTRUCTURE_ONLY or name one exact HarnessUITests test method")
 
     if pr_body is not None:
         mapping = {

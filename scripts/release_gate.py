@@ -22,8 +22,14 @@ PRODUCT_PREFIXES = (
     "Packages/OntologyKit/Tests/",
 )
 PRODUCT_FILES = {"project.yml"}
+PRODUCT_FILES.update(
+    {
+        "Packages/OntologyKit/Package.swift",
+        "Packages/OntologyKit/Package.resolved",
+    }
+)
 COMPLETION_WORDS = re.compile(
-    r"\b(done|fixed|implemented|ready|verified|working|shipped|complete|completed)\b",
+    r"\b(done|fixed|implemented|installed|ready|verified|working|shipped|complete|completed)\b",
     re.IGNORECASE,
 )
 NON_COMPLETION = re.compile(
@@ -33,12 +39,17 @@ NON_COMPLETION = re.compile(
 UI_TEST_PATTERN = re.compile(r"^HarnessUITests/[A-Za-z_][A-Za-z0-9_]*/test[A-Za-z0-9_]+$")
 
 
+class GitInspectionError(RuntimeError):
+    """Raised when release evidence cannot safely inspect repository state."""
+
+
 def run_git(root: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", *args], cwd=root, text=True, capture_output=True, check=False
     )
     if result.returncode:
-        return ""
+        detail = result.stderr.strip() or result.stdout.strip() or "unknown git error"
+        raise GitInspectionError(f"git {' '.join(args)} failed: {detail}")
     return result.stdout.strip()
 
 
@@ -49,7 +60,14 @@ def current_commit(root: Path) -> str:
 def changed_files(root: Path) -> set[str]:
     files: set[str] = set()
     base = os.environ.get("HARNESS_GATE_BASE", "origin/main")
-    if run_git(root, "rev-parse", "--verify", base):
+    base_exists = subprocess.run(
+        ["git", "rev-parse", "--verify", base],
+        cwd=root,
+        text=True,
+        capture_output=True,
+        check=False,
+    ).returncode == 0
+    if base_exists:
         files.update(run_git(root, "diff", "--name-only", f"{base}...HEAD").splitlines())
     else:
         files.update(run_git(root, "diff", "--name-only", "HEAD^").splitlines())
@@ -97,7 +115,12 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
     if not isinstance(manifest, dict):
         return ["handoff manifest must be a JSON object"]
 
-    expected_commit = current_commit(root)
+    try:
+        expected_commit = current_commit(root)
+        expected_tree = run_git(root, "rev-parse", "HEAD^{tree}")
+        current_status = run_git(root, "status", "--porcelain", "--untracked-files=normal")
+    except GitInspectionError as error:
+        return [str(error)]
     if manifest.get("schema_version") != 1:
         errors.append("schema_version must be 1")
     if manifest.get("status") != "PASS":
@@ -123,23 +146,34 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
         errors.append("signed app verification did not pass")
     if manifest.get("app_team_identifier") != "7FKUS5M5QS":
         errors.append("signed app team identifier does not match Adam's Harness team")
-    if manifest.get("git_tree") != run_git(root, "rev-parse", "HEAD^{tree}"):
+    if manifest.get("git_tree") != expected_tree:
         errors.append("manifest git tree does not match HEAD")
     if not isinstance(manifest.get("app_pid"), int) or manifest.get("app_pid", 0) <= 0:
         errors.append("a live signed app PID is required")
     if manifest.get("working_tree_clean") is not True:
         errors.append("working tree was not clean when evidence was captured")
-    if run_git(root, "status", "--porcelain", "--untracked-files=normal"):
+    if current_status:
         errors.append("working tree is not currently clean")
     ui_test_identifier = manifest.get("ui_test_identifier", "")
     if not isinstance(ui_test_identifier, str) or not UI_TEST_PATTERN.fullmatch(ui_test_identifier):
         errors.append("manifest does not name an exact HarnessUITests requirement test")
+    acceptance_test_identifier = manifest.get("acceptance_test_identifier", "")
+    if (
+        acceptance_test_identifier != "INFRASTRUCTURE_ONLY"
+        and acceptance_test_identifier != ui_test_identifier
+    ):
+        errors.append("executed UI test does not match the reviewed acceptance contract")
 
     tests = manifest.get("tests")
     if not isinstance(tests, list):
         errors.append("tests must be a list")
         tests = []
-    required_tests = {"macos-unit-tests", "macos-ui-tests"}
+    required_tests = {
+        "macos-unit-tests",
+        "macos-ui-tests",
+        "final-relaunch-ui-test",
+        "live-satisfaction-gate",
+    }
     passed_tests = {
         test.get("name")
         for test in tests or []
@@ -153,6 +187,12 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
     ]
     if len(ui_results) != 1 or ui_results[0].get("test_identifier") != ui_test_identifier:
         errors.append("UI test result is not bound to the manifest requirement test")
+    final_results = [
+        test for test in tests or []
+        if isinstance(test, dict) and test.get("name") == "final-relaunch-ui-test"
+    ]
+    if len(final_results) != 1 or final_results[0].get("test_identifier") != ui_test_identifier:
+        errors.append("final relaunch result is not bound to the manifest requirement test")
 
     review = manifest.get("sol_review") or {}
     if not isinstance(review, dict):
@@ -169,7 +209,15 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
     if not isinstance(hashes, dict):
         errors.append("artifact_sha256 must be an object")
         hashes = {}
-    for name in ("screenshot", "video", "unit_xcresult", "ui_xcresult"):
+    for name in (
+        "screenshot",
+        "video",
+        "unit_xcresult",
+        "ui_xcresult",
+        "final_screenshot",
+        "final_ui_xcresult",
+        "satisfaction_artifact",
+    ):
         path = resolve_artifact(root, artifacts.get(name))
         if path is None or not path.exists():
             errors.append(f"artifact is missing: {name}")
@@ -190,10 +238,15 @@ def completion_claim(message: str) -> bool:
 
 def hook(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
     message = str(payload.get("last_assistant_message", ""))
-    changes = product_changes(root)
-    if not changes:
-        return {"continue": True}
     if NON_COMPLETION.search(message) and "BLOCKED:" in message.upper():
+        return {"continue": True}
+    if not completion_claim(message):
+        return {"continue": True}
+    try:
+        changes = product_changes(root)
+    except GitInspectionError as error:
+        return {"decision": "block", "reason": f"Task completion is blocked. {error}"}
+    if not changes:
         return {"continue": True}
     path = manifest_path(root)
     errors = validate_manifest(root, path) if path.exists() else ["handoff manifest is absent"]
@@ -215,7 +268,10 @@ def main() -> int:
     validate_parser.add_argument("--manifest", type=Path)
     subparsers.add_parser("hook")
     args = parser.parse_args()
-    root = Path(run_git(Path.cwd(), "rev-parse", "--show-toplevel") or Path.cwd()).resolve()
+    try:
+        root = Path(run_git(Path.cwd(), "rev-parse", "--show-toplevel")).resolve()
+    except GitInspectionError:
+        root = Path.cwd().resolve()
 
     if args.command == "validate":
         path = (args.manifest or manifest_path(root)).resolve()
