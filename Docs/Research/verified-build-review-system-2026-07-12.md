@@ -31,7 +31,7 @@ Branch `codex/verified-build-gates` installs the recommended system as repositor
 
 - agent-owned pull requests and a literal acceptance-contract validator;
 - protected-base acceptance validation that proposed PR code cannot weaken;
-- GitHub-hosted macOS tests, SwiftLint, changed-code Periphery, and Swift/Python CodeQL;
+- GitHub-hosted macOS tests, SwiftLint, changed-line Periphery, and Swift/Python CodeQL; Periphery scans the complete project for relationships but blocks only findings located on added or changed PR lines, so pre-existing debt in a touched file cannot deadlock unrelated work;
 - an immutable-SHA, read-only `gpt-5.6-sol` review with structured fail-closed output;
 - a signed macOS XCUITest target and a handoff command that records the exact named requirement test;
 - a fail-closed live Ollama + Fuseki satisfaction proof, excluded by name from deterministic hosted tests and required by the signed local handoff;

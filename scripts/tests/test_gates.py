@@ -445,6 +445,53 @@ class EvidenceBindingTests(unittest.TestCase):
             select_pull_request.select_pull_request(pulls, sha)
 
 
+class PeripheryChangedLineTests(unittest.TestCase):
+    def test_legacy_findings_are_ignored_but_changed_line_findings_block(self) -> None:
+        root = Path("/proposal")
+        diff = """diff --git a/Feature.swift b/Feature.swift
+--- a/Feature.swift
++++ b/Feature.swift
+@@ -9,0 +10,2 @@
++let changed = true
++let alsoChanged = true
+"""
+        changed = periphery_changed_gate.parse_changed_lines(diff, root)
+        findings = [
+            {"name": "legacy", "location": "/proposal/Feature.swift:3:1"},
+            {"name": "new", "location": "/proposal/Feature.swift:10:1"},
+        ]
+        self.assertEqual(
+            periphery_changed_gate.changed_findings(findings, changed),
+            [findings[1]],
+        )
+
+    def test_deletion_only_hunk_has_no_head_lines_to_gate(self) -> None:
+        diff = """diff --git a/Feature.swift b/Feature.swift
+--- a/Feature.swift
++++ b/Feature.swift
+@@ -4,2 +4,0 @@
+-let deleted = true
+-let removed = true
+"""
+        changed = periphery_changed_gate.parse_changed_lines(diff, Path("/proposal"))
+        self.assertFalse(any(changed.values()))
+
+    def test_deleted_file_cannot_attach_hunks_to_previous_file(self) -> None:
+        diff = """diff --git a/Kept.swift b/Kept.swift
+--- a/Kept.swift
++++ b/Kept.swift
+@@ -1,0 +2,1 @@
++let kept = true
+diff --git a/Deleted.swift b/Deleted.swift
+--- a/Deleted.swift
++++ /dev/null
+@@ -1,1 +0,0 @@
+-let deleted = true
+"""
+        changed = periphery_changed_gate.parse_changed_lines(diff, Path("/proposal"))
+        self.assertEqual(changed[Path("/proposal/Kept.swift")], {2})
+
+
 class AppIdentityTests(unittest.TestCase):
     def test_wrong_bundle_identifier_is_rejected_before_launch(self) -> None:
         entitlements = dict(verify_app_identity.REQUIRED_ENTITLEMENTS)
@@ -566,10 +613,12 @@ class GateStructureTests(unittest.TestCase):
         self.assertIn('--config", str(config)', periphery)
         protected = Path("/trusted/periphery.yml")
         arguments = periphery_changed_gate.scan_arguments(
-            protected, Path("/tmp/findings.json"), {"/proposal/Feature.swift"}
+            protected, Path("/tmp/findings.json")
         )
         self.assertEqual(arguments[arguments.index("--config") + 1], str(protected))
         self.assertNotIn("/proposal/.periphery.yml", arguments)
+        self.assertNotIn("--report-include", arguments)
+        self.assertNotIn("--strict", arguments)
 
     def test_local_statuses_include_pr_specific_evidence_binding(self) -> None:
         sol = (Path.cwd() / "script/sol_review_gate.sh").read_text(encoding="utf-8")
