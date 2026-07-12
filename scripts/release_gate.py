@@ -50,12 +50,18 @@ GATE_FILES = {
     "scripts/verify_codex_runtime.py",
 }
 COMPLETION_WORDS = re.compile(
-    r"\b(done|fixed|implemented|installed|ready|verified|working|works|passes|passed|"
+    r"\b(done|fixed|implemented|installed|ready|verified|working|works|pass|passes|passed|"
     r"resolved|successful|succeeded|shipped|complete|completed)\b",
     re.IGNORECASE,
 )
 NON_COMPLETION = re.compile(
     r"\b(not done|not ready|not verified|unverified|incomplete|blocked|failed|could not)\b",
+    re.IGNORECASE,
+)
+NEGATED_COMPLETION = re.compile(
+    r"\b(?:not|never|cannot|can't|could not|did not|does not|isn't|wasn't)\s+"
+    r"(?:done|fixed|implemented|installed|ready|verified|working|works|pass|passes|passed|"
+    r"resolved|successful|succeeded|shipped|complete|completed)\b",
     re.IGNORECASE,
 )
 UI_TEST_PATTERN = re.compile(r"^HarnessUITests/[A-Za-z_][A-Za-z0-9_]*/test[A-Za-z0-9_]+$")
@@ -580,7 +586,12 @@ def completion_claim(message: str) -> bool:
 
 
 def explicit_blocked_exit(message: str) -> bool:
-    return message.lstrip().upper().startswith("BLOCKED:")
+    stripped = message.lstrip()
+    if not stripped.upper().startswith("BLOCKED:"):
+        return False
+    blocker = stripped.split(":", 1)[1]
+    unnegated = NEGATED_COMPLETION.sub("", blocker)
+    return not bool(COMPLETION_WORDS.search(unnegated))
 
 
 def explicit_user_question(message: str) -> bool:

@@ -31,6 +31,15 @@ HANDOFF_EXAMPLES = {
 }
 COMMIT_BOUND_LIST_FIELDS = ("critical_flow", "required_proof")
 COMMIT_BOUND_TEXT_FIELDS = ("risk_and_authority_boundaries", "threat_model")
+CONTRACT_KEYS = frozenset({
+    "requirement_verbatim",
+    "visible_surface",
+    "expected_visible_result",
+    "ui_test_identifier",
+    "final_accessibility_identifier",
+    *COMMIT_BOUND_LIST_FIELDS,
+    *COMMIT_BOUND_TEXT_FIELDS,
+})
 UI_TEST_PATTERN = re.compile(r"^HarnessUITests/[A-Za-z_][A-Za-z0-9_]*/test[A-Za-z0-9_]+$")
 ACCESSIBILITY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._:/-]{0,127}$")
 BOOTSTRAP_REPO = "dblaira/Harness"
@@ -83,6 +92,10 @@ def contract_digest(contract: dict) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
+def acceptance_fields(contract: dict) -> dict:
+    return {key: contract.get(key) for key in sorted(CONTRACT_KEYS)}
+
+
 def placeholder_present(value: str) -> bool:
     upper = value.upper()
     return "REPLACE_WITH_" in upper or bool(re.search(r"\b(?:TBD|TODO)\b", upper))
@@ -109,7 +122,7 @@ def freshness_errors(
     if base_contract is None:
         if not is_bootstrap:
             errors.append("protected-base acceptance contract is required for freshness validation")
-    elif contract_digest(base_contract) == contract_digest(contract):
+    elif acceptance_fields(base_contract) == acceptance_fields(contract):
         errors.append("acceptance contract is stale and unchanged from the protected base")
     if ".github/acceptance-contract.json" not in changed_paths and not is_bootstrap:
         errors.append("every guarded pull request must commit a fresh acceptance contract")
@@ -126,6 +139,9 @@ def validate_handoff_contract(
     if not isinstance(contract, dict):
         return ["handoff contract must be a JSON object"]
     errors: list[str] = []
+    unknown_keys = sorted(set(contract) - CONTRACT_KEYS)
+    if unknown_keys:
+        errors.append(f"unknown acceptance contract field(s): {', '.join(unknown_keys)}")
     for key, example in HANDOFF_EXAMPLES.items():
         value = contract.get(key)
         if not isinstance(value, str) or not value.strip():

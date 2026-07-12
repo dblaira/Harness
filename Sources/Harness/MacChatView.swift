@@ -50,6 +50,13 @@ struct MacChatView: View {
         .accessibilityHidden(model.isAnswerWindowPresented)
         .frame(minWidth: CGFloat(currentLayout.minimumWindowWidth), minHeight: 680)
         .background(Theme.macBg.ignoresSafeArea())
+        .overlay(alignment: .topLeading) {
+            Color.clear
+                .frame(width: 1, height: 1)
+                .accessibilityElement()
+                .accessibilityLabel("Harness process identity")
+                .accessibilityIdentifier("HarnessProcess-\(ProcessInfo.processInfo.processIdentifier)")
+        }
         .onAppear {
             normalizePanelWidths()
             model.updateOntology(ontology)

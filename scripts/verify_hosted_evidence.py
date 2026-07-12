@@ -19,6 +19,8 @@ STATUS_WORKFLOWS = {
 CHECK_WORKFLOW = ".github/workflows/codeql.yml"
 CHECK_NAMES = {"CodeQL (swift)", "CodeQL (python)"}
 PROTECTED_CONTROL_PATHS = (
+    ".periphery.yml",
+    ".swiftlint.yml",
     ".github/workflows",
     ".github/codex",
     ".codex/hooks.json",
@@ -26,6 +28,7 @@ PROTECTED_CONTROL_PATHS = (
     "script",
     "scripts/evidence_binding.py",
     "scripts/periphery_changed_gate.py",
+    "scripts/preflight_tcc.swift",
     "scripts/lint_changed_swift.sh",
     "scripts/release_gate.py",
     "scripts/render_sol_review.py",
@@ -37,6 +40,7 @@ PROTECTED_CONTROL_PATHS = (
     "scripts/sanitize_review_bundle.py",
     "scripts/select_pull_request.py",
     "scripts/swift_test_inventory.py",
+    "scripts/tests",
     "scripts/validate_acceptance_contract.py",
     "scripts/validate_gate_test_report.py",
     "scripts/validate_media.py",
@@ -52,6 +56,8 @@ PROTECTED_CONTROL_PATHS = (
     "scripts/verify_repository_gate_state.py",
     "scripts/verify_release_tree.py",
     "scripts/verify_running_app.swift",
+    "Tests/HarnessUITests/HarnessCriticalFlowTests.swift",
+    "Tests/HarnessUITests/HarnessRequirementEvidence.swift",
 )
 RUN_ID = re.compile(r"/actions/runs/(\d+)(?:/|$)")
 JOB_ID = re.compile(r"/(?:actions/runs/\d+/job|runs)/(\d+)(?:/|$)")

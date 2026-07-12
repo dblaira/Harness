@@ -120,7 +120,7 @@ command -v ffprobe >/dev/null
 python3 "$CONTROL_DIR/scripts/swift_test_inventory.py" \
   --git-ref "$BASE_SHA" --repo-root "$ROOT_DIR" --output "$TEST_INVENTORY"
 
-HARNESS_EXPECTED_PID=0 HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER=UNSET HARNESS_ATTACH_EXISTING_APP=0 xcodegen generate
+HARNESS_EXPECTED_PID=0 HARNESS_EXPECTED_WINDOW_BOUNDS=UNSET HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER=UNSET HARNESS_ATTACH_EXISTING_APP=0 xcodegen generate
 xcodebuild build-for-testing \
   -project Harness.xcodeproj \
   -scheme HarnessUIVerification \
@@ -200,7 +200,8 @@ done
 [[ "$RECORDED_PROOF_PASS" == 1 ]] || { echo "Recorded candidate window never exposed the contracted identifier." >&2; exit 1; }
 RECORDED_WINDOW_ID="$(jq -r .window_id "$INITIAL_RUNNING_APP_PROOF")"
 [[ "$RECORDED_WINDOW_ID" =~ ^[0-9]+$ ]] || { echo "Recorded candidate window lacks a CGWindowID." >&2; exit 1; }
-HARNESS_EXPECTED_PID="$RECORDED_PID" HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER="$FINAL_ACCESSIBILITY_IDENTIFIER" HARNESS_ATTACH_EXISTING_APP=1 xcodegen generate
+RECORDED_WINDOW_BOUNDS="$(jq -r '[.window_bounds.x,.window_bounds.y,.window_bounds.width,.window_bounds.height] | join(",")' "$INITIAL_RUNNING_APP_PROOF")"
+HARNESS_EXPECTED_PID="$RECORDED_PID" HARNESS_EXPECTED_WINDOW_BOUNDS="$RECORDED_WINDOW_BOUNDS" HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER="$FINAL_ACCESSIBILITY_IDENTIFIER" HARNESS_ATTACH_EXISTING_APP=1 xcodegen generate
 
 /usr/sbin/screencapture -v -V120 -l"$RECORDED_WINDOW_ID" -x -k "$VIDEO" &
 VIDEO_PID=$!
@@ -267,7 +268,13 @@ PROCESS_COMMAND="$(ps -p "$PID" -o command=)"
 }
 
 rm -rf "$FINAL_UI_RESULT_BUNDLE"
-HARNESS_EXPECTED_PID="$PID" HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER="$FINAL_ACCESSIBILITY_IDENTIFIER" HARNESS_ATTACH_EXISTING_APP=1 xcodegen generate
+xcrun swift "$CONTROL_DIR/scripts/verify_running_app.swift" \
+  --pid "$PID" \
+  --executable "$APP_BUNDLE/Contents/MacOS/Harness" \
+  --identifier "$FINAL_ACCESSIBILITY_IDENTIFIER" \
+  --output "$RUNNING_APP_PROOF"
+FINAL_WINDOW_BOUNDS="$(jq -r '[.window_bounds.x,.window_bounds.y,.window_bounds.width,.window_bounds.height] | join(",")' "$RUNNING_APP_PROOF")"
+HARNESS_EXPECTED_PID="$PID" HARNESS_EXPECTED_WINDOW_BOUNDS="$FINAL_WINDOW_BOUNDS" HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER="$FINAL_ACCESSIBILITY_IDENTIFIER" HARNESS_ATTACH_EXISTING_APP=1 xcodegen generate
 python3 "$CONTROL_DIR/scripts/run_with_timeout.py" --seconds 110 -- xcodebuild test-without-building \
   -project Harness.xcodeproj \
   -scheme HarnessUIVerification \

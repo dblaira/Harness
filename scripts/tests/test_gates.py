@@ -139,6 +139,50 @@ Signed app, provider authentication, and accepted graph remain distinct.
         )
         self.assertIn("acceptance contract is stale and unchanged from the protected base", errors)
 
+    def test_nonce_only_contract_change_is_unknown_and_stale(self) -> None:
+        base = {
+            **COMMIT_BOUND_FIXTURE,
+            "requirement_verbatim": "Exact requirement",
+            "visible_surface": "Harness window",
+            "expected_visible_result": "Exact visible result",
+            "ui_test_identifier": "HarnessUITests/AnswerTests/testVisibleAnswer",
+            "final_accessibility_identifier": "VisibleAnswer",
+        }
+        proposed = {**base, "nonce": "changed"}
+        self.assertIn(
+            "unknown acceptance contract field(s): nonce",
+            validate_acceptance_contract.validate_handoff_contract(proposed),
+        )
+        self.assertIn(
+            "acceptance contract is stale and unchanged from the protected base",
+            validate_acceptance_contract.freshness_errors(
+                proposed,
+                base,
+                {".github/acceptance-contract.json"},
+                is_bootstrap=False,
+            ),
+        )
+
+    def test_literal_requirement_change_is_fresh(self) -> None:
+        base = {
+            **COMMIT_BOUND_FIXTURE,
+            "requirement_verbatim": "Old literal requirement",
+            "visible_surface": "Harness window",
+            "expected_visible_result": "Old visible result",
+            "ui_test_identifier": "HarnessUITests/AnswerTests/testVisibleAnswer",
+            "final_accessibility_identifier": "VisibleAnswer",
+        }
+        proposed = {**base, "requirement_verbatim": "New literal requirement"}
+        self.assertEqual(
+            validate_acceptance_contract.freshness_errors(
+                proposed,
+                base,
+                {".github/acceptance-contract.json"},
+                is_bootstrap=False,
+            ),
+            [],
+        )
+
     def test_placeholders_in_every_commit_bound_field_are_rejected(self) -> None:
         for field, value in (
             ("critical_flow", ["TODO replace this critical flow"]),
@@ -186,6 +230,27 @@ class ReleaseGateTests(unittest.TestCase):
         try:
             result = release_gate.hook(Path("."), {"last_assistant_message": "BLOCKED: missing external authority"})
             self.assertEqual(result, {"continue": True})
+        finally:
+            release_gate.guarded_changes = original
+
+    def test_hook_rejects_blocked_message_with_mixed_completion_claims(self) -> None:
+        original = release_gate.guarded_changes
+        release_gate.guarded_changes = lambda _root: ["Sources/Harness/Feature.swift"]
+        try:
+            for message in (
+                "BLOCKED: implemented and verified; handoff evidence is absent",
+                "BLOCKED: tests pass but the manifest is missing",
+                "BLOCKED: the feature is working; release proof is unavailable",
+            ):
+                result = release_gate.hook(Path("."), {"last_assistant_message": message})
+                self.assertEqual(result["decision"], "block")
+            self.assertEqual(
+                release_gate.hook(
+                    Path("."),
+                    {"last_assistant_message": "BLOCKED: not verified because signing authority is absent"},
+                ),
+                {"continue": True},
+            )
         finally:
             release_gate.guarded_changes = original
 
@@ -379,10 +444,23 @@ class XCResultGateTests(unittest.TestCase):
         )
         self.assertIn("required test bundle omitted 1 protected test(s): testTwo", errors)
 
-    def test_protected_swift_inventory_finds_the_complete_harness_suite(self) -> None:
-        inventory = swift_test_inventory.from_source_root(Path.cwd() / "Tests/HarnessTests")
-        self.assertEqual(len(inventory), 53)
-        self.assertIn("answerWindowMakesTheAnswerAPrimaryReadingSurface", inventory)
+    def test_protected_swift_inventory_accepts_added_tests(self) -> None:
+        base = "@Test func protectedBaseTest() {}\n"
+        proposed = base + "@Test func newlyAddedTest() {}\n"
+        self.assertEqual(swift_test_inventory.identifiers(base), {"protectedBaseTest"})
+        self.assertEqual(
+            swift_test_inventory.identifiers(proposed),
+            {"protectedBaseTest", "newlyAddedTest"},
+        )
+        tree = {"children": [
+            {"name": "HarnessTests", "nodeType": "Unit test bundle", "result": "Passed"},
+            {"name": "protectedBaseTest()", "nodeType": "Test Case", "nodeIdentifier": "protectedBaseTest()", "result": "Passed"},
+            {"name": "newlyAddedTest()", "nodeType": "Test Case", "nodeIdentifier": "newlyAddedTest()", "result": "Passed"},
+        ]}
+        self.assertEqual(
+            validate_xcresult.validate_bundle_tree(tree, "HarnessTests", {"protectedBaseTest"}),
+            [],
+        )
 
     def test_swift_inventory_handles_hostile_long_annotation_input_without_regex(self) -> None:
         hostile = "@A(" + ") @A(" * 100_000 + "\n@Test @MainActor func protectedTest() {}"
@@ -698,6 +776,36 @@ class ProtectedVerifierTests(unittest.TestCase):
 
 
 class HostedAuthorityTests(unittest.TestCase):
+    def test_every_gate_authority_input_requires_the_bootstrap_path(self) -> None:
+        protected = (
+            "scripts/tests/test_gates.py",
+            ".swiftlint.yml",
+            ".periphery.yml",
+            "scripts/preflight_tcc.swift",
+            "Tests/HarnessUITests/HarnessCriticalFlowTests.swift",
+            "Tests/HarnessUITests/HarnessRequirementEvidence.swift",
+        )
+        for relative in protected:
+            with self.subTest(path=relative), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True)
+                subprocess.run(["git", "-C", str(root), "config", "user.email", "test@example.com"], check=True)
+                subprocess.run(["git", "-C", str(root), "config", "user.name", "Gate Test"], check=True)
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("protected\n", encoding="utf-8")
+                subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+                subprocess.run(["git", "-C", str(root), "commit", "-qm", "base"], check=True)
+                base = subprocess.check_output(
+                    ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+                ).strip()
+                path.write_text("weakened\n", encoding="utf-8")
+                subprocess.run(["git", "-C", str(root), "commit", "-qam", "proposal"], check=True)
+                head = subprocess.check_output(
+                    ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+                ).strip()
+                self.assertTrue(verify_hosted_evidence.unchanged_protected_controls(root, base, head))
+
     def test_spoofed_status_workflow_event_is_rejected(self) -> None:
         status = {"state": "success", "creator": {"login": "github-actions[bot]"}}
         run = {
@@ -857,6 +965,17 @@ class GateStructureTests(unittest.TestCase):
         self.assertIn('-l"$RECORDED_WINDOW_ID"', handoff)
         self.assertNotIn("screencapture -v -V120 -m", handoff)
         self.assertIn("recorded_running_app_proof", handoff)
+
+    def test_ui_assertion_and_screenshot_share_expected_process_and_window(self) -> None:
+        ui_test = (Path.cwd() / "Tests/HarnessUITests/HarnessCriticalFlowTests.swift").read_text(encoding="utf-8")
+        handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
+        self.assertIn("HARNESS_EXPECTED_PID", ui_test)
+        self.assertIn("HarnessProcess-\\(expectedPID)", ui_test)
+        self.assertIn("HARNESS_EXPECTED_WINDOW_BOUNDS", ui_test)
+        self.assertIn('window.buttons["Delegation"]', ui_test)
+        self.assertNotIn('app.buttons["Delegation"]', ui_test)
+        self.assertIn("attachVisibleResult(of: window", ui_test)
+        self.assertGreaterEqual(handoff.count("HARNESS_EXPECTED_WINDOW_BOUNDS="), 3)
 
     def test_protected_test_inventory_is_rebuilt_after_proposal_execution(self) -> None:
         handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
