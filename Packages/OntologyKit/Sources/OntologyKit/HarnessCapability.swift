@@ -70,9 +70,15 @@ public struct HarnessCapability: Identifiable, Codable, Sendable, Equatable {
 
 public enum HarnessCapabilityRegistry {
     public static func defaultCapabilities(
-        homeDirectory: URL = URL(fileURLWithPath: NSHomeDirectory())
+        homeDirectory: URL = URL(fileURLWithPath: NSHomeDirectory()),
+        includeProtectedUserFolders: Bool = true
     ) -> [HarnessCapability] {
-        deduplicated(skillCapabilities(homeDirectory: homeDirectory) + pluginCapabilities(homeDirectory: homeDirectory))
+        deduplicated(
+            skillCapabilities(
+                homeDirectory: homeDirectory,
+                includeProtectedUserFolders: includeProtectedUserFolders
+            ) + pluginCapabilities(homeDirectory: homeDirectory)
+        )
     }
 
     public static func groupCounts(_ capabilities: [HarnessCapability]) -> [(key: String, value: Int)] {
@@ -157,10 +163,11 @@ public enum HarnessCapabilityRegistry {
         "adams-words",
     ]
 
-    private static func skillCapabilities(homeDirectory: URL) -> [HarnessCapability] {
-        let roots: [(source: String, root: URL)] = [
-            ("Vault", homeDirectory.appendingPathComponent("Documents/Main/Skills", isDirectory: true)),
-            ("Vault", homeDirectory.appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs/Documents/Main/Skills", isDirectory: true)),
+    private static func skillCapabilities(
+        homeDirectory: URL,
+        includeProtectedUserFolders: Bool
+    ) -> [HarnessCapability] {
+        var roots: [(source: String, root: URL)] = [
             ("Harness", homeDirectory.appendingPathComponent("Developer/GitHub/Harness/Docs/skills", isDirectory: true)),
             ("Harness", homeDirectory.appendingPathComponent("GitHub/Harness/Docs/skills", isDirectory: true)),
             ("Hermes", homeDirectory.appendingPathComponent(".hermes/skills", isDirectory: true)),
@@ -170,13 +177,19 @@ public enum HarnessCapabilityRegistry {
             ("Grok", homeDirectory.appendingPathComponent(".grok/skills", isDirectory: true)),
             ("Agents", homeDirectory.appendingPathComponent(".agents/skills", isDirectory: true)),
         ]
+        if includeProtectedUserFolders {
+            roots.insert(("Vault", homeDirectory.appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs/Documents/Main/Skills", isDirectory: true)), at: 0)
+            roots.insert(("Vault", homeDirectory.appendingPathComponent("Documents/Main/Skills", isDirectory: true)), at: 0)
+        }
 
         let packaged = roots.flatMap { source, root in
             skillFiles(in: root).compactMap { skillFile in
                 skillCapability(sourceSystem: source, root: root, skillFile: skillFile)
             }
         }
-        let vaultNotes = vaultSkillCapabilities(homeDirectory: homeDirectory)
+        let vaultNotes = includeProtectedUserFolders
+            ? vaultSkillCapabilities(homeDirectory: homeDirectory)
+            : []
         return packaged + vaultNotes
     }
 

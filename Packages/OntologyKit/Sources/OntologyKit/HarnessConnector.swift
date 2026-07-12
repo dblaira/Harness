@@ -74,11 +74,16 @@ public struct HarnessConnector: Identifiable, Codable, Sendable, Equatable {
 public enum HarnessConnectorRegistry {
     public static func defaultConnectors(
         homeDirectory: URL = URL(fileURLWithPath: NSHomeDirectory()),
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        includeProtectedUserFolders: Bool = true
     ) -> [HarnessConnector] {
         deduplicated(
-            memoryConnectors(homeDirectory: homeDirectory, environment: environment)
-            + authorityConnectors(homeDirectory: homeDirectory)
+            memoryConnectors(
+                homeDirectory: homeDirectory,
+                environment: environment,
+                includeProtectedUserFolders: includeProtectedUserFolders
+            )
+            + (includeProtectedUserFolders ? authorityConnectors(homeDirectory: homeDirectory) : [])
             + skillConnectors(homeDirectory: homeDirectory)
             + pluginConnectors(homeDirectory: homeDirectory)
             + mcpConnectors(environment: environment)
@@ -106,7 +111,11 @@ public enum HarnessConnectorRegistry {
         FileManager.default.fileExists(atPath: url.path)
     }
 
-    private static func memoryConnectors(homeDirectory: URL, environment: [String: String]) -> [HarnessConnector] {
+    private static func memoryConnectors(
+        homeDirectory: URL,
+        environment: [String: String],
+        includeProtectedUserFolders: Bool
+    ) -> [HarnessConnector] {
         var connectors: [HarnessConnector] = [
             HarnessConnector(
                 title: "GitHub repositories",
@@ -120,6 +129,30 @@ public enum HarnessConnectorRegistry {
                 weight: 1.22,
                 allowedExtensions: LocalMemorySourceRegistry.codeAndTextExtensions()
             ),
+            HarnessConnector(
+                title: "Obsidian vault",
+                kind: .obsidian,
+                role: .supportingMemory,
+                sourceSystem: "Obsidian",
+                root: homeDirectory.appendingPathComponent("Developer/GitHub/obsidian-vault", isDirectory: true),
+                summary: "Markdown vault notes used as supporting memory.",
+                permission: "Read-only filesystem access.",
+                provenance: "Vault notes are never treated as accepted authority.",
+                weight: 1.14,
+                allowedExtensions: LocalMemorySourceRegistry.noteExtensions()
+            )
+        ]
+
+        if includeProtectedUserFolders {
+            connectors += protectedMemoryConnectors(homeDirectory: homeDirectory)
+            connectors.append(contentsOf: notebookLMConnectors(homeDirectory: homeDirectory, environment: environment))
+            connectors.append(contentsOf: customMemoryConnectors(from: environment, homeDirectory: homeDirectory))
+        }
+        return connectors
+    }
+
+    private static func protectedMemoryConnectors(homeDirectory: URL) -> [HarnessConnector] {
+        [
             HarnessConnector(
                 title: "GitHub repositories",
                 kind: .github,
@@ -142,18 +175,6 @@ public enum HarnessConnectorRegistry {
                 permission: "Read-only filesystem access.",
                 provenance: "Vault notes are never treated as accepted authority.",
                 weight: 1.18,
-                allowedExtensions: LocalMemorySourceRegistry.noteExtensions()
-            ),
-            HarnessConnector(
-                title: "Obsidian vault",
-                kind: .obsidian,
-                role: .supportingMemory,
-                sourceSystem: "Obsidian",
-                root: homeDirectory.appendingPathComponent("Developer/GitHub/obsidian-vault", isDirectory: true),
-                summary: "Markdown vault notes used as supporting memory.",
-                permission: "Read-only filesystem access.",
-                provenance: "Vault notes are never treated as accepted authority.",
-                weight: 1.14,
                 allowedExtensions: LocalMemorySourceRegistry.noteExtensions()
             ),
             HarnessConnector(
@@ -194,10 +215,6 @@ public enum HarnessConnectorRegistry {
                 allowedExtensions: LocalMemorySourceRegistry.noteExtensions()
             )
         ]
-
-        connectors.append(contentsOf: notebookLMConnectors(homeDirectory: homeDirectory, environment: environment))
-        connectors.append(contentsOf: customMemoryConnectors(from: environment, homeDirectory: homeDirectory))
-        return connectors
     }
 
     private static func authorityConnectors(homeDirectory: URL) -> [HarnessConnector] {

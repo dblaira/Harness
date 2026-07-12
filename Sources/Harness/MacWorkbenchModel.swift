@@ -89,8 +89,12 @@ final class MacWorkbenchModel: ObservableObject {
     /// quoted sources only, sourced from watched .md files.
     @Published var fascinationCards: [FascinationCard] = []
     @Published private(set) var fascinationLoadIssue: String?
-    @Published var connectors: [HarnessConnector] = HarnessConnectorRegistry.defaultConnectors()
-    @Published var capabilities: [HarnessCapability] = HarnessCapabilityRegistry.defaultCapabilities()
+    @Published var connectors: [HarnessConnector] = HarnessConnectorRegistry.defaultConnectors(
+        includeProtectedUserFolders: false
+    )
+    @Published var capabilities: [HarnessCapability] = HarnessCapabilityRegistry.defaultCapabilities(
+        includeProtectedUserFolders: false
+    )
     @Published var routePlan = HarnessExecutionRoutePlan(prompt: "", steps: [])
     @Published var routeExecutionResult: HarnessRouteExecutionResult?
     @Published var delegationAgentWatchlistEnabled = MacWorkbenchModel.loadDelegationAgentWatchlistEnabled() {
@@ -174,14 +178,9 @@ final class MacWorkbenchModel: ObservableObject {
             await refreshRuns()
             await restoreMostRecentSession()
             await refreshSessions()
-            await refreshReviewQueue()
-            if Self.shouldRunSuiteCaptureBackgroundWork() {
-                refreshSuiteCaptureInbox()
-            }
             refreshOpportunityBoard()
             refreshSourcePool()
             refreshConnectors()
-            await refreshPatternGate()
             refreshFascinationCards()
             await refreshFleetLedger()
         }
@@ -1460,8 +1459,13 @@ final class MacWorkbenchModel: ObservableObject {
     }
 
     func refreshConnectors() {
-        connectors = HarnessConnectorRegistry.defaultConnectors(environment: Self.connectorEnvironment())
-        capabilities = HarnessCapabilityRegistry.defaultCapabilities()
+        connectors = HarnessConnectorRegistry.defaultConnectors(
+            environment: Self.connectorEnvironment(),
+            includeProtectedUserFolders: false
+        )
+        capabilities = HarnessCapabilityRegistry.defaultCapabilities(
+            includeProtectedUserFolders: false
+        )
         refreshRoutePlan()
     }
 

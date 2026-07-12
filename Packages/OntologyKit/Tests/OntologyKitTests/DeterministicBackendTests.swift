@@ -1366,6 +1366,18 @@ import Testing
     #expect(!configuredConnector.summary.contains("fc-test-key"))
 }
 
+@Test func launchSafeConnectorRegistryNeverIncludesProtectedUserFolders() {
+    let home = URL(fileURLWithPath: "/Users/example", isDirectory: true)
+    let connectors = HarnessConnectorRegistry.defaultConnectors(
+        homeDirectory: home,
+        environment: [:],
+        includeProtectedUserFolders: false
+    )
+
+    #expect(!connectors.contains { $0.root.path.contains("/Documents/") })
+    #expect(!connectors.contains { $0.root.path.contains("/Library/Mobile Documents/") })
+}
+
 @Test func firecrawlMCPConfigUsesRuntimeEnvironmentWithoutLeakingSecrets() throws {
     let config = HarnessMCPServerConfiguration.firecrawlLocal(apiKey: "fc-secret-value")
 
@@ -1584,6 +1596,17 @@ import Testing
     #expect(capabilities.contains { $0.kind == .plugin && $0.name == "compound-engineering" && $0.sourceSystem == "Claude" })
     #expect(capabilities.contains { $0.kind == .plugin && $0.name == "GitHub" && $0.sourceSystem == "Codex" })
     #expect(HarnessCapabilityRegistry.groupCounts(capabilities).contains { $0.key == "Hermes / apple" && $0.value == 1 })
+}
+
+@Test func launchSafeCapabilityRegistryNeverScansProtectedUserFolders() {
+    let home = URL(fileURLWithPath: "/Users/example", isDirectory: true)
+    let capabilities = HarnessCapabilityRegistry.defaultCapabilities(
+        homeDirectory: home,
+        includeProtectedUserFolders: false
+    )
+
+    #expect(!capabilities.contains { $0.path.path.contains("/Documents/") })
+    #expect(!capabilities.contains { $0.path.path.contains("/Library/Mobile Documents/") })
 }
 
 @Test func executionRouterPlansGuardedPersonalKnowledgeResearch() throws {
