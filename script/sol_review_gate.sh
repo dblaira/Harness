@@ -13,13 +13,11 @@ cd "$ROOT_DIR"
 
 SHA="$(git rev-parse HEAD)"
 REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
-PR_NUMBER="$(gh api "repos/$REPO/commits/$SHA/pulls" --jq '[.[] | select(.state == "open")] | first | .number')"
-[[ -n "$PR_NUMBER" && "$PR_NUMBER" != "null" ]] || {
-  echo "No open pull request is bound to commit $SHA." >&2
-  exit 1
-}
-BASE_SHA="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .base.sha)"
-HEAD_SHA="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .head.sha)"
+PULLS_JSON="$(gh api "repos/$REPO/commits/$SHA/pulls")"
+PR_JSON="$(printf '%s' "$PULLS_JSON" | python3 "$CONTROL_DIR/scripts/select_pull_request.py" --head-sha "$SHA")"
+PR_NUMBER="$(printf '%s' "$PR_JSON" | jq -r .number)"
+BASE_SHA="$(printf '%s' "$PR_JSON" | jq -r .base.sha)"
+HEAD_SHA="$(printf '%s' "$PR_JSON" | jq -r .head.sha)"
 [[ "$HEAD_SHA" == "$SHA" ]] || {
   echo "The open pull request head does not match local HEAD." >&2
   exit 1
@@ -47,6 +45,9 @@ python3 "$CONTROL_DIR/scripts/validate_acceptance_contract.py" \
   --base-sha "$BASE_SHA"
 CONTRACT_DIGEST="$(python3 -c 'import json,sys;sys.path.insert(0,sys.argv[1]);import validate_acceptance_contract as v;print(v.contract_digest(json.load(open(sys.argv[2]))))' "$CONTROL_DIR/scripts" "$CONTRACT")"
 PR_CONTRACT_DIGEST="$(python3 -c 'import sys;sys.path.insert(0,sys.argv[1]);import validate_acceptance_contract as v;print(v.pr_contract_digest(open(sys.argv[2]).read()))' "$CONTROL_DIR/scripts" "$OUTPUT_DIR/reviewed-pr-body.md")"
+EVIDENCE_BINDING="$(python3 "$CONTROL_DIR/scripts/evidence_binding.py" \
+  --repo "$REPO" --pr-number "$PR_NUMBER" --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" \
+  --contract-digest "$CONTRACT_DIGEST" --pr-contract-digest "$PR_CONTRACT_DIGEST")"
 
 AUTH_FILE="${CODEX_HOME:-$HOME/.codex}/auth.json"
 python3 "$CONTROL_DIR/scripts/verify_codex_auth.py" --auth-file "$AUTH_FILE" --output "$AUTH_PROOF"
@@ -68,7 +69,7 @@ cp "$CONTROL_DIR/.github/codex/sol-review.md" "$PROMPT"
 gh api -X POST "repos/$REPO/statuses/$SHA" \
   -f state=pending \
   -f context='GPT-5.6 Sol review' \
-  -f description="ChatGPT Sol review pending contract:${CONTRACT_DIGEST:0:12}" \
+  -f description="ChatGPT Sol pending pr:$PR_NUMBER binding:${EVIDENCE_BINDING:0:24}" \
   -f target_url="https://github.com/$REPO/pull/$PR_NUMBER" >/dev/null
 
 set +e
@@ -123,7 +124,7 @@ COMMENT_URL="$(gh api -X POST "repos/$REPO/issues/$PR_NUMBER/comments" -f body="
 gh api -X POST "repos/$REPO/statuses/$SHA" \
   -f state="$STATE" \
   -f context='GPT-5.6 Sol review' \
-  -f description="ChatGPT Sol $STATE contract:${CONTRACT_DIGEST:0:12}" \
+  -f description="ChatGPT Sol $STATE pr:$PR_NUMBER binding:${EVIDENCE_BINDING:0:24}" \
   -f target_url="$COMMENT_URL" >/dev/null
 
 gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .body > "$OUTPUT_DIR/final-pr-body.md"

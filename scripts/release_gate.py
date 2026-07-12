@@ -64,6 +64,21 @@ USER_QUESTION = re.compile(
     r"can|may|is|are|do|does|did|will)\b.*\?\s*$",
     re.IGNORECASE | re.DOTALL,
 )
+FILE_ARTIFACTS = {
+    "screenshot",
+    "video",
+    "final_screenshot",
+    "final_ui_screenshot",
+    "satisfaction_artifact",
+    "app_identity",
+    "running_app_proof",
+}
+DIRECTORY_ARTIFACTS = {
+    "unit_xcresult",
+    "ui_xcresult",
+    "final_ui_xcresult",
+    "app_bundle",
+}
 
 
 class GitInspectionError(RuntimeError):
@@ -103,14 +118,10 @@ def product_changes(root: Path) -> list[str]:
 
 
 def guarded_changes(root: Path) -> list[str]:
-    return sorted(
-        path
-        for path in changed_files(root)
-        if path in PRODUCT_FILES
-        or path in GATE_FILES
-        or path.startswith(PRODUCT_PREFIXES)
-        or path.startswith(GATE_PREFIXES)
-    )
+    # Fail closed for repository changes. Build scripts, generated-project
+    # inputs, hooks, linter configuration, and future gate helpers are all
+    # transitive delivery inputs; an allowlist repeatedly missed them.
+    return sorted(changed_files(root))
 
 
 def resolve_artifact(root: Path, value: Any) -> Path | None:
@@ -165,6 +176,16 @@ def validate_quicktime(path: Path) -> list[str]:
         return [f"cannot read video evidence: {error}"]
     if size < 100_000 or b"ftyp" not in header:
         return ["video evidence is not a nontrivial QuickTime/MP4 recording"]
+    return []
+
+
+def artifact_type_errors(name: str, path: Path) -> list[str]:
+    if name in FILE_ARTIFACTS and not path.is_file():
+        return [f"artifact must be a regular file: {name}"]
+    if name in DIRECTORY_ARTIFACTS and not path.is_dir():
+        return [f"artifact must be a directory: {name}"]
+    if name not in FILE_ARTIFACTS and name not in DIRECTORY_ARTIFACTS:
+        return [f"artifact type contract is undefined: {name}"]
     return []
 
 
@@ -242,6 +263,12 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
         errors.append("working tree was not clean when evidence was captured")
     if current_status:
         errors.append("working tree is not currently clean")
+    if not isinstance(manifest.get("pull_request_number"), int):
+        errors.append("pull_request_number is required")
+    if not isinstance(manifest.get("base_sha"), str) or not manifest.get("base_sha"):
+        errors.append("base_sha is required")
+    if not isinstance(manifest.get("evidence_binding"), str) or len(manifest.get("evidence_binding", "")) != 64:
+        errors.append("full pull-request evidence binding is required")
     ui_test_identifier = manifest.get("ui_test_identifier", "")
     if not isinstance(ui_test_identifier, str) or not UI_TEST_PATTERN.fullmatch(ui_test_identifier):
         errors.append("manifest does not name an exact HarnessUITests requirement test")
@@ -334,6 +361,8 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
         path = resolve_artifact(root, artifacts.get(name))
         if path is None or not path.exists():
             errors.append(f"artifact is missing: {name}")
+        elif artifact_type_errors(name, path):
+            errors.extend(artifact_type_errors(name, path))
         elif path.is_file() and path.stat().st_size == 0:
             errors.append(f"artifact is empty: {name}")
         elif hashes.get(name) != sha256_path(path):
@@ -371,6 +400,10 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
         required_markers = (
             f"- Commit: {expected_commit}",
             "- Fuseki graph health: healthy",
+            "- Accepted-only supporting memory hits: 0",
+            "- Accepted-only authority separation: PASS",
+            "- Synthesis authority separation: PASS",
+            "## Accepted-only answer as produced",
             "## Answer as produced",
         )
         if satisfaction.stat().st_size < 500 or any(marker not in text for marker in required_markers):
@@ -432,12 +465,19 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
         repo = run_command("gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner", cwd=root)
         pulls = run_command("gh", "api", f"repos/{repo.stdout.strip()}/commits/{expected_commit}/pulls", cwd=root)
         pull_payload = json.loads(pulls.stdout)
-        open_pull = next((item for item in pull_payload if item.get("state") == "open"), None)
-        if not open_pull:
-            errors.append("current commit has no open pull request for contract validation")
+        open_pulls = [item for item in pull_payload if item.get("state") == "open"]
+        matching_pulls = [
+            item for item in open_pulls
+            if (item.get("base") or {}).get("ref") == "main"
+            and (item.get("head") or {}).get("sha") == expected_commit
+        ]
+        if len(open_pulls) != 1 or len(matching_pulls) != 1:
+            errors.append("current commit must belong to exactly one open pull request targeting main")
         else:
+            open_pull = matching_pulls[0]
             sys.path.insert(0, str(Path(__file__).parent))
             import validate_acceptance_contract as acceptance  # type: ignore
+            import evidence_binding as binding  # type: ignore
             body_digest = acceptance.pr_contract_digest(str(open_pull.get("body") or ""))
             if body_digest != manifest.get("pr_contract_digest"):
                 errors.append("manifest pull-request contract digest is stale")
@@ -449,19 +489,33 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
                 base_sha=str((open_pull.get("base") or {}).get("sha") or ""),
             )
             errors.extend(f"current acceptance contract: {error}" for error in contract_errors)
+            expected_binding = binding.binding_digest(
+                repo.stdout.strip(),
+                int(open_pull.get("number")),
+                str((open_pull.get("base") or {}).get("sha") or ""),
+                expected_commit,
+                expected_contract_digest,
+                body_digest,
+            )
+            if manifest.get("pull_request_number") != int(open_pull.get("number")):
+                errors.append("manifest pull request number is stale")
+            if manifest.get("base_sha") != str((open_pull.get("base") or {}).get("sha") or ""):
+                errors.append("manifest base SHA is stale")
+            if manifest.get("evidence_binding") != expected_binding:
+                errors.append("manifest evidence binding is stale")
         status = run_command("gh", "api", f"repos/{repo.stdout.strip()}/commits/{expected_commit}/statuses?per_page=100", cwd=root)
         status_payload = json.loads(status.stdout)
         latest = next(
             (item for item in status_payload if item.get("context") == "GPT-5.6 Sol review"),
             None,
         )
-        digest_marker = f"contract:{expected_contract_digest[:12]}"
+        binding_marker = f"pr:{manifest.get('pull_request_number')} binding:{str(manifest.get('evidence_binding', ''))[:24]}"
         if (
             status.returncode
             or not latest
             or latest.get("state") != "success"
             or (latest.get("creator") or {}).get("login") != "dblaira"
-            or digest_marker not in str(latest.get("description", ""))
+            or binding_marker not in str(latest.get("description", ""))
             or latest.get("target_url") != review.get("check_run_url")
         ):
             errors.append("current GPT-5.6 Sol status is not successful and bound to this contract")

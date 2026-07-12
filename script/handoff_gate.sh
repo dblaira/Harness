@@ -54,13 +54,10 @@ rm -f "$SCREENSHOT" "$FINAL_SCREENSHOT" "$FINAL_UI_SCREENSHOT" "$RUNNING_APP_PRO
 mkdir -p "$SATISFACTION_DIR"
 
 REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
-PR_NUMBER="$(gh api "repos/$REPO/commits/$SHA/pulls" --jq '[.[] | select(.state == "open")] | first | .number')"
-[[ -n "$PR_NUMBER" && "$PR_NUMBER" != "null" ]] || {
-  echo "No open pull request is bound to commit $SHA." >&2
-  exit 1
-}
+PULLS_JSON="$(gh api "repos/$REPO/commits/$SHA/pulls")"
+PR_JSON="$(printf '%s' "$PULLS_JSON" | python3 "$CONTROL_DIR/scripts/select_pull_request.py" --head-sha "$SHA")"
+PR_NUMBER="$(printf '%s' "$PR_JSON" | jq -r .number)"
 PR_BODY_FILE="$OUTPUT_DIR/reviewed-pr-body.md"
-PR_JSON="$(gh api "repos/$REPO/pulls/$PR_NUMBER")"
 BASE_SHA="$(printf '%s' "$PR_JSON" | jq -r .base.sha)"
 PR_HEAD_SHA="$(printf '%s' "$PR_JSON" | jq -r .head.sha)"
 [[ "$PR_HEAD_SHA" == "$SHA" ]] || {
@@ -76,6 +73,9 @@ python3 "$CONTROL_DIR/scripts/validate_acceptance_contract.py" \
   --base-sha "$BASE_SHA"
 CONTRACT_DIGEST="$(python3 -c 'import json,sys;sys.path.insert(0,sys.argv[1]);import validate_acceptance_contract as v;print(v.contract_digest(json.load(open(sys.argv[2]))))' "$CONTROL_DIR/scripts" "$CONTRACT")"
 PR_CONTRACT_DIGEST="$(python3 -c 'import sys;sys.path.insert(0,sys.argv[1]);import validate_acceptance_contract as v;print(v.pr_contract_digest(open(sys.argv[2]).read()))' "$CONTROL_DIR/scripts" "$PR_BODY_FILE")"
+EVIDENCE_BINDING="$(python3 "$CONTROL_DIR/scripts/evidence_binding.py" \
+  --repo "$REPO" --pr-number "$PR_NUMBER" --base-sha "$BASE_SHA" --head-sha "$SHA" \
+  --contract-digest "$CONTRACT_DIGEST" --pr-contract-digest "$PR_CONTRACT_DIGEST")"
 
 CONTRACT_UI_TEST="$(CONTRACT="$CONTRACT" /usr/bin/python3 - <<'PY'
 import json, os
@@ -102,7 +102,7 @@ fi
   exit 1
 }
 
-SOL_URL="$(gh api "repos/$REPO/commits/$SHA/status" | python3 "$CONTROL_DIR/scripts/require_latest_status.py" --context 'GPT-5.6 Sol review' --description-contains "contract:${CONTRACT_DIGEST:0:12}")" || {
+SOL_URL="$(gh api "repos/$REPO/commits/$SHA/status" | python3 "$CONTROL_DIR/scripts/require_latest_status.py" --context 'GPT-5.6 Sol review' --description-contains "pr:$PR_NUMBER binding:${EVIDENCE_BINDING:0:24}")" || {
   echo "The newest GPT-5.6 Sol review for commit $SHA is not successful; no proposed code was executed." >&2
   exit 1
 }
@@ -274,6 +274,7 @@ APP_BUNDLE="$APP_BUNDLE" PID="$PID" SOL_URL="$SOL_URL" ACTUAL_UI_TEST="$UI_TEST"
 FINAL_ATTACH_TEST="$UI_TEST" FINAL_ACCESSIBILITY_IDENTIFIER="$FINAL_ACCESSIBILITY_IDENTIFIER" \
 APP_IDENTITY="$APP_IDENTITY" \
 CONTRACT_DIGEST="$CONTRACT_DIGEST" PR_CONTRACT_DIGEST="$PR_CONTRACT_DIGEST" \
+EVIDENCE_BINDING="$EVIDENCE_BINDING" PR_NUMBER="$PR_NUMBER" BASE_SHA="$BASE_SHA" \
 TEAM_IDENTIFIER="$TEAM_IDENTIFIER" CDHASH="$CDHASH" /usr/bin/python3 - <<'PY'
 import datetime
 import hashlib
@@ -317,6 +318,9 @@ manifest = {
     "git_tree": os.popen("git rev-parse 'HEAD^{tree}'").read().strip(),
     "contract_digest": os.environ["CONTRACT_DIGEST"],
     "pr_contract_digest": os.environ["PR_CONTRACT_DIGEST"],
+    "evidence_binding": os.environ["EVIDENCE_BINDING"],
+    "pull_request_number": int(os.environ["PR_NUMBER"]),
+    "base_sha": os.environ["BASE_SHA"],
     "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     "requirement_verbatim": contract["requirement_verbatim"],
     "visible_surface": contract["visible_surface"],
@@ -362,6 +366,6 @@ CURRENT_PR_CONTRACT_DIGEST="$(python3 -c 'import sys;sys.path.insert(0,sys.argv[
 gh api -X POST "repos/$REPO/statuses/$SHA" \
   -f state=success \
   -f context='Signed Mac handoff' \
-  -f description="Signed handoff PASS contract:${CONTRACT_DIGEST:0:12}" \
+  -f description="Signed handoff PASS pr:$PR_NUMBER binding:${EVIDENCE_BINDING:0:24}" \
   -f target_url="$SOL_URL" >/dev/null
 echo "Published the Signed Mac handoff status for $SHA."

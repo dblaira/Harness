@@ -29,13 +29,13 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install XcodeGen
+        if: matrix.language == 'swift'
+        run: arch -arm64 brew install xcodegen
       - uses: github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4
         with:
           languages: ${{ matrix.language }}
           queries: security-extended
-      - name: Install XcodeGen
-        if: matrix.language == 'swift'
-        run: brew install xcodegen
       - name: Build Swift application
         if: matrix.language == 'swift'
         run: |

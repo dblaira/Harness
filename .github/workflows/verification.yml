@@ -74,6 +74,7 @@ jobs:
           cp trusted-base/scripts/periphery_changed_gate.py "$RUNNER_TEMP/gate-controls/"
           cp trusted-base/scripts/validate_xcresult.py "$RUNNER_TEMP/gate-controls/"
           cp trusted-base/.swiftlint.yml "$RUNNER_TEMP/gate-controls/swiftlint.yml"
+          cp trusted-base/.periphery.yml "$RUNNER_TEMP/gate-controls/periphery.yml"
       - name: Check out exact proposed revision
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
@@ -100,6 +101,7 @@ jobs:
         run: >-
           python3 "$RUNNER_TEMP/gate-controls/periphery_changed_gate.py"
           --base "$BASE_SHA" --output "$RUNNER_TEMP/periphery.json"
+          --config "$RUNNER_TEMP/gate-controls/periphery.yml"
       - name: OntologyKit deterministic tests
         working-directory: proposed
         run: >-

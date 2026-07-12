@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+ROOT_DIR="$(python3 scripts/resolve_harness_repo.py --cwd "$ROOT_DIR" --require-ref refs/heads/main)"
 [[ "$(git branch --show-current)" == "main" ]] || {
   echo "Trusted local gates may be installed only from protected main." >&2
   exit 1
@@ -38,6 +39,8 @@ mkdir -p "$DEST/script" "$DEST/scripts" "$DEST/.github/codex" "$BIN"
 install -m 0755 script/sol_review_gate.sh script/handoff_gate.sh "$DEST/script/"
 install -m 0755 \
   scripts/release_gate.py \
+  scripts/evidence_binding.py \
+  scripts/select_pull_request.py \
   scripts/render_sol_review.py \
   scripts/require_latest_status.py \
   scripts/run_with_timeout.py \

@@ -13,7 +13,10 @@ SCRIPTS = Path(os.environ.get("HARNESS_SCRIPTS_UNDER_TEST", Path(__file__).resol
 sys.path.insert(0, str(SCRIPTS))
 
 import release_gate  # noqa: E402
+import evidence_binding  # noqa: E402
+import periphery_changed_gate  # noqa: E402
 import resolve_harness_repo  # noqa: E402
+import select_pull_request  # noqa: E402
 import require_latest_status  # noqa: E402
 import validate_acceptance_contract  # noqa: E402
 import validate_sol_review  # noqa: E402
@@ -282,6 +285,45 @@ class ReleaseGateTests(unittest.TestCase):
             self.assertTrue(release_gate.validate_png(fake_png))
             self.assertTrue(release_gate.validate_quicktime(fake_video))
 
+    def test_wrong_artifact_types_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            directory_png = root / "visible.png"
+            directory_png.mkdir()
+            file_xcresult = root / "tests.xcresult"
+            file_xcresult.write_text("not a result bundle", encoding="utf-8")
+            self.assertIn(
+                "artifact must be a regular file: screenshot",
+                release_gate.artifact_type_errors("screenshot", directory_png),
+            )
+            self.assertIn(
+                "artifact must be a directory: unit_xcresult",
+                release_gate.artifact_type_errors("unit_xcresult", file_xcresult),
+            )
+
+    def test_every_repository_change_is_guarded(self) -> None:
+        original = release_gate.changed_files
+        release_gate.changed_files = lambda _root: {
+            "scripts/sync-ontology.sh",
+            ".codex/hooks.json",
+            ".periphery.yml",
+            ".swiftlint.yml",
+            "scripts/future_gate_helper.py",
+        }
+        try:
+            self.assertEqual(
+                release_gate.guarded_changes(Path(".")),
+                [
+                    ".codex/hooks.json",
+                    ".periphery.yml",
+                    ".swiftlint.yml",
+                    "scripts/future_gate_helper.py",
+                    "scripts/sync-ontology.sh",
+                ],
+            )
+        finally:
+            release_gate.changed_files = original
+
 
 class XCResultGateTests(unittest.TestCase):
     def test_exact_passing_ui_test_is_required(self) -> None:
@@ -384,6 +426,60 @@ class RepositoryBindingTests(unittest.TestCase):
             subprocess.run(["git", "-C", str(base), "worktree", "add", "-qb", "codex/probe", str(worktree)], check=True)
             self.assertEqual(resolve_harness_repo.resolve(worktree), worktree.resolve())
 
+    def test_unpushed_local_main_commit_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            remote = root / "remote.git"
+            local = root / "local"
+            subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+            subprocess.run(["git", "init", "-q", "-b", "main", str(local)], check=True)
+            subprocess.run(["git", "-C", str(local), "config", "user.email", "test@example.com"], check=True)
+            subprocess.run(["git", "-C", str(local), "config", "user.name", "Gate Test"], check=True)
+            subprocess.run(["git", "-C", str(local), "remote", "add", "origin", str(remote)], check=True)
+            (local / "control.txt").write_text("reviewed\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(local), "add", "control.txt"], check=True)
+            subprocess.run(["git", "-C", str(local), "commit", "-qm", "reviewed"], check=True)
+            subprocess.run(["git", "-C", str(local), "push", "-q", "-u", "origin", "main"], check=True)
+            resolve_harness_repo.require_remote_ref(local, "refs/heads/main")
+            (local / "control.txt").write_text("unreviewed\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(local), "commit", "-qam", "unpushed"], check=True)
+            with self.assertRaisesRegex(ValueError, "does not equal protected origin"):
+                resolve_harness_repo.require_remote_ref(local, "refs/heads/main")
+
+
+class EvidenceBindingTests(unittest.TestCase):
+    def test_binding_changes_for_pr_base_or_full_contract(self) -> None:
+        first = evidence_binding.binding_digest("dblaira/Harness", 19, "a" * 40, "b" * 40, "c" * 64, "d" * 64)
+        self.assertNotEqual(
+            first,
+            evidence_binding.binding_digest("dblaira/Harness", 20, "a" * 40, "b" * 40, "c" * 64, "d" * 64),
+        )
+        self.assertNotEqual(
+            first,
+            evidence_binding.binding_digest("dblaira/Harness", 19, "e" * 40, "b" * 40, "c" * 64, "d" * 64),
+        )
+        self.assertNotEqual(
+            first,
+            evidence_binding.binding_digest("dblaira/Harness", 19, "a" * 40, "b" * 40, "c" * 64, "f" * 64),
+        )
+
+    def test_two_open_pull_requests_sharing_a_sha_are_rejected(self) -> None:
+        sha = "b" * 40
+        pulls = [
+            {"state": "open", "number": 19, "base": {"ref": "main"}, "head": {"sha": sha}},
+            {"state": "open", "number": 20, "base": {"ref": "main"}, "head": {"sha": sha}},
+        ]
+        with self.assertRaisesRegex(ValueError, "exactly one open pull request"):
+            select_pull_request.select_pull_request(pulls, sha)
+
+    def test_non_main_pull_request_is_rejected(self) -> None:
+        sha = "b" * 40
+        pulls = [
+            {"state": "open", "number": 19, "base": {"ref": "release"}, "head": {"sha": sha}},
+        ]
+        with self.assertRaisesRegex(ValueError, "targeting main"):
+            select_pull_request.select_pull_request(pulls, sha)
+
 
 class AppIdentityTests(unittest.TestCase):
     def test_wrong_bundle_identifier_is_rejected_before_launch(self) -> None:
@@ -464,6 +560,7 @@ class GateStructureTests(unittest.TestCase):
         self.assertNotIn("--bootstrap-pr", installer)
         self.assertNotIn("--bootstrap", merge_gate)
         self.assertIn("full required status context set is not installed", installer)
+        self.assertIn("--require-ref refs/heads/main", installer)
 
     def test_hosted_evidence_is_exact_head_bound_and_forks_are_rejected(self) -> None:
         verification = (Path.cwd() / ".github/workflows/verification.yml").read_text(encoding="utf-8")
@@ -471,6 +568,26 @@ class GateStructureTests(unittest.TestCase):
         self.assertIn("github.event.pull_request.head.sha", verification)
         self.assertIn("HARNESS_SCRIPTS_UNDER_TEST", verification)
         self.assertIn("Fork pull requests are not accepted", acceptance)
+
+    def test_periphery_uses_protected_configuration(self) -> None:
+        verification = (Path.cwd() / ".github/workflows/verification.yml").read_text(encoding="utf-8")
+        periphery = (Path.cwd() / "scripts/periphery_changed_gate.py").read_text(encoding="utf-8")
+        self.assertIn("trusted-base/.periphery.yml", verification)
+        self.assertIn('--config", str(config)', periphery)
+        protected = Path("/trusted/periphery.yml")
+        arguments = periphery_changed_gate.scan_arguments(
+            protected, Path("/tmp/findings.json"), {"/proposal/Feature.swift"}
+        )
+        self.assertEqual(arguments[arguments.index("--config") + 1], str(protected))
+        self.assertNotIn("/proposal/.periphery.yml", arguments)
+
+    def test_local_statuses_include_pr_specific_evidence_binding(self) -> None:
+        sol = (Path.cwd() / "script/sol_review_gate.sh").read_text(encoding="utf-8")
+        handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
+        for source in (sol, handoff):
+            self.assertIn("select_pull_request.py", source)
+            self.assertIn("EVIDENCE_BINDING", source)
+            self.assertIn("pr:$PR_NUMBER binding:", source)
 
     def test_sol_runtime_is_pinned_to_official_provider(self) -> None:
         reviewer = (Path.cwd() / "script/sol_review_gate.sh").read_text(encoding="utf-8")

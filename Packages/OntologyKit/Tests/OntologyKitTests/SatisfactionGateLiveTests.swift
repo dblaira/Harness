@@ -33,6 +33,12 @@ private func requiredLiveEvidenceErrors(
     return errors
 }
 
+private func authoritySeparationPassed(_ detail: HarnessRunDetail) -> Bool {
+    detail.evalResults.contains {
+        $0.checkName == "authority-memory-separated" && $0.passed
+    }
+}
+
 private actor RecordingGraphHealthChecker: GraphHealthChecking {
     private let wrapped: any GraphHealthChecking
     private var latest: GraphHealthReport?
@@ -110,26 +116,50 @@ private actor RecordingGraphHealthChecker: GraphHealthChecking {
     // repeatedly hit the response ceiling on 2026-07-11.
     let prompt = "what information do I have approved already that confirms the importance of capturing value?"
 
-    let started = Date()
-    let detail = try await service.createRun(
+    let acceptedDetail = try await service.createRun(
         prompt: prompt,
         ontology: ontology,
-        backend: backend
+        backend: backend,
+        includeSupportingMemory: !InteractiveChatPolicy.requestsAcceptedAuthorityOnly(prompt),
+        answerFromAcceptedAuthority: true
+    )
+    let acceptedRecordedGraphHealth = await graphHealthChecker.recordedReport()
+    let acceptedGraphHealth = try #require(acceptedRecordedGraphHealth)
+    let acceptedEvidenceErrors = requiredLiveEvidenceErrors(
+        health: acceptedGraphHealth,
+        authorityHits: acceptedDetail.authorityHits
+    )
+    try #require(acceptedEvidenceErrors.isEmpty, Comment(rawValue: acceptedEvidenceErrors.joined(separator: "; ")))
+    #expect(acceptedDetail.memoryHits.isEmpty)
+    #expect(acceptedDetail.run.success)
+    #expect(authoritySeparationPassed(acceptedDetail))
+
+    let synthesisPrompt = "Synthesize accepted information and supporting memory about capturing value while keeping every trust layer separate."
+    let started = Date()
+    let synthesisDetail = try await service.createRun(
+        prompt: synthesisPrompt,
+        ontology: ontology,
+        backend: backend,
+        includeSupportingMemory: true,
+        answerFromAcceptedAuthority: false
     )
     let elapsed = Date().timeIntervalSince(started)
     let recordedGraphHealth = await graphHealthChecker.recordedReport()
     let graphHealth = try #require(recordedGraphHealth)
     let liveEvidenceErrors = requiredLiveEvidenceErrors(
         health: graphHealth,
-        authorityHits: detail.authorityHits
+        authorityHits: synthesisDetail.authorityHits
     )
     try #require(liveEvidenceErrors.isEmpty, Comment(rawValue: liveEvidenceErrors.joined(separator: "; ")))
 
-    let answer = detail.messages.last(where: { $0.role == .assistant })?.text
-        ?? detail.run.finalAnswer
+    let acceptedAnswer = acceptedDetail.messages.last(where: { $0.role == .assistant })?.text
+        ?? acceptedDetail.run.finalAnswer
+    let answer = synthesisDetail.messages.last(where: { $0.role == .assistant })?.text
+        ?? synthesisDetail.run.finalAnswer
     #expect(!answer.isEmpty)
-    #expect(detail.run.success)
+    #expect(synthesisDetail.run.success)
     #expect(!answer.hasPrefix("Harness stopped "))
+    #expect(authoritySeparationPassed(synthesisDetail))
 
     let defaultOutput = "/Users/adamblair/Developer/GitHub/Harness/output/satisfaction-gate"
     let dir = URL(fileURLWithPath: environment["HARNESS_SATISFACTION_OUTPUT_DIR"] ?? defaultOutput)
@@ -141,15 +171,24 @@ private actor RecordingGraphHealthChecker: GraphHealthChecking {
     # Satisfaction Gate — live full-pipeline proof
 
     - Question (Adam's words, verbatim): \(prompt)
+    - Accepted-only production route: supporting memory disabled; model execution disabled
+    - Accepted-only supporting memory hits: \(acceptedDetail.memoryHits.count)
+    - Accepted-only authority separation: \(authoritySeparationPassed(acceptedDetail) ? "PASS" : "FAIL")
+    - Live synthesis prompt: \(synthesisPrompt)
     - Backend: Hermes local (Ollama), no interactive deadline
-    - Authority hits from accepted graph: \(detail.authorityHits.count)
-    - Supporting memory hits: \(detail.memoryHits.count)
+    - Authority hits from accepted graph: \(synthesisDetail.authorityHits.count)
+    - Supporting memory hits: \(synthesisDetail.memoryHits.count)
+    - Synthesis authority separation: \(authoritySeparationPassed(synthesisDetail) ? "PASS" : "FAIL")
     - Elapsed: \(String(format: "%.1f", elapsed)) seconds
-    - Run id: \(detail.run.id)
-    - Run success: \(detail.run.success)
+    - Run id: \(synthesisDetail.run.id)
+    - Run success: \(synthesisDetail.run.success)
     - Commit: \(environment["HARNESS_SATISFACTION_COMMIT"] ?? "UNBOUND")
     - Fuseki graph health: \(graphHealth.status.rawValue)
-    - Fuseki authority hits: \(detail.authorityHits.filter { $0.source == "Fuseki /accepted named graph" }.count)
+    - Fuseki authority hits: \(synthesisDetail.authorityHits.filter { $0.source == "Fuseki /accepted named graph" }.count)
+
+    ## Accepted-only answer as produced
+
+    \(acceptedAnswer)
 
     ## Answer as produced
 
@@ -159,7 +198,7 @@ private actor RecordingGraphHealthChecker: GraphHealthChecking {
 
     print("SATISFACTION_GATE_ARTIFACT: \(artifact.path)")
     print("ELAPSED_SECONDS: \(String(format: "%.1f", elapsed))")
-    print("AUTHORITY_HITS: \(detail.authorityHits.count)")
+    print("AUTHORITY_HITS: \(synthesisDetail.authorityHits.count)")
     print("ANSWER_BEGIN")
     print(answer)
     print("ANSWER_END")
