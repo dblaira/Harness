@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Validate and atomically stage one Harness review candidate.
+"""Validate and coordinately stage one Harness-owned review candidate.
 
 This command writes only ``Ontology/candidates/queue.json``. It never touches
-the accepted graph, either decision ledger, or Fuseki. The caller must stop the
-running Harness app before a real write so an in-app decision cannot race the
-atomic replacement.
+the accepted graph, either decision ledger, or Fuseki. Its compare-and-swap is
+performed inside the same macOS file-coordination protocol used by Harness.
 """
 
 from __future__ import annotations
@@ -13,12 +12,15 @@ import argparse
 import datetime as dt
 import hashlib
 import json
-import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
+
+from review_queue_transaction import (
+    ReviewQueueCoordinationError,
+    coordinated_compare_and_swap,
+)
 
 
 ALLOWED_DOMAINS = {
@@ -232,20 +234,17 @@ def stage_candidate(
             "shacl": "passed",
         }
 
-    if queue_path.read_bytes() != original:
-        raise CandidateStageError("queue changed during staging; nothing was written")
-
-    queue_path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary_name = tempfile.mkstemp(prefix="queue.", suffix=".json", dir=queue_path.parent)
     try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(encoded)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_name, queue_path)
-    finally:
-        if os.path.exists(temporary_name):
-            os.unlink(temporary_name)
+        replaced = coordinated_compare_and_swap(
+            queue_path,
+            original,
+            encoded,
+            repository_root=repository_root,
+        )
+    except ReviewQueueCoordinationError as error:
+        raise CandidateStageError(str(error)) from error
+    if not replaced:
+        raise CandidateStageError("queue changed during coordinated staging; nothing was written")
 
     return {
         "candidate_id": candidate["id"],

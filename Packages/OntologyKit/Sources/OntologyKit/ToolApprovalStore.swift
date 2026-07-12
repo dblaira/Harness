@@ -19,6 +19,7 @@ public enum ToolApprovalDecision: Sendable, Equatable {
 public enum ToolApprovalResolution: String, Sendable, Equatable {
     case approved
     case denied
+    case cancelled
 }
 
 /// One suspended tool call waiting for Adam's decision.
@@ -536,18 +537,30 @@ public final class ToolApprovalStore: ObservableObject, @unchecked Sendable {
 
     // MARK: Pending queue
 
-    /// Suspend the caller until Adam approves or denies. The request appears
-    /// in `pendingRequests` for the chat UI to render as a card.
+    /// Suspend the caller until Adam approves, denies, or the waiting task is
+    /// cancelled. Cancellation removes the request so a stale card cannot
+    /// later authorize abandoned work.
     public func awaitDecision(_ request: ToolApprovalRequest) async -> ToolApprovalResolution {
-        await withCheckedContinuation { continuation in
-            lock.lock()
-            continuations[request.id] = continuation
-            pending.append(request)
-            publishSeq &+= 1
-            let seq = publishSeq
-            let snapshot = pending
-            lock.unlock()
-            publish(snapshot, seq: seq)
+        if Task.isCancelled { return .cancelled }
+
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                lock.lock()
+                if Task.isCancelled {
+                    lock.unlock()
+                    continuation.resume(returning: .cancelled)
+                    return
+                }
+                continuations[request.id] = continuation
+                pending.append(request)
+                publishSeq &+= 1
+                let seq = publishSeq
+                let snapshot = pending
+                lock.unlock()
+                publish(snapshot, seq: seq)
+            }
+        } onCancel: {
+            self.cancelPending(id: request.id)
         }
     }
 
@@ -566,6 +579,11 @@ public final class ToolApprovalStore: ObservableObject, @unchecked Sendable {
     public func deny(id: String) {
         guard let (_, continuation) = take(id: id) else { return }
         continuation.resume(returning: .denied)
+    }
+
+    private func cancelPending(id: String) {
+        guard let (_, continuation) = take(id: id) else { return }
+        continuation.resume(returning: .cancelled)
     }
 
     /// Lock-guarded snapshot of the pending queue (deterministic for tests;

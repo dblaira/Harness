@@ -29,11 +29,18 @@ public struct OntologyAuthorityRetriever: AuthorityRetrieving {
     public func retrieve(prompt: String, ontology: Ontology, limit: Int = 6) async throws -> [GraphAuthorityHit] {
         let queryTokens = Self.retrievalTokens(prompt)
         guard !queryTokens.isEmpty else { return [] }
-        if let liveHits = try? await liveSparqlHits(queryTokens: queryTokens, limit: limit), !liveHits.isEmpty {
-            return liveHits
-        }
-
-        return bundledFallbackHits(queryTokens: queryTokens, ontology: ontology, limit: limit)
+        let liveHits = (try? await liveSparqlHits(queryTokens: queryTokens, limit: limit)) ?? []
+        let bundledHits = bundledFallbackHits(
+            queryTokens: queryTokens,
+            ontology: ontology,
+            limit: max(limit * 6, limit)
+        )
+        return Self.mergedRankedHits(
+            liveHits: liveHits,
+            bundledHits: bundledHits,
+            queryTokens: queryTokens,
+            limit: limit
+        )
     }
 
     private func bundledFallbackHits(queryTokens: Set<String>, ontology: Ontology, limit: Int) -> [GraphAuthorityHit] {
@@ -109,11 +116,7 @@ public struct OntologyAuthorityRetriever: AuthorityRetrieving {
             acceptedGraphIRI: acceptedGraphIRI,
             limit: limit
         )
-        var request = URLRequest(url: sparqlEndpoint)
-        request.httpMethod = "POST"
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.setValue("application/sparql-results+json", forHTTPHeaderField: "Accept")
-        request.httpBody = "query=\(Self.formEncode(query))".data(using: .utf8)
+        let request = Self.liveRequest(query: query, endpoint: sparqlEndpoint)
 
         let (data, response) = try await URLSession.shared.data(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
@@ -143,8 +146,17 @@ public struct OntologyAuthorityRetriever: AuthorityRetrieving {
                 if lhs.score == rhs.score { return lhs.subject < rhs.subject }
                 return lhs.score > rhs.score
             }
-            .prefix(limit)
             .map { $0 }
+    }
+
+    static func liveRequest(query: String, endpoint: URL) -> URLRequest {
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 2
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/sparql-results+json", forHTTPHeaderField: "Accept")
+        request.httpBody = "query=\(Self.formEncode(query))".data(using: .utf8)
+        return request
     }
 
     static func tokens(_ text: String) -> Set<String> {
@@ -159,7 +171,11 @@ public struct OntologyAuthorityRetriever: AuthorityRetrieving {
             .lowercased()
             .split { !$0.isLetter && !$0.isNumber }
             .map(String.init)
-        return Set(raw.filter { $0.count > 2 && !stop.contains($0) })
+        return Set(
+            raw
+                .filter { $0.count > 2 && !stop.contains($0) }
+                .map(Self.normalizedToken)
+        )
     }
 
     /// Delegation fields are operating metadata, not the subject of the
@@ -178,34 +194,131 @@ public struct OntologyAuthorityRetriever: AuthorityRetrieving {
         acceptedGraphIRI: String,
         limit: Int
     ) -> String {
-        let scoreTerms = queryTokens.sorted().map { token in
+        let normalizedQueryTokens = normalizedTokens(queryTokens).sorted()
+        let scoreTerms = normalizedQueryTokens.map { token in
             let literal = token
                 .replacingOccurrences(of: "\\", with: "\\\\")
                 .replacingOccurrences(of: "\"", with: "\\\"")
             return "IF(CONTAINS(?searchText, \"\(literal)\"), 1, 0)"
         }
+        let subjectScoreTerms = normalizedQueryTokens.map { token in
+            let literal = token
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+            return "IF(CONTAINS(?subjectText, \"\(literal)\"), 1, 0)"
+        }
         let scoreExpression = scoreTerms.isEmpty ? "0" : scoreTerms.joined(separator: " + ")
+        let subjectScoreExpression = subjectScoreTerms.isEmpty ? "0" : subjectScoreTerms.joined(separator: " + ")
         return """
         PREFIX understood: <https://understood.app/ontology#>
         SELECT ?s ?p ?o WHERE {
           GRAPH <\(acceptedGraphIRI)> {
             ?s ?p ?o .
             BIND(lcase(concat(str(?s), " ", str(?p), " ", str(?o))) AS ?searchText)
+            BIND(lcase(str(?s)) AS ?subjectText)
+            BIND(lcase(str(?p)) AS ?predicateText)
             BIND((\(scoreExpression)) AS ?matchScore)
+            BIND((\(subjectScoreExpression)) AS ?subjectMatchScore)
+            BIND(IF(CONTAINS(?predicateText, "label") || CONTAINS(?predicateText, "consequent"), 1, 0) AS ?predicatePriority)
+            BIND((?predicatePriority + ?subjectMatchScore) AS ?structuralPriority)
             FILTER(?matchScore > 0)
           }
         }
-        ORDER BY DESC(?matchScore) STR(?s) STR(?p) STR(?o)
+        ORDER BY DESC(?structuralPriority) DESC(?subjectMatchScore) DESC(?predicatePriority) DESC(?matchScore) STR(?s) STR(?p) STR(?o)
         LIMIT \(max(limit * 6, limit))
         """
     }
 
     static func score(_ queryTokens: Set<String>, in text: String) -> Double {
+        let queryTokens = normalizedTokens(queryTokens)
         let target = tokens(text)
         guard !target.isEmpty else { return 0 }
         let overlap = queryTokens.intersection(target).count
         guard overlap > 0 else { return 0 }
         return Double(overlap) / Double(max(queryTokens.count, 1))
+    }
+
+    static func mergedRankedHits(
+        liveHits: [GraphAuthorityHit],
+        bundledHits: [GraphAuthorityHit],
+        queryTokens: Set<String>,
+        limit: Int
+    ) -> [GraphAuthorityHit] {
+        var seen: Set<String> = []
+        return (liveHits + bundledHits)
+            .filter { $0.authorityLevel == .accepted }
+            .filter { seen.insert(mergeKey(for: $0)).inserted }
+            .sorted { lhs, rhs in
+                isHigherPriority(lhs, than: rhs, queryTokens: queryTokens)
+            }
+            .prefix(limit)
+            .map { $0 }
+    }
+
+    private static func isHigherPriority(
+        _ lhs: GraphAuthorityHit,
+        than rhs: GraphAuthorityHit,
+        queryTokens: Set<String>
+    ) -> Bool {
+        let lhsSubjectScore = score(queryTokens, in: lhs.subject)
+        let rhsSubjectScore = score(queryTokens, in: rhs.subject)
+        let lhsSubjectSpecificity = subjectMatchSpecificity(lhs.subject, queryTokens: queryTokens)
+        let rhsSubjectSpecificity = subjectMatchSpecificity(rhs.subject, queryTokens: queryTokens)
+        let lhsPredicatePriority = preferredPredicate(lhs.predicate) ? 1 : 0
+        let rhsPredicatePriority = preferredPredicate(rhs.predicate) ? 1 : 0
+        let lhsStructuralPriority = lhsPredicatePriority + (lhsSubjectScore > 0 ? 1 : 0)
+        let rhsStructuralPriority = rhsPredicatePriority + (rhsSubjectScore > 0 ? 1 : 0)
+
+        if lhsStructuralPriority != rhsStructuralPriority {
+            return lhsStructuralPriority > rhsStructuralPriority
+        }
+        if lhsSubjectScore != rhsSubjectScore { return lhsSubjectScore > rhsSubjectScore }
+        if lhsSubjectSpecificity != rhsSubjectSpecificity {
+            return lhsSubjectSpecificity > rhsSubjectSpecificity
+        }
+        if lhsPredicatePriority != rhsPredicatePriority { return lhsPredicatePriority > rhsPredicatePriority }
+        if lhs.score != rhs.score { return lhs.score > rhs.score }
+        if lhs.object != rhs.object { return lhs.object < rhs.object }
+        return lhs.subject < rhs.subject
+    }
+
+    private static func preferredPredicate(_ predicate: String) -> Bool {
+        let normalized = predicate.lowercased()
+        return normalized.contains("label") || normalized.contains("consequent")
+    }
+
+    private static func subjectMatchSpecificity(
+        _ subject: String,
+        queryTokens: Set<String>
+    ) -> Double {
+        let subjectTokens = tokens(subjectIdentifier(subject))
+        guard !subjectTokens.isEmpty else { return 0 }
+        let overlap = normalizedTokens(queryTokens).intersection(subjectTokens).count
+        return Double(overlap) / Double(subjectTokens.count)
+    }
+
+    private static func subjectIdentifier(_ subject: String) -> String {
+        subject.split(separator: "/").last.map(String.init) ?? subject
+    }
+
+    private static func mergeKey(for hit: GraphAuthorityHit) -> String {
+        let subject = subjectIdentifier(hit.subject)
+        let predicate = hit.predicate.split(whereSeparator: { $0 == "/" || $0 == "#" }).last.map(String.init)
+            ?? hit.predicate
+        return "\(subject.lowercased())|\(predicate.lowercased())|\(hit.object.lowercased())"
+    }
+
+    private static func normalizedTokens(_ tokens: Set<String>) -> Set<String> {
+        Set(tokens.map(normalizedToken))
+    }
+
+    private static func normalizedToken(_ token: String) -> String {
+        switch token.lowercased() {
+        case "captured", "captures", "capturing":
+            return "capture"
+        default:
+            return token.lowercased()
+        }
     }
 
     private static func formEncode(_ text: String) -> String {
@@ -232,6 +345,97 @@ public struct OntologyAuthorityRetriever: AuthorityRetrieving {
             }
             return out
         }
+    }
+}
+
+/// Capture consolidation must still see Adam's current accepted shelf when
+/// Fuseki is offline. The ordinary retriever's bundled fallback is useful for
+/// shipping defaults, but it can lag the canonical accepted graph on this Mac.
+public struct CanonicalAcceptedGraphAuthorityRetriever: AuthorityRetrieving {
+    private let base: any AuthorityRetrieving
+    private let acceptedGraphURL: URL
+
+    public init(
+        base: any AuthorityRetrieving = OntologyAuthorityRetriever(),
+        acceptedGraphURL: URL = ReviewQueueStore.defaultOntologyRoot()
+            .appendingPathComponent("accepted/accepted-graph.ttl")
+    ) {
+        self.base = base
+        self.acceptedGraphURL = acceptedGraphURL
+    }
+
+    public func retrieve(
+        prompt: String,
+        ontology: Ontology,
+        limit: Int = 6
+    ) async throws -> [GraphAuthorityHit] {
+        let baseHits = (try? await base.retrieve(
+            prompt: prompt,
+            ontology: ontology,
+            limit: limit
+        )) ?? []
+        let queryTokens = OntologyAuthorityRetriever.retrievalTokens(prompt)
+        let canonicalHits = localAcceptedGraphHits(queryTokens: queryTokens)
+        var seen: Set<String> = []
+        return (canonicalHits + baseHits)
+            .filter { seen.insert("\($0.subject)|\($0.predicate)|\($0.object)").inserted }
+            .sorted { lhs, rhs in
+                if lhs.score == rhs.score {
+                    let lhsCanonical = lhs.source.hasPrefix("canonical local accepted graph")
+                    let rhsCanonical = rhs.source.hasPrefix("canonical local accepted graph")
+                    if lhsCanonical != rhsCanonical { return lhsCanonical }
+                    return lhs.subject < rhs.subject
+                }
+                return lhs.score > rhs.score
+            }
+            .prefix(limit)
+            .map { $0 }
+    }
+
+    private func localAcceptedGraphHits(queryTokens: Set<String>) -> [GraphAuthorityHit] {
+        guard !queryTokens.isEmpty,
+              let turtle = try? String(contentsOf: acceptedGraphURL, encoding: .utf8),
+              let blockRegex = try? NSRegularExpression(
+                pattern: #"<([^>]+)>\s+a\s+understood:Connection\s*;([\s\S]*?)\n\s*\."#
+              ),
+              let labelRegex = try? NSRegularExpression(
+                pattern: #"understood:label\s+"((?:\\.|[^"\\])*)""#
+              ) else { return [] }
+
+        let turtleRange = NSRange(turtle.startIndex..., in: turtle)
+        return blockRegex.matches(in: turtle, range: turtleRange).compactMap { match in
+            guard match.numberOfRanges > 2,
+                  let subjectRange = Range(match.range(at: 1), in: turtle),
+                  let bodyRange = Range(match.range(at: 2), in: turtle) else { return nil }
+            let subject = String(turtle[subjectRange])
+            let body = String(turtle[bodyRange])
+            let bodyRangeNS = NSRange(body.startIndex..., in: body)
+            guard let labelMatch = labelRegex.firstMatch(in: body, range: bodyRangeNS),
+                  labelMatch.numberOfRanges > 1,
+                  let labelRange = Range(labelMatch.range(at: 1), in: body) else { return nil }
+            let label = Self.unescapeTurtleLiteral(String(body[labelRange]))
+            let score = OntologyAuthorityRetriever.score(
+                queryTokens,
+                in: "\(subject) \(label) \(body)"
+            )
+            guard score > 0 else { return nil }
+            return GraphAuthorityHit(
+                subject: subject,
+                predicate: "understood:label",
+                object: label,
+                source: "canonical local accepted graph: \(acceptedGraphURL.path)",
+                queryTrace: "Fuseki unavailable or incomplete; searched canonical accepted graph at \(acceptedGraphURL.path)",
+                authorityLevel: .accepted,
+                score: score
+            )
+        }
+    }
+
+    private static func unescapeTurtleLiteral(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\\n", with: "\n")
+            .replacingOccurrences(of: "\\\"", with: "\"")
+            .replacingOccurrences(of: "\\\\", with: "\\")
     }
 }
 

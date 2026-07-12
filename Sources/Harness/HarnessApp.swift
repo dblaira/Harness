@@ -13,6 +13,10 @@ struct HarnessApp: App {
     /// cockpit) observes it.
     @StateObject private var routineScheduler: RoutineScheduler
     #if os(macOS)
+    /// One app-scoped owner for capture ingestion and analysis. WindowGroup
+    /// may create several windows, but they must not create competing queue
+    /// workers.
+    @StateObject private var macWorkbenchModel: MacWorkbenchModel
     /// WO-P: audio briefs over existing text, injected at the same seam
     /// as routineScheduler so any screen can play one the same way.
     @StateObject private var audioBriefPlayer = AudioBriefPlayer()
@@ -23,12 +27,15 @@ struct HarnessApp: App {
         _routineScheduler = StateObject(wrappedValue: RoutineScheduler(
             runner: HarnessRoutineRunner(backendResolver: Self.resolveHeadlessBackend)
         ))
+        #if os(macOS)
+        _macWorkbenchModel = StateObject(wrappedValue: MacWorkbenchModel())
+        #endif
     }
 
     var body: some Scene {
         WindowGroup("The Adam Pattern") {
             #if os(macOS)
-            MacChatView(ontology: ontology)
+            MacChatView(ontology: ontology, model: macWorkbenchModel)
                 .tint(Theme.savyCrimson)
                 .frame(
                     minWidth: CGFloat(HarnessWorkbenchLayoutState.transcriptMinimumWidth),

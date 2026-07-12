@@ -159,7 +159,46 @@ private func waitForPendingRequest(in store: ToolApprovalStore) async throws -> 
     #expect(outside.isError)
 }
 
+@Test func cancelledSearchFilesStopsBeforeScanning() async throws {
+    let home = try makeTempDirectory("tool-exec-home")
+    let executor = makeExecutor(home: home)
+    let root = home.appendingPathComponent("Documents/Main")
+    try write("needle", to: root.appendingPathComponent("a.md"))
+
+    let search = Task {
+        try? await Task.sleep(nanoseconds: 10_000_000_000)
+        return await executor.execute(
+            name: "search_files",
+            input: ["pattern": "needle", "path": .string(root.path)]
+        )
+    }
+    search.cancel()
+
+    let result = await search.value
+    #expect(result.isError)
+    #expect(result.output.localizedCaseInsensitiveContains("cancel"))
+}
+
 // MARK: - Approval flow
+
+@Test func cancelledApprovalWaitRemovesItsPendingRequest() async throws {
+    let store = makeApprovalStore()
+    let request = ToolApprovalRequest(
+        toolName: "write_file",
+        summary: "~/Documents/Main/cancelled.txt",
+        reason: "test"
+    )
+    let decision = Task { await store.awaitDecision(request) }
+    _ = try await waitForPendingRequest(in: store)
+
+    decision.cancel()
+
+    #expect(await decision.value == .cancelled)
+    #expect(store.pendingSnapshot().isEmpty)
+    // A stale UI action after cancellation must be inert.
+    store.approve(id: request.id)
+    #expect(store.pendingSnapshot().isEmpty)
+}
 
 #if os(macOS)
 @Test func dangerousShellExecutesOnlyAfterAdamApproves() async throws {
@@ -203,6 +242,29 @@ private func waitForPendingRequest(in store: ToolApprovalStore) async throws -> 
     #expect(result.output.contains("denied"))
     #expect(FileManager.default.fileExists(atPath: victim.path))
     #expect(store.pendingSnapshot().isEmpty)
+}
+
+@Test func cancelledDangerousShellCannotExecuteAfterLaterApproval() async throws {
+    let home = try makeTempDirectory("tool-exec-home")
+    let store = makeApprovalStore()
+    let executor = makeExecutor(home: home, approvals: store)
+    let victim = try makeTempDirectory("tool-exec-victim")
+
+    let execution = Task {
+        await executor.execute(
+            name: "shell",
+            input: ["command": .string("rm -rf '\(victim.path)'")]
+        )
+    }
+    let request = try await waitForPendingRequest(in: store)
+
+    execution.cancel()
+    store.approve(id: request.id)
+
+    let result = await execution.value
+    #expect(result.isError)
+    #expect(result.output.localizedCaseInsensitiveContains("cancel"))
+    #expect(FileManager.default.fileExists(atPath: victim.path))
 }
 
 @Test func hardlineShellIsRefusedWithoutPrompting() async throws {
@@ -267,6 +329,29 @@ private func waitForPendingRequest(in store: ToolApprovalStore) async throws -> 
     let result = await pendingResult
     #expect(!result.isError)
     #expect(try String(contentsOf: target, encoding: .utf8) == "approved words")
+}
+
+@Test func cancelledWriteCannotExecuteAfterLaterApproval() async throws {
+    let home = try makeTempDirectory("tool-exec-home")
+    let store = makeApprovalStore()
+    let executor = makeExecutor(home: home, approvals: store)
+    let target = home.appendingPathComponent("Documents/Main/cancelled.txt")
+
+    let execution = Task {
+        await executor.execute(
+            name: "write_file",
+            input: ["path": .string(target.path), "content": "must never be written"]
+        )
+    }
+    let request = try await waitForPendingRequest(in: store)
+
+    execution.cancel()
+    store.approve(id: request.id)
+
+    let result = await execution.value
+    #expect(result.isError)
+    #expect(result.output.localizedCaseInsensitiveContains("cancel"))
+    #expect(!FileManager.default.fileExists(atPath: target.path))
 }
 
 // MARK: - Memory staging

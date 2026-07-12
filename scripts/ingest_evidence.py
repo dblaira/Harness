@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Read Supabase evidence and append review-queue candidates.
+"""Run Harness-owned correlation analysis over Supabase evidence.
 
-This script is intentionally authority-safe:
+Unlike suite producer transports, this script is part of Harness's analysis
+boundary. It may propose review candidates, but only through the shared
+cross-process queue coordination protocol:
 - Supabase access is read-only.
 - Accepted graph files are never edited.
-- New claims are appended only to Ontology/candidates/queue.json.
+- New claims remain pending until Adam reviews them.
 """
 
 from __future__ import annotations
@@ -22,6 +24,11 @@ import urllib.parse
 import urllib.request
 from collections import defaultdict
 from pathlib import Path
+
+from review_queue_transaction import (
+    ReviewQueueCoordinationError,
+    append_queue_entries,
+)
 
 SUPABASE_PROJECT_URL = "https://wqdacfrzurhpsiuvzxwo.supabase.co"
 MAX_NEW_CANDIDATES = 10
@@ -453,6 +460,16 @@ def run(
             new_claims.append(build_weakening_claim(domain_a, domain_b, previous_stats["percent"], stats, run_date))
             queue_keys.add(pair_key(domain_a, domain_b, WEAKENING))
 
+    if not dry_run and new_claims:
+        try:
+            new_claims = append_queue_entries(
+                queue_path,
+                new_claims,
+                repository_root=Path(__file__).resolve().parents[1],
+            )
+        except ReviewQueueCoordinationError as error:
+            raise SystemExit(f"Review queue staging failed safely: {error}") from error
+
     run_summary = {
         "date": dt.datetime.now(dt.timezone.utc).isoformat(),
         "extraction_count": len(rows),
@@ -484,9 +501,6 @@ def run(
     }
 
     if not dry_run:
-        if new_claims:
-            queue.extend(new_claims)
-            save_json(queue_path, queue)
         save_json(refresh_report_path, refresh_report)
         append_ingest_log(ingest_log_path, run_summary)
 
@@ -500,7 +514,7 @@ def run(
 
 def main() -> int:
     load_local_env()
-    parser = argparse.ArgumentParser(description="Ingest Supabase evidence into the review queue.")
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ontology-root", type=Path, default=default_ontology_root())
     parser.add_argument("--start-date", type=parse_cli_date, default=DEFAULT_START_DATE)
     parser.add_argument("--end-date", type=parse_cli_date, default=dt.date.today())

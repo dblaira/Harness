@@ -1,5 +1,24 @@
 import Foundation
 
+/// Candidate identifiers are interpolated into Turtle IRIs after Adam
+/// approves a card. Keep the grammar deliberately narrow at every writer and
+/// again at the promotion boundary.
+public enum ReviewQueueCandidateID {
+    public static func isSafe(_ id: String) -> Bool {
+        guard id == id.trimmingCharacters(in: .whitespacesAndNewlines),
+              id.hasPrefix("cand-"),
+              (5...160).contains(id.utf8.count)
+        else { return false }
+        return id.utf8.allSatisfy { byte in
+            (97...122).contains(byte)
+                || (48...57).contains(byte)
+                || byte == 45
+                || byte == 46
+                || byte == 95
+        }
+    }
+}
+
 public enum ReviewQueueDecision: Sendable, Equatable {
     case yes
     case sometimes
@@ -26,6 +45,24 @@ public struct ReviewQueueOutcome: Sendable, Equatable {
         self.claimId = claimId
         self.accepted = accepted
         self.blockedReason = blockedReason
+    }
+}
+
+public enum ReviewQueueClaimStatus: String, Sendable, Equatable {
+    case pending
+    case accepted
+    case rejected
+}
+
+/// The minimum queue identity needed to reconnect a durable capture receipt
+/// after a crash without treating the queue row as accepted authority.
+public struct ReviewQueueClaimSnapshot: Sendable, Equatable {
+    public let id: String
+    public let status: ReviewQueueClaimStatus
+
+    public init(id: String, status: ReviewQueueClaimStatus) {
+        self.id = id
+        self.status = status
     }
 }
 
@@ -271,60 +308,87 @@ public final class ReviewQueueStore: Sendable {
             .map { $0.memoryCandidate }
     }
 
-    public func decide(claimId: String, decision: ReviewQueueDecision) async throws -> ReviewQueueOutcome {
-        var queue = try loadQueue()
-        guard let index = queue.firstIndex(where: { $0.id == claimId }) else {
-            throw ReviewQueueError.claimNotFound(claimId)
-        }
-        var claim = queue[index]
-
-        if let frequency = decision.acceptedFrequency {
-            let turtle = Self.turtle(for: claim, frequency: frequency, acceptedAt: Date())
-            do {
-                try turtleParser.parse(Self.prefixes + turtle)
-            } catch {
-                let detail = "Blocked: \(plainValidationMessage(error))"
-                claim.blockedReason = detail
-                queue[index] = claim
-                try saveQueue(queue)
-                return ReviewQueueOutcome(claimId: claimId, accepted: false, blockedReason: detail)
+    /// Read-only status lookup used to keep retained capture receipts aligned
+    /// with Adam's decision. This does not promote, reject, or otherwise
+    /// mutate a review-queue claim.
+    public func loadClaimStatuses() async throws -> [String: ReviewQueueClaimStatus] {
+        try loadQueue().reduce(into: [:]) { statuses, claim in
+            if let status = ReviewQueueClaimStatus(rawValue: claim.status) {
+                statuses[claim.id] = status
             }
+        }
+    }
 
-            try appendToAcceptedGraph(turtle)
+    /// Finds a row produced from exactly this set of capture receipts. Order is
+    /// ignored, but subsets and supersets do not match.
+    public func findClaim(
+        sourceCaptureIDs: [String],
+        canonicalProducerID: String
+    ) async throws -> ReviewQueueClaimSnapshot? {
+        let expected = Self.normalizedCaptureIDs(sourceCaptureIDs)
+        guard !expected.isEmpty else { return nil }
+        return try loadQueue().first(where: { claim in
+            Self.normalizedCaptureIDs(claim.sourceCaptureIDs ?? []) == expected
+                && Self.canonicalProducerID(for: claim) == canonicalProducerID
+        }).flatMap(Self.snapshot)
+    }
+
+    /// Finds a pre-receipt queue row by exact normalized plain text. Modern
+    /// rows carrying source_capture_ids are intentionally excluded.
+    public func findLegacyClaim(
+        normalizedPlainText: String,
+        canonicalProducerID: String
+    ) async throws -> ReviewQueueClaimSnapshot? {
+        let expected = Self.normalizedPlainText(normalizedPlainText)
+        guard !expected.isEmpty else { return nil }
+        return try loadQueue().first(where: { claim in
+            (claim.sourceCaptureIDs?.isEmpty ?? true)
+                && Self.normalizedPlainText(claim.plain) == expected
+                && Self.canonicalProducerID(for: claim) == canonicalProducerID
+        }).flatMap(Self.snapshot)
+    }
+
+    public func decide(claimId: String, decision: ReviewQueueDecision) async throws -> ReviewQueueOutcome {
+        let transition = try transitionPendingClaim(claimId: claimId, decision: decision)
+        switch transition {
+        case .terminal(let status):
+            return ReviewQueueOutcome(claimId: claimId, accepted: status == .accepted)
+
+        case .blocked(let detail):
+            return ReviewQueueOutcome(claimId: claimId, accepted: false, blockedReason: detail)
+
+        case .accepted(let claim, let frequency, let turtle):
+            // File authority and the fresh queue transition are complete before
+            // this best-effort network await. A newly staged row can therefore
+            // never be overwritten by a stale pre-await queue snapshot.
             await postAcceptedTriplesBestEffort(Self.prefixes + turtle)
-            claim.status = "accepted"
-            claim.frequency = frequency
-            claim.blockedReason = nil
-            queue[index] = claim
-            try saveQueue(queue)
+            let provenance = Self.provenance(for: claim)
             let record = ReviewQueueDecisionRecord(
                 claimId: claim.id,
                 decision: "accepted",
                 frequency: frequency,
                 claim: claim.plain,
                 evidenceNote: claim.evidence,
-                sourceRef: claim.source
+                sourceRef: provenance.recordSourceRef
             )
             try await ledger.recordReviewQueueDecision(record)
-            mirrorDecisionToCanonicalLedger(record)
+            mirrorDecisionToCanonicalLedger(record, provenance: provenance)
             return ReviewQueueOutcome(claimId: claimId, accepted: true)
-        }
 
-        claim.status = "rejected"
-        claim.blockedReason = nil
-        queue[index] = claim
-        try saveQueue(queue)
-        let record = ReviewQueueDecisionRecord(
-            claimId: claim.id,
-            decision: "rejected",
-            frequency: nil,
-            claim: claim.plain,
-            evidenceNote: claim.evidence,
-            sourceRef: claim.source
-        )
-        try await ledger.recordReviewQueueDecision(record)
-        mirrorDecisionToCanonicalLedger(record)
-        return ReviewQueueOutcome(claimId: claimId, accepted: false)
+        case .rejected(let claim):
+            let provenance = Self.provenance(for: claim)
+            let record = ReviewQueueDecisionRecord(
+                claimId: claim.id,
+                decision: "rejected",
+                frequency: nil,
+                claim: claim.plain,
+                evidenceNote: claim.evidence,
+                sourceRef: provenance.recordSourceRef
+            )
+            try await ledger.recordReviewQueueDecision(record)
+            mirrorDecisionToCanonicalLedger(record, provenance: provenance)
+            return ReviewQueueOutcome(claimId: claimId, accepted: false)
+        }
     }
 
     public func syncAcceptedGraphSnapshot() async throws {
@@ -333,33 +397,89 @@ public final class ReviewQueueStore: Sendable {
     }
 
     private func loadQueue() throws -> [ReviewQueueClaim] {
-        let data = try Data(contentsOf: queueURL)
+        let data = try ReviewQueueFileCoordinator.read(queueURL: queueURL)
         return try JSONDecoder().decode([ReviewQueueClaim].self, from: data)
     }
 
-    private func saveQueue(_ queue: [ReviewQueueClaim]) throws {
+    private func encodeQueue(_ queue: [ReviewQueueClaim]) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(queue)
-        try FileManager.default.createDirectory(at: candidatesURL, withIntermediateDirectories: true)
-        try data.write(to: queueURL, options: .atomic)
+        return try encoder.encode(queue)
     }
 
-    private func appendToAcceptedGraph(_ turtle: String) throws {
+    private func transitionPendingClaim(
+        claimId: String,
+        decision: ReviewQueueDecision
+    ) throws -> ReviewQueueDecisionTransition {
+        try ReviewQueueFileCoordinator.mutate(queueURL: queueURL) { currentData in
+            var queue = try JSONDecoder().decode([ReviewQueueClaim].self, from: currentData)
+            guard let index = queue.firstIndex(where: { $0.id == claimId }) else {
+                throw ReviewQueueError.claimNotFound(claimId)
+            }
+            var claim = queue[index]
+            guard let status = ReviewQueueClaimStatus(rawValue: claim.status) else {
+                throw ReviewQueueError.invalidClaimStatus(claimId, claim.status)
+            }
+            guard status == .pending else {
+                return (replacement: nil, result: .terminal(status))
+            }
+
+            if let frequency = decision.acceptedFrequency {
+                guard ReviewQueueCandidateID.isSafe(claim.id) else {
+                    let detail = "Blocked: candidate id contains unsafe characters."
+                    claim.blockedReason = detail
+                    queue[index] = claim
+                    return (try encodeQueue(queue), .blocked(detail))
+                }
+                let turtle = Self.turtle(for: claim, frequency: frequency, acceptedAt: Date())
+                do {
+                    try turtleParser.parse(Self.prefixes + turtle)
+                } catch {
+                    let detail = "Blocked: \(plainValidationMessage(error))"
+                    claim.blockedReason = detail
+                    queue[index] = claim
+                    return (try encodeQueue(queue), .blocked(detail))
+                }
+
+                // Append first. If the process stops before queue.json is
+                // replaced, retry finds the same connection IRI and does not
+                // append a second authority statement.
+                try appendToAcceptedGraphIfMissing(turtle, claimId: claim.id)
+                claim.status = ReviewQueueClaimStatus.accepted.rawValue
+                claim.frequency = frequency
+                claim.blockedReason = nil
+                queue[index] = claim
+                return (
+                    try encodeQueue(queue),
+                    .accepted(claim: claim, frequency: frequency, turtle: turtle)
+                )
+            }
+
+            claim.status = ReviewQueueClaimStatus.rejected.rawValue
+            claim.blockedReason = nil
+            queue[index] = claim
+            return (try encodeQueue(queue), .rejected(claim))
+        }
+    }
+
+    private func appendToAcceptedGraphIfMissing(_ turtle: String, claimId: String) throws {
         try FileManager.default.createDirectory(at: acceptedURL, withIntermediateDirectories: true)
         if !FileManager.default.fileExists(atPath: acceptedGraphURL.path) {
             try ("# Accepted graph - claims approved by Adam via review queue.\n\n" + Self.prefixes)
                 .write(to: acceptedGraphURL, atomically: true, encoding: .utf8)
         }
-        let handle = try FileHandle(forWritingTo: acceptedGraphURL)
-        defer { try? handle.close() }
-        try handle.seekToEnd()
-        if let data = turtle.data(using: .utf8) {
-            try handle.write(contentsOf: data)
-        }
+        let existing = try String(contentsOf: acceptedGraphURL, encoding: .utf8)
+        guard !existing.contains(Self.connectionStatementMarker(for: claimId)) else { return }
+        // Replace atomically instead of appending through FileHandle so a
+        // process interruption cannot leave a partial authority statement
+        // whose subject marker would make a retry look complete.
+        try (existing + turtle).write(to: acceptedGraphURL, atomically: true, encoding: .utf8)
     }
 
-    private func mirrorDecisionToCanonicalLedger(_ record: ReviewQueueDecisionRecord) {
+    private func mirrorDecisionToCanonicalLedger(
+        _ record: ReviewQueueDecisionRecord,
+        provenance: ReviewQueueClaimProvenance
+    ) {
         let ledgerURL = acceptedURL.appendingPathComponent("decision-ledger.json")
         do {
             var entries: [[String: Any]] = []
@@ -378,10 +498,27 @@ public final class ReviewQueueStore: Sendable {
                 "decision": record.decision,
                 "claim": record.claim,
                 "at": ISO8601DateFormatter.reviewQueue.string(from: record.createdAt),
-                "source": "harness-app",
+                "source": provenance.trustedSource ?? record.sourceRef,
+                "source_ref": record.sourceRef,
+                "recorded_by": "harness-app",
             ]
             if let frequency = record.frequency {
                 entry["frequency"] = frequency
+            }
+            if !provenance.sourceCaptureIDs.isEmpty {
+                entry["source_capture_ids"] = provenance.sourceCaptureIDs
+            }
+            if let trustedSource = provenance.trustedSource {
+                entry["trusted_source"] = trustedSource
+            }
+            if let sourceCapturedAt = provenance.sourceCapturedAt {
+                entry["source_captured_at"] = ISO8601DateFormatter.reviewQueue.string(from: sourceCapturedAt)
+            }
+            if let analyzerVersion = provenance.analyzerVersion {
+                entry["analyzer_version"] = analyzerVersion
+            }
+            if !provenance.sourceReceiptRefs.isEmpty {
+                entry["source_receipt_refs"] = provenance.sourceReceiptRefs
             }
             entries.append(entry)
             let data = try JSONSerialization.data(withJSONObject: entries, options: [.prettyPrinted, .sortedKeys])
@@ -418,8 +555,69 @@ public final class ReviewQueueStore: Sendable {
 
     """
 
+    private static func snapshot(_ claim: ReviewQueueClaim) -> ReviewQueueClaimSnapshot? {
+        guard let status = ReviewQueueClaimStatus(rawValue: claim.status) else { return nil }
+        return ReviewQueueClaimSnapshot(id: claim.id, status: status)
+    }
+
+    private static func normalizedCaptureIDs(_ ids: [String]) -> [String] {
+        ids
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .sorted()
+    }
+
+    private static func normalizedPlainText(_ text: String) -> String {
+        text.components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    private static func canonicalProducerID(for claim: ReviewQueueClaim) -> String? {
+        if let trustedSource = claim.trustedSource,
+           !trustedSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return SuiteCaptureProvenance.canonicalProducerID(for: trustedSource)
+        }
+        if claim.id.hasPrefix("cand-news-calm-") { return "news-calm" }
+        if claim.id.hasPrefix("cand-recall-") || claim.id.hasPrefix("cand-re-call-") {
+            return "recall"
+        }
+        if claim.id.hasPrefix("cand-understood-") { return "understood" }
+        return nil
+    }
+
+    private static func connectionID(for claimId: String) -> String {
+        claimId.replacingOccurrences(of: "cand-", with: "conn-obs-")
+    }
+
+    private static func connectionStatementMarker(for claimId: String) -> String {
+        "<https://understood.app/ontology/connection/\(connectionID(for: claimId))> a understood:Connection"
+    }
+
+    private static func provenance(for claim: ReviewQueueClaim) -> ReviewQueueClaimProvenance {
+        let captureIDs = normalizedCaptureIDs(claim.sourceCaptureIDs ?? [])
+        let trustedSource = claim.trustedSource
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .flatMap { $0.isEmpty ? nil : SuiteCaptureProvenance.canonicalProducerID(for: $0) }
+        let sourceComponent = trustedSource ?? "unattributed"
+        let refs = captureIDs.map {
+            "harness-receipt://\(sourceComponent)/\($0)"
+        }
+        let analyzerVersion = claim.analyzerVersion
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .flatMap { $0.isEmpty ? nil : $0 }
+        return ReviewQueueClaimProvenance(
+            sourceCaptureIDs: captureIDs,
+            trustedSource: trustedSource,
+            sourceCapturedAt: claim.sourceCapturedAt,
+            analyzerVersion: analyzerVersion,
+            sourceReceiptRefs: refs,
+            fallbackSourceRef: claim.source
+        )
+    }
+
     private static func turtle(for claim: ReviewQueueClaim, frequency: String, acceptedAt: Date) -> String {
-        let cid = claim.id.replacingOccurrences(of: "cand-", with: "conn-obs-")
+        let cid = connectionID(for: claim.id)
         let label = escapeLiteral(String(claim.plain.trimmingCharacters(in: CharacterSet(charactersIn: "."))))
         let evidence = escapeLiteral(claim.evidence)
         let timestamp = ISO8601DateFormatter.reviewQueue.string(from: acceptedAt)
@@ -438,6 +636,26 @@ public final class ReviewQueueStore: Sendable {
         lines += [
             "  understood:frequency \"\(frequency)\" ;",
             "  understood:evidenceNote \"\(evidence)\" ;",
+        ]
+        let provenance = provenance(for: claim)
+        lines += provenance.sourceCaptureIDs.map {
+            "  understood:sourceCaptureID \"\(escapeLiteral($0))\" ;"
+        }
+        if let trustedSource = provenance.trustedSource {
+            lines.append("  understood:trustedSource \"\(escapeLiteral(trustedSource))\" ;")
+        }
+        if let sourceCapturedAt = provenance.sourceCapturedAt {
+            lines.append(
+                "  understood:sourceCapturedAt \"\(ISO8601DateFormatter.reviewQueue.string(from: sourceCapturedAt))\"^^xsd:dateTime ;"
+            )
+        }
+        if let analyzerVersion = provenance.analyzerVersion, !analyzerVersion.isEmpty {
+            lines.append("  understood:analyzerVersion \"\(escapeLiteral(analyzerVersion))\" ;")
+        }
+        lines += provenance.sourceReceiptRefs.map {
+            "  understood:sourceRef \"\(escapeLiteral($0))\" ;"
+        }
+        lines += [
             "  understood:acceptedAt \"\(timestamp)\"^^xsd:dateTime ;",
             "  .",
             "",
@@ -456,12 +674,37 @@ public final class ReviewQueueStore: Sendable {
 
 public enum ReviewQueueError: Error, LocalizedError, Sendable, Equatable {
     case claimNotFound(String)
+    case invalidClaimStatus(String, String)
 
     public var errorDescription: String? {
         switch self {
         case .claimNotFound(let id):
             return "Claim not found: \(id)"
+        case .invalidClaimStatus(let id, let status):
+            return "Claim \(id) has an invalid review status: \(status)"
         }
+    }
+}
+
+private enum ReviewQueueDecisionTransition {
+    case terminal(ReviewQueueClaimStatus)
+    case blocked(String)
+    case accepted(claim: ReviewQueueClaim, frequency: String, turtle: String)
+    case rejected(ReviewQueueClaim)
+}
+
+private struct ReviewQueueClaimProvenance {
+    let sourceCaptureIDs: [String]
+    let trustedSource: String?
+    let sourceCapturedAt: Date?
+    let analyzerVersion: String?
+    let sourceReceiptRefs: [String]
+    let fallbackSourceRef: String
+
+    var recordSourceRef: String {
+        sourceReceiptRefs.isEmpty
+            ? fallbackSourceRef
+            : sourceReceiptRefs.joined(separator: ", ")
     }
 }
 
@@ -477,6 +720,10 @@ private struct ReviewQueueClaim: Codable, Sendable, Equatable {
     var connectionType: String
     var frequency: String?
     var blockedReason: String?
+    var sourceCaptureIDs: [String]?
+    var trustedSource: String?
+    var sourceCapturedAt: Date?
+    var analyzerVersion: String?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -490,6 +737,10 @@ private struct ReviewQueueClaim: Codable, Sendable, Equatable {
         case connectionType = "connection_type"
         case frequency
         case blockedReason = "blocked_reason"
+        case sourceCaptureIDs = "source_capture_ids"
+        case trustedSource = "trusted_source"
+        case sourceCapturedAt = "source_captured_at"
+        case analyzerVersion = "analyzer_version"
     }
 
     init(from decoder: Decoder) throws {
@@ -505,6 +756,10 @@ private struct ReviewQueueClaim: Codable, Sendable, Equatable {
         connectionType = try container.decode(String.self, forKey: .connectionType)
         frequency = try container.decodeIfPresent(String.self, forKey: .frequency)
         blockedReason = try container.decodeIfPresent(String.self, forKey: .blockedReason)
+        sourceCaptureIDs = try container.decodeIfPresent([String].self, forKey: .sourceCaptureIDs)
+        trustedSource = try container.decodeIfPresent(String.self, forKey: .trustedSource)
+        sourceCapturedAt = try container.decodeIfPresent(Date.self, forKey: .sourceCapturedAt)
+        analyzerVersion = try container.decodeIfPresent(String.self, forKey: .analyzerVersion)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -520,6 +775,10 @@ private struct ReviewQueueClaim: Codable, Sendable, Equatable {
         try container.encode(connectionType, forKey: .connectionType)
         try container.encodeIfPresent(frequency, forKey: .frequency)
         try container.encodeIfPresent(blockedReason, forKey: .blockedReason)
+        try container.encodeIfPresent(sourceCaptureIDs, forKey: .sourceCaptureIDs)
+        try container.encodeIfPresent(trustedSource, forKey: .trustedSource)
+        try container.encodeIfPresent(sourceCapturedAt, forKey: .sourceCapturedAt)
+        try container.encodeIfPresent(analyzerVersion, forKey: .analyzerVersion)
     }
 
     var memoryCandidate: MemoryCandidate {
@@ -536,7 +795,14 @@ private struct ReviewQueueClaim: Codable, Sendable, Equatable {
             evidenceNote: evidence,
             sourceRef: source,
             strength: strength,
-            frequency: frequency
+            frequency: frequency,
+            sourceCaptureIDs: sourceCaptureIDs,
+            trustedSource: trustedSource,
+            sourceCapturedAt: sourceCapturedAt,
+            analyzerVersion: analyzerVersion,
+            domainA: domainA,
+            domainB: domainB,
+            connectionType: connectionType
         )
     }
 }

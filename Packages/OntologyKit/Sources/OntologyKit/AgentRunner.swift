@@ -230,30 +230,24 @@ public struct AgentRunner: Sendable {
         images: [ModelImageAttachment] = [],
         apiKey: String? = nil
     ) async throws -> String {
+        if let answer = InteractiveChatPolicy.productHelpAnswer(for: user) {
+            return answer
+        }
+
         let history = ConversationTurn.cappedHistory(conversationHistory)
-        let transcriptPrompt = Self.transcriptPrompt(system: system, history: history, user: user)
         switch backend {
         case .codex:
             // Codex is subscription-session only. Never let an explicit or
             // ambient OpenAI API key silently switch this backend to paid API
             // execution.
-            if CodexSessionClient.loadSessionToken() != nil {
-                return try await CodexSessionClient().send(
-                    messages: Self.codexMessages(history: history, user: user, images: images),
-                    system: system
-                )
+            guard let sessionToken = CodexSessionClient.loadSessionToken() else {
+                throw CodexSessionClient.CodexSessionError.noSessionToken
             }
-            #if os(macOS)
-            guard let bin = codexPath else { throw RunError.notFound("codex CLI") }
-            return try shell(
-                bin,
-                ["exec", "--skip-git-repo-check", "--ignore-user-config", "--ephemeral", transcriptPrompt],
-                timeout: 300,
-                scrubSecretEnvironment: true
+            return try await CodexSessionClient().send(
+                messages: Self.codexMessages(history: history, user: user, images: images),
+                system: system,
+                sessionToken: sessionToken
             )
-            #else
-            throw RunError.notFound("codex CLI")
-            #endif
         case .grok:
             let key = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if !key.isEmpty {
@@ -262,29 +256,21 @@ public struct AgentRunner: Sendable {
                     system: system
                 )
             }
-            if GrokSessionClient.loadSessionToken() != nil {
+            if let sessionToken = GrokSessionClient.loadSessionToken() {
                 return try await GrokSessionClient().send(
                     messages: Self.grokMessages(history: history, user: user, images: images),
-                    system: system
+                    system: system,
+                    sessionToken: sessionToken
                 )
             }
-            #if os(macOS)
-            guard let bin = grokPath else { throw RunError.notFound("grok CLI") }
-            return try shell(
-                bin,
-                [
-                    "-p", transcriptPrompt,
-                    "--output-format", "json",
-                    "--max-turns", "1",
-                    "--disable-web-search",
-                    "--no-subagents",
-                    "--disallowed-tools", "run_terminal_cmd,grep,web_search,web_fetch,Agent,list_dir,read_file,search_replace,write",
-                ],
-                timeout: 300
-            )
-            #else
-            throw RunError.notFound("xAI API key")
-            #endif
+            switch GrokSessionClient.sessionStatus() {
+            case .expired:
+                throw GrokSessionClient.GrokSessionError.expiredSessionToken
+            case .missing, .valid:
+                // `.valid` with no token is a read race; fail closed instead of
+                // changing execution surfaces behind the user's back.
+                throw GrokSessionClient.GrokSessionError.noSessionToken
+            }
         case .claude:
             let c = ClaudeClient(apiKey: apiKey)
             return try await c.send(
@@ -293,6 +279,77 @@ public struct AgentRunner: Sendable {
             )
         case .hermes:
             return try await runHermesLocal(system: system, history: history, user: user)
+        }
+    }
+
+    /// Single-shot execution that preserves provider usage metadata. The
+    /// legacy `run` API remains for callers that only need text; interactive
+    /// chat uses this response-shaped path so token counts reach the ledger.
+    /// Direct clients use their tool-capable wire format with an empty tool
+    /// catalog, which grants no actions while retaining usage parsing.
+    public func runResponse(
+        backend: Backend,
+        system: String,
+        user: String,
+        conversationHistory: [ConversationTurn] = [],
+        images: [ModelImageAttachment] = [],
+        apiKey: String? = nil
+    ) async throws -> BackendResponse {
+        if let answer = InteractiveChatPolicy.productHelpAnswer(for: user) {
+            return BackendResponse(text: answer, tokenCount: 0, cost: 0)
+        }
+
+        let history = ConversationTurn.cappedHistory(conversationHistory)
+        switch backend {
+        case .codex:
+            guard let sessionToken = CodexSessionClient.loadSessionToken() else {
+                throw CodexSessionClient.CodexSessionError.noSessionToken
+            }
+            return try await CodexSessionClient().send(
+                messages: Self.codexMessages(history: history, user: user, images: images),
+                system: system,
+                tools: [],
+                toolTranscript: [],
+                sessionToken: sessionToken
+            )
+
+        case .grok:
+            let key = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !key.isEmpty {
+                return try await XAIClient(apiKey: key).send(
+                    messages: Self.xaiMessages(history: history, user: user, images: images),
+                    system: system,
+                    tools: [],
+                    toolTranscript: []
+                )
+            }
+            if let sessionToken = GrokSessionClient.loadSessionToken() {
+                return try await GrokSessionClient().send(
+                    messages: Self.grokMessages(history: history, user: user, images: images),
+                    system: system,
+                    tools: [],
+                    toolTranscript: [],
+                    sessionToken: sessionToken
+                )
+            }
+            switch GrokSessionClient.sessionStatus() {
+            case .expired:
+                throw GrokSessionClient.GrokSessionError.expiredSessionToken
+            case .missing, .valid:
+                throw GrokSessionClient.GrokSessionError.noSessionToken
+            }
+
+        case .claude:
+            return try await ClaudeClient(apiKey: apiKey).send(
+                messages: Self.claudeMessages(history: history, user: user),
+                system: system,
+                tools: [],
+                toolTranscript: []
+            )
+
+        case .hermes:
+            let text = try await runHermesLocal(system: system, history: history, user: user)
+            return BackendResponse(text: text, tokenCount: nil, cost: nil)
         }
     }
 
@@ -346,6 +403,10 @@ public struct AgentRunner: Sendable {
         tools: [ToolSpec],
         toolTranscript: [ToolLoopTurn]
     ) async throws -> BackendResponse {
+        if let answer = InteractiveChatPolicy.productHelpAnswer(for: user) {
+            return BackendResponse(text: answer, tokenCount: 0, cost: 0)
+        }
+
         let history = ConversationTurn.cappedHistory(conversationHistory)
         // Empty strings fall back to the environment key, matching how the
         // clients' initializers treat nil.

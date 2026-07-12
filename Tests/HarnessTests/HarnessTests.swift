@@ -196,6 +196,169 @@ import OntologyKit
     #expect(rows.map(\.id) == ["PHONE-ACTIVE"])
 }
 
+@Test func suiteCaptureInboxRootsCoverEveryRuntimeProducerAndLegacyHandoff() {
+    let sources = MacWorkbenchModel.defaultSuiteCaptureInboxSources(
+        homeDirectory: URL(fileURLWithPath: "/Users/tester", isDirectory: true)
+    )
+    let roots = sources.map(\.root.path)
+
+    #expect(roots == [
+        "/Users/tester/Library/Mobile Documents/iCloud~com~adamblair~harness/Documents/Harness Captures/Understood/Pending",
+        "/Users/tester/Library/Mobile Documents/iCloud~app~understood~recall/Documents/Harness Captures/Pending",
+        "/Users/tester/Library/Mobile Documents/iCloud~com~newscalm~app/Documents/Harness Captures/Pending",
+        "/Users/tester/Library/Mobile Documents/iCloud~app~understood~recall/Documents/Harness Candidates/Pending",
+        "/Users/tester/Library/Mobile Documents/iCloud~com~newscalm~app/Documents/Harness Candidates/Pending",
+    ])
+    #expect(sources.map(\.trustedSource.id) == [
+        "understood", "recall", "news-calm", "recall-legacy", "news-calm-legacy",
+    ])
+}
+
+@Test func ontologyBookmarkRestoreAcceptsAnICloudSymlinkAlias() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("harness-bookmark-alias-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let canonical = root.appendingPathComponent("canonical/Ontology", isDirectory: true)
+    let alias = root.appendingPathComponent("alias-Ontology", isDirectory: true)
+    try FileManager.default.createDirectory(at: canonical, withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: canonical)
+
+    #expect(alias.standardizedFileURL != canonical.standardizedFileURL)
+    #expect(MacWorkbenchModel.ontologyDirectoryURLsReferToSameResource(alias, canonical))
+}
+
+@Test func legacyProposalReceiptsGroupOnlyWithinTheSameTrustedProducer() {
+    func receipt(
+        _ id: String,
+        plain: String,
+        trustedSourceID: String = "news-calm-legacy",
+        trustedSourceName: String = "News Calm (legacy)",
+        producerSource: String = "News Calm — news-calm:preferences-feedback:adam"
+    ) -> SuiteCaptureReceipt {
+        SuiteCaptureReceipt(
+            trustedSourceID: trustedSourceID,
+            trustedSourceName: trustedSourceName,
+            capture: SuiteCaptureEnvelope(
+                captureID: id,
+                capturedAt: "2026-07-11T20:00:00Z",
+                captureKind: "legacy_candidate_envelope",
+                payload: .object([
+                    "plain": .string(plain),
+                    "source": .string(producerSource),
+                ])
+            ),
+            rawSHA256: String(repeating: "a", count: 64),
+            rawCapturePath: "/tmp/\(id).json",
+            receivedAt: "2026-07-11T20:00:00Z",
+            updatedAt: "2026-07-11T20:00:00Z",
+            state: .analysisPending
+        )
+    }
+    let first = receipt("capture-legacy-one", plain: "AGENT PROPOSAL: same wording")
+    let duplicate = receipt("capture-legacy-two", plain: "AGENT PROPOSAL: same wording")
+    let duplicateQueueTransport = receipt(
+        "capture-legacy-queue",
+        plain: "AGENT PROPOSAL: same wording",
+        trustedSourceID: "news-calm-legacy-queue",
+        trustedSourceName: "News Calm (legacy queue)"
+    )
+    let different = receipt("capture-legacy-three", plain: "AGENT PROPOSAL: different")
+    let differentProducerRecord = receipt(
+        "capture-legacy-other-record",
+        plain: "AGENT PROPOSAL: same wording",
+        producerSource: "News Calm — news-calm:preferences-feedback:someone-else"
+    )
+    let foreignSource = receipt(
+        "capture-legacy-four",
+        plain: "AGENT PROPOSAL: same wording",
+        trustedSourceID: "recall-legacy",
+        trustedSourceName: "Re_Call (legacy)"
+    )
+
+    #expect(MacWorkbenchModel.relatedSuiteCaptureReceipts(
+        to: first,
+        in: [
+            first, duplicate, duplicateQueueTransport, different,
+            differentProducerRecord, foreignSource,
+        ]
+    ).map(\.capture.captureID) == [
+        "capture-legacy-two", "capture-legacy-queue",
+    ])
+}
+
+@Test func xctestNeverStartsTheLiveSuiteCaptureWorker() {
+    #expect(!MacWorkbenchModel.shouldRunSuiteCaptureBackgroundWork(environment: [
+        "XCTestConfigurationFilePath": "/tmp/HarnessTests.xctestconfiguration",
+    ], xctestRuntimePresent: false))
+    #expect(!MacWorkbenchModel.shouldRunSuiteCaptureBackgroundWork(
+        environment: [:],
+        xctestRuntimePresent: true
+    ))
+    #expect(MacWorkbenchModel.shouldRunSuiteCaptureBackgroundWork(
+        environment: [:],
+        xctestRuntimePresent: false
+    ))
+}
+
+@Test func captureRecoveryFindsExistingLegacyDecisionBeforeModelAnalysis() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("harness-capture-recovery-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let candidates = root.appendingPathComponent("candidates", isDirectory: true)
+    try FileManager.default.createDirectory(at: candidates, withIntermediateDirectories: true)
+    try """
+    [
+      {
+        "id": "cand-news-calm-already-reviewed",
+        "status": "accepted",
+        "plain": "AGENT PROPOSAL: Adam prefers brief news.",
+        "evidence": "Legacy evidence.",
+        "source": "News Calm",
+        "domain_a": "learning",
+        "domain_b": "affect",
+        "connection_type": "stated_news_preference"
+      }
+    ]
+    """.write(
+        to: candidates.appendingPathComponent("queue.json"),
+        atomically: true,
+        encoding: .utf8
+    )
+    let reviewQueue = ReviewQueueStore(
+        ontologyRoot: root,
+        ledger: try RunLedgerStore.inMemory()
+    )
+    let receipt = SuiteCaptureReceipt(
+        trustedSourceID: "news-calm-legacy-queue",
+        trustedSourceName: "News Calm (legacy queue)",
+        capture: SuiteCaptureEnvelope(
+            captureID: "capture-legacy-recovery",
+            capturedAt: "2026-07-11T20:00:00Z",
+            captureKind: "legacy_candidate_envelope",
+            payload: .object([
+                "plain": .string("AGENT PROPOSAL: Adam prefers brief news."),
+                "source": .string("News Calm"),
+            ])
+        ),
+        rawSHA256: String(repeating: "c", count: 64),
+        rawCapturePath: "/tmp/capture-legacy-recovery/raw-capture.json",
+        receivedAt: "2026-07-11T20:00:00Z",
+        updatedAt: "2026-07-11T20:00:00Z",
+        state: .analysisPending
+    )
+
+    let existing = try await MacWorkbenchModel.existingReviewClaim(
+        for: receipt,
+        relatedReceipts: [],
+        reviewQueue: reviewQueue
+    )
+
+    #expect(existing == ReviewQueueClaimSnapshot(
+        id: "cand-news-calm-already-reviewed",
+        status: .accepted
+    ))
+}
+
 @Test func delegationQueueActionRecordsShareBatchForMultiSelect() {
     let rows = [
         opportunityBoardRow(id: "DELEGATION-ONE", resource: "https://example.com/one"),
@@ -211,6 +374,89 @@ import OntologyKit
     #expect(records.map(\.opportunityID) == ["DELEGATION-ONE", "DELEGATION-TWO"])
     #expect(Set(records.map(\.batchID)) == ["batch-one"])
     #expect(records.allSatisfy { $0.action == .pass })
+}
+
+@Test func delegationReceiptPersistsExactThreeFieldsAndReloads() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("harness-delegation-receipt-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = DelegationReceiptStore(directory: root.appendingPathComponent("Delegations", isDirectory: true))
+    let receipt = DelegationReceipt(
+        id: "receipt-exact-words",
+        intent: "I want proof the harness app works.",
+        preferredApproach: "make my intentions clear, so the app can use it’s own system",
+        doneCondition: "A response that shows personalization about me,\ndone within 15 seconds.",
+        state: .submitted,
+        createdAt: Date(timeIntervalSince1970: 1_000)
+    )
+
+    try store.save(receipt)
+
+    let artifact = store.fileURL(for: receipt.id)
+    #expect(FileManager.default.fileExists(atPath: artifact.path))
+    let reloaded = try DelegationReceiptStore(directory: store.directory).load()
+    #expect(reloaded.count == 1)
+    #expect(reloaded.first?.id == receipt.id)
+    #expect(reloaded.first?.intent == receipt.intent)
+    #expect(reloaded.first?.preferredApproach == receipt.preferredApproach)
+    #expect(reloaded.first?.doneCondition == receipt.doneCondition)
+    #expect(reloaded.first?.state == .submitted)
+}
+
+@Test func delegationReceiptResultAtomicallyReplacesSubmittedState() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("harness-delegation-result-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = DelegationReceiptStore(directory: root)
+    var receipt = DelegationReceipt(
+        id: "receipt-result",
+        intent: "Do the work",
+        preferredApproach: "Use Harness",
+        doneCondition: "The result is visible",
+        state: .submitted,
+        createdAt: Date(timeIntervalSince1970: 2_000)
+    )
+    try store.save(receipt)
+
+    receipt.state = .completed
+    receipt.result = "Visible result"
+    receipt.updatedAt = Date(timeIntervalSince1970: 2_001)
+    try store.save(receipt)
+
+    let reloaded = try store.load()
+    #expect(reloaded.count == 1)
+    #expect(reloaded.first?.state == .completed)
+    #expect(reloaded.first?.result == "Visible result")
+}
+
+@Test func delegationReceiptSaveFailureProducesNoFalseArtifact() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("harness-delegation-blocked-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    try Data("not a directory".utf8).write(to: root)
+    let store = DelegationReceiptStore(directory: root)
+    let receipt = DelegationReceipt(
+        intent: "Keep this draft",
+        preferredApproach: "Do not clear it",
+        doneCondition: "A visible save error",
+        state: .submitted
+    )
+
+    #expect(throws: (any Error).self) {
+        try store.save(receipt)
+    }
+    #expect(!FileManager.default.fileExists(atPath: store.fileURL(for: receipt.id).path))
+}
+
+@Test func harnessInternalStorageNeverRequiresDocumentsFolderAccess() {
+    let root = MacWorkbenchModel.defaultHarnessDocumentsDirectory().standardizedFileURL.path
+    let delegations = MacWorkbenchModel.defaultOpportunityBoardDirectory().standardizedFileURL.path
+    let fascinations = MacWorkbenchModel.defaultFascinationsDirectory().standardizedFileURL.path
+
+    #expect(root.contains("/Library/Application Support/Harness"))
+    #expect(!root.contains("/Documents/Harness"))
+    #expect(delegations.hasPrefix(root))
+    #expect(fascinations.hasPrefix(root))
 }
 
 private func opportunityBoardRow(id: String, resource: String) -> OpportunityBoardRow {

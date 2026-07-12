@@ -3,10 +3,18 @@ import AppKit
 import CryptoKit
 import Foundation
 import OntologyKit
+import OSLog
 import UniformTypeIdentifiers
+
+private let suiteCaptureLogger = Logger(
+    subsystem: "com.adamblair.Harness",
+    category: "SuiteCapture"
+)
 
 @MainActor
 final class MacWorkbenchModel: ObservableObject {
+    private static let ontologyBookmarkDefaultsKey = "Harness.ontologyDirectoryBookmark"
+    private static var scopedOntologyURL: URL?
     @Published var ontology: Ontology = .empty
     @Published var runs: [HarnessRun] = []
     @Published var selectedDetail: HarnessRunDetail?
@@ -44,6 +52,12 @@ final class MacWorkbenchModel: ObservableObject {
     /// needs to block a second build, not the whole app.
     @Published private(set) var isCapturingBuildScreenshot = false
     @Published var status = "Ledger ready"
+    /// A Delegation-page send is a durable transaction, not a disappearing
+    /// chat draft. Receipts are loaded from Harness's app-owned Application
+    /// Support folder so relaunch persistence never asks for Documents access.
+    @Published private(set) var delegationReceipts: [DelegationReceipt] = []
+    @Published private(set) var delegationSubmissionError: String?
+    @Published private(set) var activeDelegationReceiptID: String?
     @Published var searchText = ""
     @Published var chatSessions: [ChatSession] = []
     @Published var sessionSearchHits: [SessionSearchHit] = []
@@ -52,6 +66,8 @@ final class MacWorkbenchModel: ObservableObject {
     @Published var showApprovalToast = false
     @Published var selectedTool: WorkbenchTool?
     @Published var reviewQueueCandidates: [MemoryCandidate] = []
+    @Published var suiteCaptureReceipts: [SuiteCaptureReceipt] = []
+    @Published var suiteCaptureIssues: [String] = []
     /// The Step Rail's gate state. Starts locked before the first check
     /// ever completes -- never assume open. See PatternGateChecker
     /// (fails CLOSED; CLAUDE.md hard rule 1).
@@ -65,6 +81,7 @@ final class MacWorkbenchModel: ObservableObject {
     /// (Adam, design-brief-ios-workbench.md) -- his words or verbatim
     /// quoted sources only, sourced from watched .md files.
     @Published var fascinationCards: [FascinationCard] = []
+    @Published private(set) var fascinationLoadIssue: String?
     @Published var connectors: [HarnessConnector] = HarnessConnectorRegistry.defaultConnectors()
     @Published var capabilities: [HarnessCapability] = HarnessCapabilityRegistry.defaultCapabilities()
     @Published var routePlan = HarnessExecutionRoutePlan(prompt: "", steps: [])
@@ -94,10 +111,16 @@ final class MacWorkbenchModel: ObservableObject {
 
     private let ledger: RunLedgerStore
     private let service: HarnessRunService
+    private let captureAnalysisService: HarnessRunService
     private let reviewQueue: ReviewQueueStore
     private let sessions: SessionStore
+    private let suiteCaptureReceiptStore: SuiteCaptureReceiptStore
+    private let delegationReceiptStore: DelegationReceiptStore
     private var runTask: Task<Void, Never>?
+    private var responseDeadlineTask: Task<Void, Never>?
+    private weak var responseDeadlinePresentedMonitor: ToolLoopMonitor?
     private var approvalToastTask: Task<Void, Never>?
+    private var ontologyAccessPanelOpen = false
 
     private let patternEvidenceStore = PatternEvidenceStore()
     private let patternGateChecker = PatternGateChecker()
@@ -107,6 +130,7 @@ final class MacWorkbenchModel: ObservableObject {
     private let buildScreenshotService = BuildScreenshotService()
 
     init() {
+        Self.restoreOntologyDirectoryAccess()
         let store: RunLedgerStore
         do {
             store = try RunLedgerStore.applicationDefault()
@@ -114,9 +138,29 @@ final class MacWorkbenchModel: ObservableObject {
             store = try! RunLedgerStore.inMemory()
         }
         self.ledger = store
-        self.service = HarnessRunService(ledger: store)
+        self.service = HarnessRunService(
+            ledger: store,
+            authorityRetriever: CanonicalAcceptedGraphAuthorityRetriever()
+        )
+        self.captureAnalysisService = HarnessRunService(
+            ledger: store,
+            authorityRetriever: CanonicalAcceptedGraphAuthorityRetriever(),
+            candidateExtractor: NoopCandidateMemoryExtractor()
+        )
         self.reviewQueue = ReviewQueueStore(ledger: store)
         self.sessions = SessionStore(ledger: store)
+        self.suiteCaptureReceiptStore = SuiteCaptureReceiptStore(
+            root: SuiteCaptureReceiptStore.applicationDefaultRoot()
+        )
+        let delegationReceiptStore = DelegationReceiptStore(
+            directory: Self.defaultOpportunityBoardDirectory()
+        )
+        self.delegationReceiptStore = delegationReceiptStore
+        do {
+            self.delegationReceipts = try delegationReceiptStore.load()
+        } catch {
+            self.delegationSubmissionError = "Saved delegations could not be loaded: \(error.localizedDescription)"
+        }
         self.hasFirecrawlAPIKey = Self.loadFirecrawlAPIKey() != nil
         loadAPIKey(for: backend)
         refreshReadiness(for: backend)
@@ -125,6 +169,9 @@ final class MacWorkbenchModel: ObservableObject {
             await restoreMostRecentSession()
             await refreshSessions()
             await refreshReviewQueue()
+            if Self.shouldRunSuiteCaptureBackgroundWork() {
+                refreshSuiteCaptureInbox()
+            }
             refreshOpportunityBoard()
             refreshSourcePool()
             refreshConnectors()
@@ -138,29 +185,35 @@ final class MacWorkbenchModel: ObservableObject {
         // comes back to the front ("It could be something that calls
         // every 30 minutes or every hour" -- 5 keeps it feeling live
         // for a folder scan that costs almost nothing).
-        phoneCaptureTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.refreshOpportunityBoard()
-                self?.refreshSourcePool()
+        if Self.shouldRunSuiteCaptureBackgroundWork() {
+            phoneCaptureTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
+                Task { @MainActor in
+                    self?.refreshOpportunityBoard()
+                    self?.refreshSourcePool()
+                    self?.refreshSuiteCaptureInbox()
+                }
             }
-        }
-        NotificationCenter.default.addObserver(
-            forName: NSApplication.didBecomeActiveNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                self?.refreshOpportunityBoard()
-                self?.refreshSourcePool()
+            NotificationCenter.default.addObserver(
+                forName: NSApplication.didBecomeActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    self?.refreshOpportunityBoard()
+                    self?.refreshSourcePool()
+                    self?.refreshSuiteCaptureInbox()
+                }
             }
         }
     }
 
     private var phoneCaptureTimer: Timer?
     private var phoneCaptureRefreshTask: Task<Void, Never>?
+    private var suiteCaptureTask: Task<Void, Never>?
 
     func updateOntology(_ ontology: Ontology) {
         self.ontology = ontology
+        refreshSuiteCaptureInbox()
     }
 
     func refreshRuns() async {
@@ -191,6 +244,10 @@ final class MacWorkbenchModel: ObservableObject {
     }
 
     func newSession() {
+        guard activeToolLoop == nil else {
+            status = "Finish or cancel the current response before changing sessions"
+            return
+        }
         selectedDetail = nil
         chatThread = []
         currentSessionId = nil
@@ -226,10 +283,18 @@ final class MacWorkbenchModel: ObservableObject {
     }
 
     func selectSession(_ session: ChatSession) {
+        guard activeToolLoop == nil else {
+            status = "Finish or cancel the current response before changing sessions"
+            return
+        }
         Task { await loadSession(session) }
     }
 
     func selectSessionSearchHit(_ hit: SessionSearchHit) {
+        guard activeToolLoop == nil else {
+            status = "Finish or cancel the current response before changing sessions"
+            return
+        }
         Task {
             do {
                 guard let session = try await sessions.session(id: hit.sessionId) else {
@@ -245,7 +310,9 @@ final class MacWorkbenchModel: ObservableObject {
 
     private func loadSession(_ session: ChatSession) async {
         do {
+            guard activeToolLoop == nil else { return }
             let messages = try await sessions.thread(sessionId: session.id)
+            guard activeToolLoop == nil else { return }
             currentSessionId = session.id
             chatThread = messages
                 .filter { $0.role == .user || $0.role == .assistant }
@@ -344,7 +411,554 @@ final class MacWorkbenchModel: ObservableObject {
         } catch {
             reviewQueueCandidates = []
             status = "Candidates unavailable: \(error.localizedDescription)"
+            if Self.isFilePermissionError(error) {
+                requestOntologyDirectoryAccess()
+            }
         }
+    }
+
+    /// macOS protects iCloud Drive independently of POSIX file permissions.
+    /// Keep a security-scoped bookmark so every fresh signed build can reach
+    /// the canonical queue and accepted graph after Adam grants the folder
+    /// once in the standard system picker.
+    private static func restoreOntologyDirectoryAccess(
+        defaults: UserDefaults = .standard
+    ) {
+        guard let bookmark = defaults.data(forKey: ontologyBookmarkDefaultsKey) else { return }
+        var stale = false
+        do {
+            let url = try URL(
+                resolvingBookmarkData: bookmark,
+                options: [.withSecurityScope],
+                relativeTo: nil,
+                bookmarkDataIsStale: &stale
+            )
+            guard Self.ontologyDirectoryURLsReferToSameResource(
+                url,
+                ReviewQueueStore.defaultOntologyRoot()
+            ),
+                  url.startAccessingSecurityScopedResource() else { return }
+            scopedOntologyURL = url
+            if stale {
+                let refreshed = try url.bookmarkData(
+                    options: [.withSecurityScope],
+                    includingResourceValuesForKeys: nil,
+                    relativeTo: nil
+                )
+                defaults.set(refreshed, forKey: ontologyBookmarkDefaultsKey)
+            }
+        } catch {
+            defaults.removeObject(forKey: ontologyBookmarkDefaultsKey)
+        }
+    }
+
+    private func requestOntologyDirectoryAccess() {
+        guard !ontologyAccessPanelOpen else { return }
+        ontologyAccessPanelOpen = true
+        let expected = ReviewQueueStore.defaultOntologyRoot().standardizedFileURL
+        let panel = NSOpenPanel()
+        panel.title = "Give Harness access to the canonical Ontology folder"
+        panel.message = "Select this Ontology folder so Harness can show its proposals and keep Adam as the approval boundary."
+        panel.prompt = "Give Access"
+        panel.directoryURL = expected
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        panel.begin { [weak self] response in
+            Task { @MainActor in
+                guard let self else { return }
+                self.ontologyAccessPanelOpen = false
+                guard response == .OK, let selected = panel.url?.standardizedFileURL else {
+                    self.status = "Ontology folder access is required before Harness can show and promote its own proposals."
+                    return
+                }
+                guard Self.ontologyDirectoryURLsReferToSameResource(selected, expected) else {
+                    self.status = "Choose the canonical Main/Ontology folder; no other folder was granted access."
+                    return
+                }
+                do {
+                    let bookmark = try selected.bookmarkData(
+                        options: [.withSecurityScope],
+                        includingResourceValuesForKeys: nil,
+                        relativeTo: nil
+                    )
+                    UserDefaults.standard.set(bookmark, forKey: Self.ontologyBookmarkDefaultsKey)
+                    guard selected.startAccessingSecurityScopedResource() else {
+                        throw CocoaError(.fileReadNoPermission)
+                    }
+                    Self.scopedOntologyURL = selected
+                    await self.refreshReviewQueue()
+                    self.refreshSuiteCaptureInbox()
+                } catch {
+                    self.status = "Ontology folder access failed: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private static func isFilePermissionError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == NSCocoaErrorDomain && [
+            CocoaError.fileReadNoPermission.rawValue,
+            CocoaError.fileWriteNoPermission.rawValue,
+        ].contains(nsError.code)
+    }
+
+    nonisolated static func ontologyDirectoryURLsReferToSameResource(
+        _ lhs: URL,
+        _ rhs: URL
+    ) -> Bool {
+        lhs.resolvingSymlinksInPath().standardizedFileURL
+            == rhs.resolvingSymlinksInPath().standardizedFileURL
+    }
+
+    /// Receive every app capture first, without touching the review queue.
+    /// Harness then analyzes one retained receipt at a time and is the only
+    /// component allowed to form a proposal for Adam's review.
+    func refreshSuiteCaptureInbox() {
+        guard Self.shouldRunSuiteCaptureBackgroundWork() else { return }
+        guard suiteCaptureTask == nil else { return }
+        let receiptStore = suiteCaptureReceiptStore
+        let sources = Self.defaultSuiteCaptureInboxSources()
+        let importer = LocalSuiteCaptureInboxImporter(
+            sources: sources,
+            receiptStore: receiptStore
+        )
+        let analysisService = captureAnalysisService
+        let ontologySnapshot = ontology
+        let selectedBackend = backend
+        let trimmedKey = Self.usesAPIKey(selectedBackend)
+            ? apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            : ""
+        let key = trimmedKey.isEmpty ? nil : trimmedKey
+        let reviewQueue = reviewQueue
+        let ledger = ledger
+        let understoodBridgePoller = UnderstoodHarnessBridgeConfiguration().map {
+            UnderstoodHarnessBridgePoller(
+                client: UnderstoodHarnessBridgeClient(configuration: $0),
+                receiptStore: receiptStore
+            )
+        }
+
+        suiteCaptureLogger.info("Suite capture refresh started with \(sources.count) configured roots.")
+        suiteCaptureTask = Task { [weak self] in
+            guard let self else { return }
+            let report = await importer.importAll()
+            var analysisSummary: String?
+            var candidateQueued = false
+            var bridgeIssue: String?
+            var migrationIssue: String?
+            var reviewStatusIssue: String?
+            var corruptReceiptPaths: [String] = []
+            var migratedLegacyCandidateIDs: [String] = []
+
+            do {
+                migratedLegacyCandidateIDs = try await LegacySuiteCandidateQueueMigrator(
+                    receiptStore: receiptStore
+                ).migrate()
+            } catch {
+                migrationIssue = "Legacy proposal recovery failed: \(error.localizedDescription)"
+                suiteCaptureLogger.error(
+                    "Legacy proposal recovery failed: \(error.localizedDescription, privacy: .public)"
+                )
+            }
+
+            if let understoodBridgePoller {
+                do {
+                    let result = try await understoodBridgePoller.poll()
+                    if case .storedAndAcknowledged(let captureID) = result {
+                        suiteCaptureLogger.info(
+                            "Understood raw capture received and acknowledged: \(captureID, privacy: .public)"
+                        )
+                    }
+                } catch {
+                    bridgeIssue = "Understood capture bridge failed: \(error.localizedDescription)"
+                    suiteCaptureLogger.error(
+                        "Understood capture bridge failed: \(error.localizedDescription, privacy: .public)"
+                    )
+                }
+            }
+
+            do {
+                var inventory = try await receiptStore.inspectReceipts()
+                var receipts = inventory.receipts
+                corruptReceiptPaths = inventory.corruptReceiptPaths
+                do {
+                    let claimStatuses = try await reviewQueue.loadClaimStatuses()
+                    receipts = try await receiptStore.reconcileReviewStatuses(claimStatuses)
+                } catch {
+                    reviewStatusIssue = "Capture review status will retry: \(error.localizedDescription)"
+                    suiteCaptureLogger.error(
+                        "Capture review status reconciliation failed: \(error.localizedDescription, privacy: .public)"
+                    )
+                }
+                if let pending = receipts.reversed().first(where: {
+                    $0.state == .analysisPending || ($0.state == .analysisFailed && $0.analysisAttempts < 3)
+                }) {
+                    let relatedReceipts = Self.relatedSuiteCaptureReceipts(
+                        to: pending,
+                        in: receipts
+                    )
+                    do {
+                        let receiptGroup = Self.uniqueSuiteCaptureReceipts(
+                            [pending] + relatedReceipts
+                        )
+                        if let existingClaim = try await Self.existingReviewClaim(
+                            for: pending,
+                            relatedReceipts: relatedReceipts,
+                            reviewQueue: reviewQueue
+                        ) {
+                            let detail: String
+                            switch existingClaim.status {
+                            case .pending:
+                                detail = "Reconnected to an existing Harness proposal after receipt recovery."
+                                candidateQueued = true
+                                analysisSummary = "Capture reconnected to its existing Harness proposal."
+                            case .accepted:
+                                detail = "This producer record is already represented by an accepted Harness decision."
+                                analysisSummary = "Capture retained — already represented by accepted authority."
+                            case .rejected:
+                                detail = "This producer record matches a Harness proposal Adam did not adopt."
+                                analysisSummary = "Capture retained — its prior Harness proposal was not adopted."
+                            }
+                            for receipt in receiptGroup {
+                                _ = try await receiptStore.recordExistingReviewClaim(
+                                    for: receipt,
+                                    candidateID: existingClaim.id,
+                                    status: existingClaim.status,
+                                    detail: detail
+                                )
+                            }
+                        } else {
+                            let adapter = AgentRunnerBackendAdapter(
+                                backend: selectedBackend,
+                                apiKey: key
+                            )
+                            let analyzer = SuiteCaptureAnalyzer(
+                                runPrompt: { prompt in
+                                    let detail = try await analysisService.createRun(
+                                        prompt: prompt,
+                                        ontology: ontologySnapshot,
+                                        backend: adapter,
+                                        soul: SoulLoader.load(),
+                                        tools: [],
+                                        sessionId: "suite-capture-consolidation"
+                                    )
+                                    guard !SuiteCaptureAnalyzer.containsValidDecision(detail.run.finalAnswer),
+                                          AgentRunner().supportsToolLoop(
+                                            backend: selectedBackend,
+                                            apiKey: key
+                                          ) else {
+                                        return detail
+                                    }
+                                    return try await Self.captureDecisionToolRun(
+                                        prompt: prompt,
+                                        backend: selectedBackend,
+                                        apiKey: key,
+                                        authorityHits: detail.authorityHits,
+                                        memoryHits: detail.memoryHits,
+                                        ledger: ledger
+                                    )
+                                },
+                                candidateStager: CoordinatedReviewQueueMemoryStager()
+                            )
+                            let outcome = try await analyzer.analyze(
+                                pending,
+                                relatedReceipts: relatedReceipts
+                            )
+                            switch outcome {
+                            case .notCandidate(let runID, let reason):
+                                for receipt in receiptGroup {
+                                    _ = try await receiptStore.recordAnalysis(
+                                        for: receipt,
+                                        state: .notCandidate,
+                                        runID: runID,
+                                        detail: reason
+                                    )
+                                }
+                                analysisSummary = "Harness retained \(receiptGroup.count) capture\(receiptGroup.count == 1 ? "" : "s") — no candidate."
+                            case .candidateQueued(let runID, let candidate):
+                                for receipt in receiptGroup {
+                                    _ = try await receiptStore.recordAnalysis(
+                                        for: receipt,
+                                        state: .candidateQueued,
+                                        runID: runID,
+                                        candidateIDs: [candidate.id],
+                                        detail: "Harness formed a proposal for Adam's review."
+                                    )
+                                }
+                                candidateQueued = true
+                                analysisSummary = "Harness formed one proposal from \(pending.trustedSourceName)."
+                            }
+                        }
+                    } catch {
+                        for receipt in Self.uniqueSuiteCaptureReceipts([pending] + relatedReceipts) {
+                            do {
+                                _ = try await receiptStore.recordAnalysis(
+                                    for: receipt,
+                                    state: .analysisFailed,
+                                    runID: nil,
+                                    detail: error.localizedDescription
+                                )
+                            } catch {
+                                suiteCaptureLogger.error(
+                                    "Stale analysis result could not replace receipt state: \(error.localizedDescription, privacy: .public)"
+                                )
+                            }
+                        }
+                        analysisSummary = "Capture retained; Harness analysis will retry: \(error.localizedDescription)"
+                        suiteCaptureLogger.error(
+                            "Capture analysis failed: \(error.localizedDescription, privacy: .public)"
+                        )
+                    }
+                    inventory = try await receiptStore.inspectReceipts()
+                    receipts = inventory.receipts
+                    corruptReceiptPaths = inventory.corruptReceiptPaths
+                    do {
+                        let claimStatuses = try await reviewQueue.loadClaimStatuses()
+                        receipts = try await receiptStore.reconcileReviewStatuses(claimStatuses)
+                    } catch {
+                        reviewStatusIssue = "Capture review status will retry: \(error.localizedDescription)"
+                    }
+                }
+                self.suiteCaptureReceipts = receipts
+            } catch {
+                analysisSummary = "Capture receipts unavailable: \(error.localizedDescription)"
+                suiteCaptureLogger.error(
+                    "Capture receipt refresh failed: \(error.localizedDescription, privacy: .public)"
+                )
+            }
+
+            var issues: [String] = []
+            if let bridgeIssue { issues.append(bridgeIssue) }
+            if let migrationIssue { issues.append(migrationIssue) }
+            if let reviewStatusIssue { issues.append(reviewStatusIssue) }
+            issues += corruptReceiptPaths.map {
+                "Unreadable capture receipt metadata retained for inspection: \($0)"
+            }
+            issues += report.missingRootPaths.map { path in
+                if let source = sources.first(where: { $0.root.path == path }) {
+                    return "Waiting for first \(source.trustedSource.displayName) capture."
+                }
+                return "Capture inbox not present: \(path)"
+            }
+            issues += report.inaccessibleRootPaths.map { "Capture inbox inaccessible: \($0)" }
+            issues += report.invalidFiles.map { "Invalid capture retained at \($0.key): \($0.value)" }
+            if !report.conflictCaptureIDs.isEmpty {
+                issues.append("Capture ID conflicts preserved: \(report.conflictCaptureIDs.joined(separator: ", "))")
+            }
+            if !report.quarantinedCaptureIDs.isEmpty {
+                issues.append("Credential-shaped captures retained locally and withheld from analysis: \(report.quarantinedCaptureIDs.joined(separator: ", "))")
+            }
+            self.suiteCaptureIssues = issues
+
+            if candidateQueued || !migratedLegacyCandidateIDs.isEmpty {
+                do {
+                    self.reviewQueueCandidates = try await reviewQueue.loadPendingClaims()
+                } catch {
+                    issues.append("Proposal queued, but review cards could not reload: \(error.localizedDescription)")
+                    self.suiteCaptureIssues = issues
+                }
+            }
+
+            if let analysisSummary {
+                self.status = analysisSummary
+            } else if !migratedLegacyCandidateIDs.isEmpty {
+                self.status = "Recovered \(migratedLegacyCandidateIDs.count) producer proposal\(migratedLegacyCandidateIDs.count == 1 ? "" : "s") as raw captures for Harness analysis."
+            } else if !report.storedCaptureIDs.isEmpty {
+                self.status = "Received \(report.storedCaptureIDs.count) raw app capture\(report.storedCaptureIDs.count == 1 ? "" : "s")."
+            } else if !report.retainedFiles.isEmpty {
+                self.status = "Capture received; producer archive will retry."
+            }
+            suiteCaptureLogger.info(
+                "Suite capture refresh stored=\(report.storedCaptureIDs.count), duplicates=\(report.duplicateCaptureIDs.count), conflicts=\(report.conflictCaptureIDs.count)."
+            )
+            self.suiteCaptureTask = nil
+        }
+    }
+
+    nonisolated static func shouldRunSuiteCaptureBackgroundWork(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        xctestRuntimePresent: Bool = NSClassFromString("XCTestCase") != nil
+            || NSClassFromString("XCTest.XCTestCase") != nil
+    ) -> Bool {
+        guard environment["XCTestConfigurationFilePath"] == nil,
+              environment["XCTestBundlePath"] == nil,
+              environment["SWIFT_TESTING_ENABLED"] == nil else { return false }
+        return !xctestRuntimePresent
+    }
+
+    nonisolated static func defaultSuiteCaptureInboxSources(
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> [SuiteCaptureInboxSource] {
+        let mobileDocuments = homeDirectory
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Mobile Documents", isDirectory: true)
+        let harnessDocuments = mobileDocuments
+            .appendingPathComponent("iCloud~com~adamblair~harness", isDirectory: true)
+            .appendingPathComponent("Documents", isDirectory: true)
+        let recallDocuments = mobileDocuments
+            .appendingPathComponent("iCloud~app~understood~recall", isDirectory: true)
+            .appendingPathComponent("Documents", isDirectory: true)
+        let newsCalmDocuments = mobileDocuments
+            .appendingPathComponent("iCloud~com~newscalm~app", isDirectory: true)
+            .appendingPathComponent("Documents", isDirectory: true)
+        return [
+            SuiteCaptureInboxSource(
+                trustedSource: TrustedSuiteCaptureSource(id: "understood", displayName: "Understood"),
+                root: harnessDocuments.appendingPathComponent("Harness Captures/Understood/Pending", isDirectory: true)
+            ),
+            SuiteCaptureInboxSource(
+                trustedSource: TrustedSuiteCaptureSource(id: "recall", displayName: "Re_Call"),
+                root: recallDocuments.appendingPathComponent("Harness Captures/Pending", isDirectory: true)
+            ),
+            SuiteCaptureInboxSource(
+                trustedSource: TrustedSuiteCaptureSource(id: "news-calm", displayName: "News Calm"),
+                root: newsCalmDocuments.appendingPathComponent("Harness Captures/Pending", isDirectory: true)
+            ),
+            SuiteCaptureInboxSource(
+                trustedSource: TrustedSuiteCaptureSource(id: "recall-legacy", displayName: "Re_Call (legacy)"),
+                root: recallDocuments.appendingPathComponent("Harness Candidates/Pending", isDirectory: true)
+            ),
+            SuiteCaptureInboxSource(
+                trustedSource: TrustedSuiteCaptureSource(id: "news-calm-legacy", displayName: "News Calm (legacy)"),
+                root: newsCalmDocuments.appendingPathComponent("Harness Candidates/Pending", isDirectory: true)
+            ),
+        ]
+    }
+
+    nonisolated static func relatedSuiteCaptureReceipts(
+        to receipt: SuiteCaptureReceipt,
+        in receipts: [SuiteCaptureReceipt]
+    ) -> [SuiteCaptureReceipt] {
+        guard receipt.capture.captureKind == "legacy_candidate_envelope",
+              let plain = receipt.capture.payload["plain"]?.stringValue,
+              !plain.isEmpty else { return [] }
+        let producerID = SuiteCaptureProvenance.canonicalProducerID(
+            for: receipt.trustedSourceID
+        )
+        let producerSource = receipt.capture.payload["source"]?.stringValue
+        return receipts.filter {
+            $0.id != receipt.id
+                && SuiteCaptureProvenance.canonicalProducerID(for: $0.trustedSourceID) == producerID
+                && $0.capture.captureKind == "legacy_candidate_envelope"
+                && $0.capture.payload["plain"]?.stringValue == plain
+                && $0.capture.payload["source"]?.stringValue == producerSource
+                && ($0.state == .analysisPending
+                    || ($0.state == .analysisFailed && $0.analysisAttempts < 3))
+        }
+    }
+
+    nonisolated static func existingReviewClaim(
+        for receipt: SuiteCaptureReceipt,
+        relatedReceipts: [SuiteCaptureReceipt],
+        reviewQueue: ReviewQueueStore
+    ) async throws -> ReviewQueueClaimSnapshot? {
+        let producerID = SuiteCaptureProvenance.canonicalProducerID(
+            for: receipt.trustedSourceID
+        )
+        let captureIDs = Set(([receipt] + relatedReceipts).map(\.capture.captureID)).sorted()
+        if let exact = try await reviewQueue.findClaim(
+            sourceCaptureIDs: captureIDs,
+            canonicalProducerID: producerID
+        ) {
+            return exact
+        }
+        guard receipt.capture.captureKind == "legacy_candidate_envelope",
+              let plain = receipt.capture.payload["plain"]?.stringValue else {
+            return nil
+        }
+        return try await reviewQueue.findLegacyClaim(
+            normalizedPlainText: plain,
+            canonicalProducerID: producerID
+        )
+    }
+
+    nonisolated static func uniqueSuiteCaptureReceipts(
+        _ receipts: [SuiteCaptureReceipt]
+    ) -> [SuiteCaptureReceipt] {
+        var seen: Set<String> = []
+        return receipts.filter { seen.insert($0.id).inserted }
+    }
+
+    /// Subscription-backed Grok/Codex sessions can emit a conversational
+    /// preamble instead of the requested JSON in a plain completion. Retry
+    /// through a required structured tool call, then persist that decision as
+    /// an ordinary Harness run before the analyzer stages anything.
+    nonisolated static func captureDecisionToolRun(
+        prompt: String,
+        backend: Backend,
+        apiKey: String?,
+        authorityHits: [GraphAuthorityHit],
+        memoryHits: [MemoryHit],
+        ledger: RunLedgerStore
+    ) async throws -> HarnessRunDetail {
+        let start = Date()
+        let acceptedContext = authorityHits.isEmpty
+            ? "No matching accepted authority was retrieved."
+            : authorityHits.map {
+                "- \($0.subject) \($0.predicate) \($0.object) [\($0.source)]"
+            }.joined(separator: "\n")
+        let groundedPrompt = """
+        \(prompt)
+
+        ACCEPTED GRAPH AUTHORITY ALREADY RETRIEVED
+        \(acceptedContext)
+
+        If this capture is already represented by accepted authority, submit not_candidate and say that it is already accepted. Do not create a duplicate proposal.
+        """
+        let response = try await AgentRunner().runWithTools(
+            backend: backend,
+            system: "You are Harness's capture consolidation gate. Accepted graph authority outranks raw captures. You must call submit_capture_decision exactly once. Do not answer with prose.",
+            user: groundedPrompt,
+            apiKey: apiKey,
+            tools: [SuiteCaptureAnalyzer.decisionTool],
+            toolTranscript: []
+        )
+        let answer = try SuiteCaptureAnalyzer.decisionJSON(from: response)
+        let runID = UUID().uuidString
+        let redactor = SecretRedactor()
+        let redactedPrompt = redactor.redact(groundedPrompt)
+        let redactedAnswer = redactor.redact(answer)
+        let packetHash = SHA256.hash(data: Data(redactedPrompt.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        let run = HarnessRun(
+            id: runID,
+            prompt: redactedPrompt,
+            backend: backend.rawValue,
+            modelName: backend.defaultModelName,
+            invocationMethod: "capture-decision-tool",
+            promptPacketHash: packetHash,
+            success: true,
+            duration: Date().timeIntervalSince(start),
+            tokenCount: response.tokenCount,
+            cost: response.cost,
+            finalAnswer: redactedAnswer,
+            deviceName: DeviceIdentity.currentName()
+        )
+        let detail = HarnessRunDetail(
+            run: run,
+            messages: [
+                HarnessMessage(runId: runID, role: .user, text: redactedPrompt),
+                HarnessMessage(runId: runID, role: .assistant, text: redactedAnswer),
+            ],
+            authorityHits: authorityHits.map { $0.attached(to: runID) },
+            memoryHits: memoryHits.map { $0.attached(to: runID) },
+            traceEvents: [
+                TraceEvent(
+                    runId: runID,
+                    stage: .modelExecution,
+                    message: "Captured one structured Harness consolidation decision."
+                ),
+            ],
+            evalResults: [],
+            memoryCandidates: [],
+            validationResults: []
+        )
+        try await ledger.save(detail)
+        return detail
     }
 
     /// Phone captures, kept OUT of the board/map -- Adam: "that map ...
@@ -356,11 +970,11 @@ final class MacWorkbenchModel: ObservableObject {
     @Published private(set) var phoneArrivals: [OpportunityBoardRow] = []
 
     func refreshOpportunityBoard() {
+        let directory = Self.authorizedOpportunityBoardDirectory()
         do {
-            opportunityBoardRows = try Self.loadOpportunityBoardRows(from: Self.defaultOpportunityBoardDirectory())
+            opportunityBoardRows = try Self.loadOpportunityBoardRows(from: directory)
             opportunityBoardLoadIssue = nil
         } catch {
-            opportunityBoardRows = []
             opportunityBoardLoadIssue = error.localizedDescription
         }
 
@@ -448,39 +1062,65 @@ final class MacWorkbenchModel: ObservableObject {
     }
 
     nonisolated static func defaultOpportunityBoardDirectory() -> URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Documents", isDirectory: true)
-            .appendingPathComponent("Harness", isDirectory: true)
+        let directory = defaultHarnessDocumentsDirectory()
             .appendingPathComponent("Delegations", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    private static func authorizedOpportunityBoardDirectory() -> URL {
+        defaultOpportunityBoardDirectory()
     }
 
     nonisolated static func loadOpportunityBoardRows(
         from directory: URL,
         fileManager: FileManager = .default
     ) throws -> [OpportunityBoardRow] {
-        guard fileManager.fileExists(atPath: directory.path) else {
-            return []
-        }
+        _ = try fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        )
         guard let enumerator = fileManager.enumerator(
             at: directory,
             includingPropertiesForKeys: [.isRegularFileKey],
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
         ) else {
-            return []
+            throw CocoaError(.fileReadUnknown)
         }
 
         let parser = OpportunityCardParser()
         let validator = OpportunityCardValidator()
         var cards: [OpportunityCard] = []
+        var readableMarkdownCount = 0
+        var firstMarkdownReadError: Error?
 
         for case let file as URL in enumerator {
             guard file.pathExtension.lowercased() == "md" else { continue }
-            guard (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
-            let markdown = try String(contentsOf: file, encoding: .utf8)
+            let isRegularFile: Bool
+            do {
+                isRegularFile = try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true
+            } catch {
+                firstMarkdownReadError = firstMarkdownReadError ?? error
+                continue
+            }
+            guard isRegularFile else { continue }
+            let markdown: String
+            do {
+                markdown = try String(contentsOf: file, encoding: .utf8)
+                readableMarkdownCount += 1
+            } catch {
+                firstMarkdownReadError = firstMarkdownReadError ?? error
+                continue
+            }
             guard case let .opportunity(card) = try? parser.parse(markdown: markdown, source: file.path),
                   validator.validate(card).passed
             else { continue }
             cards.append(card)
+        }
+
+        if readableMarkdownCount == 0, let firstMarkdownReadError {
+            throw firstMarkdownReadError
         }
 
         return OpportunityBoardDeduper().deduplicate(cards)
@@ -490,10 +1130,8 @@ final class MacWorkbenchModel: ObservableObject {
 
     func refreshSourcePool() {
         do {
-            sourcePoolCards = try Self.loadSourcePoolCards(from: Self.defaultOpportunityBoardDirectory())
-        } catch {
-            sourcePoolCards = []
-        }
+            sourcePoolCards = try Self.loadSourcePoolCards(from: Self.authorizedOpportunityBoardDirectory())
+        } catch {}
     }
 
     /// WO-N: "Stop discarding .sourceCard rows" -- loadOpportunityBoardRows
@@ -504,25 +1142,49 @@ final class MacWorkbenchModel: ObservableObject {
         from directory: URL,
         fileManager: FileManager = .default
     ) throws -> [OpportunitySourceCard] {
-        guard fileManager.fileExists(atPath: directory.path) else { return [] }
+        _ = try fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        )
         guard let enumerator = fileManager.enumerator(
             at: directory,
             includingPropertiesForKeys: [.isRegularFileKey],
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
-        ) else { return [] }
+        ) else { throw CocoaError(.fileReadUnknown) }
 
         let parser = OpportunityCardParser()
         let validator = OpportunityCardValidator()
         var cards: [OpportunitySourceCard] = []
+        var readableMarkdownCount = 0
+        var firstMarkdownReadError: Error?
 
         for case let file as URL in enumerator {
             guard file.pathExtension.lowercased() == "md" else { continue }
-            guard (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
-            let markdown = try String(contentsOf: file, encoding: .utf8)
+            let isRegularFile: Bool
+            do {
+                isRegularFile = try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true
+            } catch {
+                firstMarkdownReadError = firstMarkdownReadError ?? error
+                continue
+            }
+            guard isRegularFile else { continue }
+            let markdown: String
+            do {
+                markdown = try String(contentsOf: file, encoding: .utf8)
+                readableMarkdownCount += 1
+            } catch {
+                firstMarkdownReadError = firstMarkdownReadError ?? error
+                continue
+            }
             guard case let .sourceCard(card) = try? parser.parse(markdown: markdown, source: file.path),
                   validator.validate(card).passed
             else { continue }
             cards.append(card)
+        }
+
+        if readableMarkdownCount == 0, let firstMarkdownReadError {
+            throw firstMarkdownReadError
         }
 
         return cards
@@ -563,7 +1225,7 @@ final class MacWorkbenchModel: ObservableObject {
     /// folder so the capture survives even if the original moves, then
     /// writes the source_card pointing at the copy.
     func captureSourcePoolFile(_ localURL: URL) {
-        let assetsDirectory = Self.defaultOpportunityBoardDirectory().appendingPathComponent("pool-assets", isDirectory: true)
+        let assetsDirectory = Self.authorizedOpportunityBoardDirectory().appendingPathComponent("pool-assets", isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: assetsDirectory, withIntermediateDirectories: true)
             let ext = localURL.pathExtension.isEmpty ? "bin" : localURL.pathExtension
@@ -576,7 +1238,7 @@ final class MacWorkbenchModel: ObservableObject {
     }
 
     private func writeSourcePoolCard(resource: String, retrievedBy: String) {
-        let directory = Self.defaultOpportunityBoardDirectory()
+        let directory = Self.authorizedOpportunityBoardDirectory()
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let contentHash = Self.sha256Hex(resource)
@@ -606,18 +1268,43 @@ final class MacWorkbenchModel: ObservableObject {
     // MARK: - FASCINATION carousel (WO-I)
 
     func refreshFascinationCards() {
+        let directory = Self.authorizedFascinationsDirectory()
         do {
-            fascinationCards = try Self.loadFascinationCards(from: Self.defaultFascinationsDirectory())
+            let cards = try Self.loadFascinationCards(from: directory)
+            fascinationCards = cards
+            fascinationLoadIssue = nil
         } catch {
-            fascinationCards = []
+            fascinationLoadIssue = error.localizedDescription
         }
     }
 
-    nonisolated static func defaultFascinationsDirectory() -> URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Documents", isDirectory: true)
+    nonisolated static func harnessDocumentsDirectoryURLsReferToSameResource(
+        _ lhs: URL,
+        _ rhs: URL
+    ) -> Bool {
+        lhs.resolvingSymlinksInPath().standardizedFileURL
+            == rhs.resolvingSymlinksInPath().standardizedFileURL
+    }
+
+    nonisolated static func defaultHarnessDocumentsDirectory() -> URL {
+        let root = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first!
             .appendingPathComponent("Harness", isDirectory: true)
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return root
+    }
+
+    nonisolated static func defaultFascinationsDirectory() -> URL {
+        let directory = defaultHarnessDocumentsDirectory()
             .appendingPathComponent("Fascinations", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    private static func authorizedFascinationsDirectory() -> URL {
+        defaultFascinationsDirectory()
     }
 
     /// Same watched-folder pattern as loadOpportunityBoardRows, kept as
@@ -628,18 +1315,41 @@ final class MacWorkbenchModel: ObservableObject {
         from directory: URL,
         fileManager: FileManager = .default
     ) throws -> [FascinationCard] {
-        guard fileManager.fileExists(atPath: directory.path) else { return [] }
+        // FileManager.enumerator can return a non-nil enumerator that yields
+        // no files when macOS denies Documents access. Force a throwing read
+        // first so permission loss cannot masquerade as an empty carousel.
+        _ = try fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        )
         guard let enumerator = fileManager.enumerator(
             at: directory,
             includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
-        ) else { return [] }
+        ) else { throw CocoaError(.fileReadUnknown) }
 
         var cards: [FascinationCard] = []
+        var readableMarkdownCount = 0
+        var firstMarkdownReadError: Error?
         for case let file as URL in enumerator {
             guard file.pathExtension.lowercased() == "md" else { continue }
-            guard (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
-            let markdown = try String(contentsOf: file, encoding: .utf8)
+            let isRegularFile: Bool
+            do {
+                isRegularFile = try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true
+            } catch {
+                firstMarkdownReadError = firstMarkdownReadError ?? error
+                continue
+            }
+            guard isRegularFile else { continue }
+            let markdown: String
+            do {
+                markdown = try String(contentsOf: file, encoding: .utf8)
+                readableMarkdownCount += 1
+            } catch {
+                firstMarkdownReadError = firstMarkdownReadError ?? error
+                continue
+            }
             let (frontmatter, body) = Self.splitFrontmatter(markdown)
             let quote = body.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !quote.isEmpty else { continue }
@@ -653,6 +1363,9 @@ final class MacWorkbenchModel: ObservableObject {
                 attribution: (attribution?.isEmpty == false ? attribution! : nil) ?? "ADAM",
                 date: date
             ))
+        }
+        if readableMarkdownCount == 0, let firstMarkdownReadError {
+            throw firstMarkdownReadError
         }
         return cards.sorted { $0.date > $1.date }
     }
@@ -739,7 +1452,7 @@ final class MacWorkbenchModel: ObservableObject {
             : draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let ontology = ontology
         let ledger = ledger
-        let outputDirectory = Self.defaultOpportunityBoardDirectory()
+        let outputDirectory = Self.authorizedOpportunityBoardDirectory()
         let backend = backend
         let apiKey = apiKey
         let killSwitch = DelegationAgentKillSwitch(
@@ -1352,11 +2065,13 @@ final class MacWorkbenchModel: ObservableObject {
     }
 
     /// Cancel the in-flight run: abort the tool loop (which kills CLI/shell
-    /// subprocesses), kill any CLI child, and restore the UI. A call already
-    /// suspended on an approval card stays pending — the queue is never
-    /// silently drained; Adam decides it from the card.
+    /// subprocesses), remove any pending approval from this stopped task, and
+    /// restore the UI. A stale later approval can never execute cancelled work.
     func cancelRun() {
         guard isRunning else { return }
+        responseDeadlineTask?.cancel()
+        responseDeadlineTask = nil
+        responseDeadlinePresentedMonitor = nil
         activeToolLoop?.cancel()
         // Drop the monitor so the run's own completion handler sees it is no
         // longer the active run and skips clobbering fresh UI state.
@@ -1365,9 +2080,15 @@ final class MacWorkbenchModel: ObservableObject {
         runTask?.cancel()
         runTask = nil
         isRunning = false
-        status = toolApprovals.pendingSnapshot().isEmpty
-            ? "Cancelled"
-            : "Cancelled; pending proposals still need your decision"
+        status = "Cancelled"
+        if let receiptID = activeDelegationReceiptID {
+            finishDelegationReceipt(
+                id: receiptID,
+                state: .cancelled,
+                result: "Cancelled in Harness before completion."
+            )
+            activeDelegationReceiptID = nil
+        }
     }
 
     func saveAPIKey() {
@@ -1613,18 +2334,48 @@ final class MacWorkbenchModel: ObservableObject {
 
     func decideReviewQueueCandidate(_ candidate: MemoryCandidate, decision: ReviewQueueDecision) {
         let reviewQueue = reviewQueue
+        let receiptStore = suiteCaptureReceiptStore
         Task {
             do {
                 let outcome = try await reviewQueue.decide(claimId: candidate.id, decision: decision)
+                var receiptUpdateIssue: String?
+                if outcome.blockedReason == nil {
+                    let detail: String
+                    switch decision {
+                    case .yes:
+                        detail = "Adam accepted this Harness proposal as usually true."
+                    case .sometimes:
+                        detail = "Adam accepted this Harness proposal as sometimes true."
+                    case .no:
+                        detail = "Adam did not adopt this Harness proposal."
+                    }
+                    do {
+                        _ = try await receiptStore.recordReviewOutcome(
+                            candidateID: candidate.id,
+                            accepted: outcome.accepted,
+                            detail: detail
+                        )
+                    } catch {
+                        receiptUpdateIssue = error.localizedDescription
+                        suiteCaptureLogger.error(
+                            "Review succeeded but capture receipt update failed: \(error.localizedDescription, privacy: .public)"
+                        )
+                    }
+                }
                 let pending = try await reviewQueue.loadPendingClaims()
+                let receipts = (try? await receiptStore.listReceipts()) ?? self.suiteCaptureReceipts
                 await MainActor.run {
                     self.reviewQueueCandidates = pending
+                    self.suiteCaptureReceipts = receipts
                     if let blocked = outcome.blockedReason {
                         self.status = blocked
+                    } else if let receiptUpdateIssue {
+                        self.status = "Decision recorded. Capture History will reconcile: \(receiptUpdateIssue)"
                     } else {
                         self.status = "\(pending.count) candidate\(pending.count == 1 ? "" : "s") waiting"
                     }
                 }
+                self.refreshSuiteCaptureInbox()
             } catch {
                 await MainActor.run {
                     self.status = error.localizedDescription
@@ -1744,7 +2495,41 @@ final class MacWorkbenchModel: ObservableObject {
         }
     }
 
+    /// Delegation owns a receipt-first transaction. The exact three fields are
+    /// atomically written before this method is allowed to clear any of them.
+    /// Chat continues to call `send()` and does not create a delegation file.
+    func sendDelegation() {
+        let attachmentsSnapshot = composerAttachments
+        guard ComposerAttachment.canSend(userText: draft, attachments: attachmentsSnapshot), !isRunning else { return }
+
+        let receipt = DelegationReceipt(
+            intent: draft,
+            preferredApproach: preferredApproach,
+            doneCondition: doneCondition,
+            state: .submitted
+        )
+        do {
+            try delegationReceiptStore.save(receipt)
+            delegationReceipts.removeAll { $0.id == receipt.id }
+            delegationReceipts.insert(receipt, at: 0)
+            delegationSubmissionError = nil
+            activeDelegationReceiptID = receipt.id
+            status = "Saved · Working"
+            send(persistedDelegationReceiptID: receipt.id)
+        } catch {
+            // The draft remains untouched. A failed persistence attempt may
+            // never look like a successful send.
+            let message = "Delegation was not saved: \(error.localizedDescription)"
+            delegationSubmissionError = message
+            status = message
+        }
+    }
+
     func send() {
+        send(persistedDelegationReceiptID: nil)
+    }
+
+    private func send(persistedDelegationReceiptID: String?) {
         let prompt = composedDraftPrompt
         let attachmentsSnapshot = composerAttachments
         guard ComposerAttachment.canSend(userText: draft, attachments: attachmentsSnapshot), !isRunning else { return }
@@ -1781,9 +2566,104 @@ final class MacWorkbenchModel: ObservableObject {
         // call through the bouncer before anything runs.
         let monitor = ToolLoopMonitor()
         activeToolLoop = monitor
-        let executor = ToolExecutor.standard(approvals: toolApprovals, ledger: ledger)
+        responseDeadlinePresentedMonitor = nil
+        let chatMode = InteractiveChatPolicy.mode(prompt: prompt, routePlan: plannedRoute)
+        let acceptedAuthorityOnly = InteractiveChatPolicy.requestsAcceptedAuthorityOnly(prompt)
+            && chatMode == .singleShot
+        let productHelpAnswer = InteractiveChatPolicy.productHelpAnswer(for: prompt)
+        let chatTools = InteractiveChatPolicy.tools(prompt: prompt, routePlan: plannedRoute)
+        let maxToolIterations = InteractiveChatPolicy.maxToolIterations(
+            prompt: prompt,
+            routePlan: plannedRoute
+        )
+        let executor = chatTools.isEmpty
+            ? nil
+            : ToolExecutor.standard(approvals: toolApprovals, ledger: ledger)
+        let interactiveDeadline = ContinuousClock().now.advanced(
+            by: .seconds(InteractiveChatPolicy.watchdogBudgetSeconds)
+        )
 
         let historySnapshot = chatThread
+        // The submitted question is visible immediately. It must never vanish
+        // merely because the provider stalls or Adam cancels the run.
+        chatThread.append(ConversationTurn(role: .user, text: prompt))
+
+        responseDeadlineTask?.cancel()
+        responseDeadlineTask = Task { @MainActor [weak self] in
+            while true {
+                do {
+                    try await Task.sleep(
+                        for: .seconds(InteractiveChatPolicy.watchdogBudgetSeconds)
+                    )
+                } catch {
+                    return
+                }
+                guard let self,
+                      self.isRunning,
+                      self.activeToolLoop === monitor
+                else { return }
+
+                // Human review is not provider latency. Keep the bouncer card
+                // live for as long as Adam needs, then start a fresh response
+                // budget after the decision is made.
+                if !self.toolApprovals.pendingSnapshot().isEmpty {
+                    self.status = "Waiting for your decision"
+                    repeat {
+                        do {
+                            try await Task.sleep(for: .milliseconds(200))
+                        } catch {
+                            return
+                        }
+                        guard self.isRunning, self.activeToolLoop === monitor else { return }
+                    } while !self.toolApprovals.pendingSnapshot().isEmpty
+                    self.status = "Continuing after your decision"
+                    continue
+                }
+                break
+            }
+
+            guard let self,
+                  self.isRunning,
+                  self.activeToolLoop === monitor
+            else { return }
+
+            let progress = monitor.progressSnapshot()
+            let visibleAnswer = progress.completedAnswer ?? InteractiveChatPolicy.deadlineFallback(
+                backendName: selectedBackend.rawValue,
+                acceptedEvidence: progress.acceptedEvidence,
+                supportingEvidence: progress.supportingEvidence,
+                toolEvidence: progress.toolEvidence
+            )
+
+            // Publish first, then tear down the losing provider/tool work. The
+            // visible response contract never awaits a cancellation-ignoring
+            // child task.
+            self.chatThread.append(ConversationTurn(role: .assistant, text: visibleAnswer))
+            if let receiptID = persistedDelegationReceiptID {
+                self.finishDelegationReceipt(id: receiptID, state: .failed, result: visibleAnswer)
+                self.activeDelegationReceiptID = nil
+            }
+            self.status = "Response ceiling reached; showing retrieved evidence"
+            self.isRunning = false
+            self.responseDeadlinePresentedMonitor = monitor
+            monitor.exceedDeadline()
+            self.responseDeadlineTask = nil
+            Task { @MainActor [weak self] in
+                // Cooperative backends normally return immediately after the
+                // monitor cancels them. If one ignores cancellation, release
+                // the session/UI lock anyway; its eventual ledger result can
+                // still attach without touching the visible thread.
+                try? await Task.sleep(for: .seconds(1))
+                guard let self,
+                      !self.isRunning,
+                      self.activeToolLoop === monitor
+                else { return }
+                self.activeToolLoop = nil
+                self.responseDeadlinePresentedMonitor = nil
+                self.runTask = nil
+            }
+        }
+
         runTask = Task.detached(priority: .userInitiated) {
             let adapter = AgentRunnerBackendAdapter(backend: selectedBackend, apiKey: key)
             do {
@@ -1794,7 +2674,10 @@ final class MacWorkbenchModel: ObservableObject {
                     sessionId = try await sessionStore
                         .createSession(title: Self.sessionTitle(from: prompt))
                         .id
-                    await MainActor.run { self.currentSessionId = sessionId }
+                    await MainActor.run {
+                        guard self.activeToolLoop === monitor else { return }
+                        self.currentSessionId = sessionId
+                    }
                 }
 
                 let visionImages = try ComposerAttachmentStore.visionImages(from: attachmentsSnapshot)
@@ -1804,40 +2687,65 @@ final class MacWorkbenchModel: ObservableObject {
                     backend: adapter,
                     images: visionImages,
                     conversationHistory: historySnapshot,
-                    tools: HarnessToolCatalog.v1,
+                    localAnswer: productHelpAnswer,
+                    includeSupportingMemory: productHelpAnswer == nil && !acceptedAuthorityOnly,
+                    answerFromAcceptedAuthority: acceptedAuthorityOnly,
+                    tools: chatTools,
                     toolExecutor: executor,
                     toolLoop: monitor,
+                    maxToolIterations: maxToolIterations,
+                    // The UI watchdog pauses while a bouncer approval card is
+                    // waiting. An absolute service deadline would count Adam's
+                    // decision time as provider latency and expire immediately
+                    // after approval, so tool turns use the pausable UI guard.
+                    interactiveDeadline: chatTools.isEmpty ? interactiveDeadline : nil,
                     sessionId: sessionId
                 )
-                // Link the run and its transcript into the session so the
-                // thread survives relaunch and becomes searchable.
-                try? await sessionStore.attachRun(runId: detail.run.id, toSession: sessionId)
-                let latestSessions = (try? await sessionStore.listSessions()) ?? []
-                let latestRuns = try await ledger.listRuns()
                 let answer = detail.messages.last(where: { $0.role == .assistant })?.text ?? detail.run.finalAnswer
                 await MainActor.run {
                     // Only the still-active run may commit UI state. If this run
                     // was cancelled or superseded by a newer send, activeToolLoop
                     // no longer points at our monitor — leave the newer run alone.
                     guard self.activeToolLoop === monitor else { return }
+                    let deadlineAlreadyPresented = self.responseDeadlinePresentedMonitor === monitor
+                    self.responseDeadlineTask?.cancel()
+                    self.responseDeadlineTask = nil
+                    self.responseDeadlinePresentedMonitor = nil
                     self.runTask = nil
                     self.activeToolLoop = nil
                     self.isRunning = false
                     self.selectedDetail = detail
+                    if self.currentSessionId == sessionId {
+                        if !deadlineAlreadyPresented {
+                            self.chatThread.append(ConversationTurn(role: .assistant, text: answer))
+                            if let receiptID = persistedDelegationReceiptID {
+                                self.finishDelegationReceipt(
+                                    id: receiptID,
+                                    state: detail.run.success ? .completed : .failed,
+                                    result: answer
+                                )
+                                self.activeDelegationReceiptID = nil
+                            }
+                        }
+                        self.status = deadlineAlreadyPresented || answer.hasPrefix("Harness stopped ")
+                            ? "Response ceiling reached; showing retrieved evidence"
+                            : (detail.run.success ? "Trace saved" : "Backend failed; trace saved")
+                    } else {
+                        self.status = "Background run finished in another session"
+                    }
+                }
+
+                // The answer is already on screen. Session linking and list
+                // refreshes are housekeeping and must not delay it. Even a
+                // superseded run is linked so deadline fallbacks survive a
+                // relaunch instead of becoming an orphaned visible bubble.
+                try? await sessionStore.attachRun(runId: detail.run.id, toSession: sessionId)
+                let latestSessions = (try? await sessionStore.listSessions()) ?? []
+                let latestRuns = (try? await ledger.listRuns()) ?? []
+                await MainActor.run {
                     self.runs = latestRuns
                     if !latestSessions.isEmpty {
                         self.chatSessions = latestSessions
-                    }
-                    // Append to the visible thread only if the run's own session
-                    // is still on screen; if Adam switched sessions mid-run, the
-                    // transcript is already persisted and reappears when he
-                    // reopens that session.
-                    if self.currentSessionId == sessionId {
-                        self.chatThread.append(ConversationTurn(role: .user, text: prompt))
-                        self.chatThread.append(ConversationTurn(role: .assistant, text: answer))
-                        self.status = detail.run.success ? "Trace saved" : "Backend failed; trace saved"
-                    } else {
-                        self.status = "Background run finished in another session"
                     }
                 }
             } catch {
@@ -1845,12 +2753,48 @@ final class MacWorkbenchModel: ObservableObject {
                     // Same supersession guard: a cancelled/superseded run must
                     // not clobber the newer run's status or isRunning flag.
                     guard self.activeToolLoop === monitor else { return }
+                    let deadlineAlreadyPresented = self.responseDeadlinePresentedMonitor === monitor
+                    self.responseDeadlineTask?.cancel()
+                    self.responseDeadlineTask = nil
+                    self.responseDeadlinePresentedMonitor = nil
                     self.runTask = nil
                     self.activeToolLoop = nil
-                    self.status = error.localizedDescription
+                    self.status = deadlineAlreadyPresented
+                        ? "Response ceiling reached; showing retrieved evidence"
+                        : error.localizedDescription
                     self.isRunning = false
+                    if !deadlineAlreadyPresented, let receiptID = persistedDelegationReceiptID {
+                        self.finishDelegationReceipt(
+                            id: receiptID,
+                            state: .failed,
+                            result: "Harness could not complete this delegation: \(error.localizedDescription)"
+                        )
+                        self.activeDelegationReceiptID = nil
+                    }
                 }
             }
+        }
+    }
+
+    private func finishDelegationReceipt(
+        id: String,
+        state: DelegationReceiptState,
+        result: String
+    ) {
+        guard let index = delegationReceipts.firstIndex(where: { $0.id == id }) else { return }
+        var updated = delegationReceipts[index]
+        updated.state = state
+        updated.result = result
+        updated.updatedAt = Date()
+        delegationReceipts[index] = updated
+
+        do {
+            try delegationReceiptStore.save(updated)
+            delegationSubmissionError = nil
+        } catch {
+            let message = "Delegation result is visible but was not saved: \(error.localizedDescription)"
+            delegationSubmissionError = message
+            status = message
         }
     }
 
@@ -2307,6 +3251,134 @@ struct WorkbenchToolGroup: Identifiable, Equatable {
         case "adams-words": return "quote.opening"
         default: return "sparkles"
         }
+    }
+}
+
+enum DelegationReceiptState: String, Codable, Sendable, Equatable {
+    case submitted
+    case completed
+    case failed
+    case cancelled
+
+    var label: String {
+        switch self {
+        case .submitted: return "SAVED"
+        case .completed: return "COMPLETED"
+        case .failed: return "FAILED"
+        case .cancelled: return "CANCELLED"
+        }
+    }
+}
+
+struct DelegationReceipt: Identifiable, Codable, Sendable, Equatable {
+    let id: String
+    let intent: String
+    let preferredApproach: String
+    let doneCondition: String
+    var state: DelegationReceiptState
+    var result: String?
+    let createdAt: Date
+    var updatedAt: Date
+
+    init(
+        id: String = UUID().uuidString,
+        intent: String,
+        preferredApproach: String,
+        doneCondition: String,
+        state: DelegationReceiptState = .submitted,
+        result: String? = nil,
+        createdAt: Date = Date(),
+        updatedAt: Date? = nil
+    ) {
+        self.id = id
+        self.intent = intent
+        self.preferredApproach = preferredApproach
+        self.doneCondition = doneCondition
+        self.state = state
+        self.result = result
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt ?? createdAt
+    }
+}
+
+enum DelegationReceiptStoreError: Error, LocalizedError, Equatable {
+    case readbackMismatch
+
+    var errorDescription: String? {
+        switch self {
+        case .readbackMismatch:
+            return "The delegation receipt did not match after atomic write."
+        }
+    }
+}
+
+/// One JSON artifact per Delegation-page submission. `Data.write(.atomic)`
+/// creates and renames a complete temporary file, so fields never clear on a
+/// partial or failed write. The dedicated prefix keeps these receipts separate
+/// from the existing markdown Opportunity Board parser in the same folder.
+struct DelegationReceiptStore: Sendable {
+    static let filenamePrefix = "DELEGATION-RECEIPT-"
+
+    let directory: URL
+
+    init(directory: URL) {
+        self.directory = directory
+    }
+
+    func save(_ receipt: DelegationReceipt) throws {
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        let data = try encoder.encode(receipt)
+        let destination = fileURL(for: receipt.id)
+        try data.write(to: destination, options: .atomic)
+
+        // The return code is not the acceptance test. Read the exact three
+        // fields back before the caller is allowed to clear the composer.
+        let saved = try decode(Data(contentsOf: destination))
+        guard saved.id == receipt.id,
+              saved.intent == receipt.intent,
+              saved.preferredApproach == receipt.preferredApproach,
+              saved.doneCondition == receipt.doneCondition,
+              saved.state == receipt.state,
+              saved.result == receipt.result
+        else {
+            throw DelegationReceiptStoreError.readbackMismatch
+        }
+    }
+
+    func load() throws -> [DelegationReceipt] {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: directory.path) else { return [] }
+        let files = try fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        )
+        return try files
+            .filter {
+                $0.lastPathComponent.hasPrefix(Self.filenamePrefix)
+                    && $0.pathExtension.lowercased() == "json"
+            }
+            .map { try decode(Data(contentsOf: $0)) }
+            .sorted {
+                if $0.createdAt == $1.createdAt { return $0.id > $1.id }
+                return $0.createdAt > $1.createdAt
+            }
+    }
+
+    func fileURL(for receiptID: String) -> URL {
+        directory.appendingPathComponent("\(Self.filenamePrefix)\(receiptID).json")
+    }
+
+    private func decode(_ data: Data) throws -> DelegationReceipt {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(DelegationReceipt.self, from: data)
     }
 }
 
