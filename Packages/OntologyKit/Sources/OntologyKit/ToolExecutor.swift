@@ -37,10 +37,10 @@ public protocol MemoryCandidateStaging: Sendable {
     func stageMemoryCandidate(_ candidate: MemoryCandidate) throws
 }
 
-/// Default stager: appends a pending claim to the same
-/// `candidates/queue.json` that `ReviewQueueStore` loads its review queue
-/// from (ReviewQueueStore has no public staging API yet — when it grows one,
-/// conform it to `MemoryCandidateStaging` and delete this).
+/// Default stager: performs one coordinated, idempotent append to the same
+/// `candidates/queue.json` that `ReviewQueueStore` loads. Producer apps never
+/// call this; only Harness-owned analysis and Harness's memory tool may form a
+/// review candidate.
 public struct ReviewQueueMemoryStager: MemoryCandidateStaging {
     private let ontologyRoot: URL
 
@@ -49,38 +49,8 @@ public struct ReviewQueueMemoryStager: MemoryCandidateStaging {
     }
 
     public func stageMemoryCandidate(_ candidate: MemoryCandidate) throws {
-        let candidatesURL = ontologyRoot.appendingPathComponent("candidates", isDirectory: true)
-        let queueURL = candidatesURL.appendingPathComponent("queue.json")
-
-        // JSONSerialization round-trip (not Codable) so fields other agents
-        // put on existing claims survive the append untouched.
-        var entries: [[String: Any]] = []
-        if FileManager.default.fileExists(atPath: queueURL.path) {
-            let data = try Data(contentsOf: queueURL)
-            guard let existing = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-                throw ToolExecutorError.staging("queue.json is not a JSON array; refusing to overwrite it")
-            }
-            entries = existing
-        }
-
-        var entry: [String: Any] = [
-            "id": candidate.id,
-            "status": "pending",
-            "plain": candidate.proposedClaim,
-            "evidence": candidate.evidenceNote,
-            "source": candidate.sourceRef,
-            "domain_a": "",
-            "domain_b": "",
-            "connection_type": "memory-note",
-        ]
-        if let strength = candidate.strength {
-            entry["strength"] = strength
-        }
-        entries.append(entry)
-
-        let data = try JSONSerialization.data(withJSONObject: entries, options: [.prettyPrinted, .sortedKeys])
-        try FileManager.default.createDirectory(at: candidatesURL, withIntermediateDirectories: true)
-        try data.write(to: queueURL, options: .atomic)
+        try CoordinatedReviewQueueMemoryStager(ontologyRoot: ontologyRoot)
+            .stageMemoryCandidate(candidate)
     }
 }
 
@@ -152,6 +122,9 @@ public final class ToolExecutor: Sendable {
     /// `ToolResult(isError: true)` so the loop can show the model what went
     /// wrong and let it recover.
     public func execute(name: String, input: JSONValue) async -> ToolResult {
+        guard !Task.isCancelled else {
+            return cancelledResult(toolName: name)
+        }
         switch name {
         case "shell":
             return await runShell(input: input)
@@ -279,11 +252,18 @@ public final class ToolExecutor: Sendable {
                 patternIds: patternIds
             )
             let resolution = await approvals.awaitDecision(request)
+            if resolution == .cancelled || Task.isCancelled {
+                return cancelledResult(toolName: "shell")
+            }
             guard resolution == .approved else {
                 return .failure("shell", "Adam denied this command: \(reason). Do not retry it; propose a different approach or ask Adam.")
             }
         case .autoAllow:
             break
+        }
+
+        guard !Task.isCancelled else {
+            return cancelledResult(toolName: "shell")
         }
 
         let timeout = min(
@@ -370,6 +350,9 @@ public final class ToolExecutor: Sendable {
     // MARK: - search_files
 
     private func searchFiles(input: JSONValue) -> ToolResult {
+        guard !Task.isCancelled else {
+            return cancelledResult(toolName: "search_files")
+        }
         guard let pattern = input["pattern"]?.stringValue, !pattern.isEmpty else {
             return .failure("search_files", "search_files: missing required field 'pattern'.")
         }
@@ -389,7 +372,9 @@ public final class ToolExecutor: Sendable {
 
         switch target {
         case "files":
-            let hits = fileNameSearch(glob: pattern, under: root, limit: limit)
+            guard let hits = fileNameSearch(glob: pattern, under: root, limit: limit) else {
+                return cancelledResult(toolName: "search_files")
+            }
             return ToolResult(
                 toolName: "search_files",
                 output: hits.isEmpty ? "No files matched '\(pattern)'." : hits.joined(separator: "\n")
@@ -399,7 +384,9 @@ public final class ToolExecutor: Sendable {
                 return .failure("search_files", "'\(pattern)' is not a valid regular expression.")
             }
             let glob = input["file_glob"]?.stringValue
-            let hits = contentSearch(regex: regex, under: root, fileGlob: glob, limit: limit)
+            guard let hits = contentSearch(regex: regex, under: root, fileGlob: glob, limit: limit) else {
+                return cancelledResult(toolName: "search_files")
+            }
             return ToolResult(
                 toolName: "search_files",
                 output: hits.isEmpty ? "No matches for /\(pattern)/." : hits.joined(separator: "\n")
@@ -409,7 +396,10 @@ public final class ToolExecutor: Sendable {
         }
     }
 
-    private func searchableFiles(under root: URL) -> [URL] {
+    /// `nil` means the task was cancelled while enumerating. Callers preserve
+    /// that distinction from a legitimate empty result.
+    private func searchableFiles(under root: URL) -> [URL]? {
+        guard !Task.isCancelled else { return nil }
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory) else { return [] }
         guard isDirectory.boolValue else { return [root] }
@@ -423,6 +413,7 @@ public final class ToolExecutor: Sendable {
 
         var files: [URL] = []
         for case let file as URL in enumerator {
+            guard !Task.isCancelled else { return nil }
             let name = file.lastPathComponent
             if skippedDirectories.contains(name),
                (try? file.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
@@ -437,26 +428,31 @@ public final class ToolExecutor: Sendable {
         return files
     }
 
-    private func fileNameSearch(glob: String, under root: URL, limit: Int) -> [String] {
+    private func fileNameSearch(glob: String, under root: URL, limit: Int) -> [String]? {
         guard let regex = Self.regexFromGlob(glob) else { return [] }
-        let matches = searchableFiles(under: root)
-            .filter { file in
-                let name = file.lastPathComponent
-                let range = NSRange(name.startIndex..., in: name)
-                return regex.firstMatch(in: name, options: [], range: range) != nil
-            }
-            .sorted { lhs, rhs in
-                let lhsDate = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-                let rhsDate = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-                return lhsDate > rhsDate
-            }
-        return matches.prefix(limit).map { displayPath($0) }
+        guard let files = searchableFiles(under: root) else { return nil }
+        var matches: [(url: URL, modifiedAt: Date)] = []
+        for file in files {
+            guard !Task.isCancelled else { return nil }
+            let name = file.lastPathComponent
+            let range = NSRange(name.startIndex..., in: name)
+            guard regex.firstMatch(in: name, options: [], range: range) != nil else { continue }
+            let modifiedAt = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+                ?? .distantPast
+            matches.append((file, modifiedAt))
+        }
+        guard !Task.isCancelled else { return nil }
+        matches.sort { $0.modifiedAt > $1.modifiedAt }
+        guard !Task.isCancelled else { return nil }
+        return matches.prefix(limit).map { displayPath($0.url) }
     }
 
-    private func contentSearch(regex: NSRegularExpression, under root: URL, fileGlob: String?, limit: Int) -> [String] {
+    private func contentSearch(regex: NSRegularExpression, under root: URL, fileGlob: String?, limit: Int) -> [String]? {
         let globRegex = fileGlob.flatMap { Self.regexFromGlob($0) }
+        guard let files = searchableFiles(under: root) else { return nil }
         var results: [String] = []
-        for file in searchableFiles(under: root) {
+        for file in files {
+            guard !Task.isCancelled else { return nil }
             if results.count >= limit { break }
             if let globRegex {
                 let name = file.lastPathComponent
@@ -468,6 +464,7 @@ public final class ToolExecutor: Sendable {
             guard let text = try? String(contentsOf: file, encoding: .utf8) else { continue }
             var lineNumber = 0
             for line in text.components(separatedBy: "\n") {
+                guard !Task.isCancelled else { return nil }
                 lineNumber += 1
                 guard results.count < limit else { break }
                 let range = NSRange(line.startIndex..., in: line)
@@ -522,8 +519,15 @@ public final class ToolExecutor: Sendable {
             detail: String(content.prefix(2_000))
         )
         let resolution = await approvals.awaitDecision(request)
+        if resolution == .cancelled || Task.isCancelled {
+            return cancelledResult(toolName: "write_file")
+        }
         guard resolution == .approved else {
             return .failure("write_file", "Adam denied this write to \(displayPath(url)). Nothing was written.")
+        }
+
+        guard !Task.isCancelled else {
+            return cancelledResult(toolName: "write_file")
         }
 
         do {
@@ -639,6 +643,10 @@ public final class ToolExecutor: Sendable {
     }
 
     // MARK: - Helpers
+
+    private func cancelledResult(toolName: String) -> ToolResult {
+        .failure(toolName, "\(toolName) was cancelled before execution completed; no pending mutation was authorized.")
+    }
 
     private func cap(_ text: String) -> String {
         guard text.count > configuration.outputCap else { return text }

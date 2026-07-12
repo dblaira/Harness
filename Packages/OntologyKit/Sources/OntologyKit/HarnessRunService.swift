@@ -16,10 +16,14 @@ import Combine
 public final class ToolLoopMonitor: ObservableObject, @unchecked Sendable {
     public enum Phase: String, Sendable, Equatable {
         case idle
+        case checkingGraph
+        case retrievingAuthority
+        case retrievingMemory
         case callingModel
         case runningTool
         case finished
         case budgetExhausted
+        case deadlineExceeded
         case cancelled
         case failed
     }
@@ -29,12 +33,29 @@ public final class ToolLoopMonitor: ObservableObject, @unchecked Sendable {
         public var maxIterations: Int
         public var currentTool: String?
         public var phase: Phase
+        public var acceptedEvidence: [String]
+        public var supportingEvidence: [String]
+        public var toolEvidence: [String]
+        public var completedAnswer: String?
 
-        public init(iteration: Int = 0, maxIterations: Int = 30, currentTool: String? = nil, phase: Phase = .idle) {
+        public init(
+            iteration: Int = 0,
+            maxIterations: Int = 30,
+            currentTool: String? = nil,
+            phase: Phase = .idle,
+            acceptedEvidence: [String] = [],
+            supportingEvidence: [String] = [],
+            toolEvidence: [String] = [],
+            completedAnswer: String? = nil
+        ) {
             self.iteration = iteration
             self.maxIterations = maxIterations
             self.currentTool = currentTool
             self.phase = phase
+            self.acceptedEvidence = acceptedEvidence
+            self.supportingEvidence = supportingEvidence
+            self.toolEvidence = toolEvidence
+            self.completedAnswer = completedAnswer
         }
     }
 
@@ -70,8 +91,8 @@ public final class ToolLoopMonitor: ObservableObject, @unchecked Sendable {
 
     /// Abort: cancels the loop's Task (registered handlers) and terminates
     /// every live CLI/shell child process. A tool call already suspended on
-    /// an approval card stays pending until Adam decides — the law's queue is
-    /// never silently drained.
+    /// an approval card is resolved as cancelled and removed, so a stale later
+    /// approval can never execute work from a stopped run.
     public func cancel() {
         lock.lock()
         guard !cancelled else {
@@ -80,6 +101,35 @@ public final class ToolLoopMonitor: ObservableObject, @unchecked Sendable {
         }
         cancelled = true
         current.phase = .cancelled
+        let handlers = cancelHandlers
+        cancelHandlers = []
+        let snapshot = current
+        lock.unlock()
+        publish(snapshot)
+        for handler in handlers { handler() }
+        #if os(macOS)
+        if terminatesSubprocesses {
+            AgentRunner.terminateRunningProcesses()
+        }
+        #endif
+    }
+
+    /// The interactive response contract expired. This is deliberately
+    /// distinct from Adam pressing Cancel: the UI can publish the evidence it
+    /// already has, while the service records that the backend exceeded its
+    /// product deadline.
+    public func exceedDeadline() {
+        stop(phase: .deadlineExceeded)
+    }
+
+    private func stop(phase: Phase) {
+        lock.lock()
+        guard !cancelled else {
+            lock.unlock()
+            return
+        }
+        cancelled = true
+        current.phase = phase
         let handlers = cancelHandlers
         cancelHandlers = []
         let snapshot = current
@@ -165,10 +215,14 @@ public struct HarnessRunService: Sendable {
         images: [ModelImageAttachment] = [],
         conversationHistory: [ConversationTurn] = [],
         soul: SoulDocument? = SoulLoader.load(),
+        localAnswer: String? = nil,
+        includeSupportingMemory: Bool = true,
+        answerFromAcceptedAuthority: Bool = false,
         tools: [ToolSpec] = [],
         toolExecutor: ToolExecutor? = nil,
         toolLoop: ToolLoopMonitor? = nil,
         maxToolIterations: Int = 30,
+        interactiveDeadline: ContinuousClock.Instant? = nil,
         sessionId: String = PromptAssembler.defaultSessionId
     ) async throws -> HarnessRunDetail {
         let runId = UUID().uuidString
@@ -190,18 +244,38 @@ public struct HarnessRunService: Sendable {
             ))
         }
 
+        toolLoop?.update { $0.phase = .checkingGraph }
         let graphHealth = await graphHealthChecker.checkAcceptedGraph()
         trace.append(TraceEvent(runId: runId, stage: .graphHealth, message: "Graph health: \(graphHealth.detail)"))
 
+        toolLoop?.update { $0.phase = .retrievingAuthority }
         let authorityHits = try await authorityRetriever
             .retrieve(prompt: prompt, ontology: ontology, limit: 6)
             .map { $0.attached(to: runId) }
         trace.append(TraceEvent(runId: runId, stage: .authorityRetrieval, message: "Retrieved \(authorityHits.count) accepted graph authority hits."))
+        toolLoop?.update {
+            $0.acceptedEvidence = Self.acceptedEvidence(from: authorityHits)
+        }
 
-        let memoryHits = try await memoryRetriever
-            .retrieve(prompt: prompt, limit: 5)
-            .map { $0.attached(to: runId) }
-        trace.append(TraceEvent(runId: runId, stage: .supportingRetrieval, message: "Retrieved \(memoryHits.count) supporting memory hits."))
+        let memoryHits: [MemoryHit]
+        if includeSupportingMemory {
+            toolLoop?.update { $0.phase = .retrievingMemory }
+            memoryHits = try await memoryRetriever
+                .retrieve(prompt: prompt, limit: 5)
+                .map { $0.attached(to: runId) }
+            trace.append(TraceEvent(runId: runId, stage: .supportingRetrieval, message: "Retrieved \(memoryHits.count) supporting memory hits."))
+        } else {
+            memoryHits = []
+            trace.append(TraceEvent(
+                runId: runId,
+                stage: .supportingRetrieval,
+                message: "Skipped supporting memory because the interactive prompt requested accepted authority only."
+            ))
+        }
+        toolLoop?.update {
+            $0.supportingEvidence = Self.supportingEvidence(from: memoryHits)
+            $0.phase = .callingModel
+        }
 
         let packet = PromptPacketBuilder.makePacket(
             prompt: prompt,
@@ -215,9 +289,57 @@ public struct HarnessRunService: Sendable {
         ).withTools(tools)
 
         let start = Date()
-        let response: BackendResponse
-        let success: Bool
-        if !tools.isEmpty,
+        var response: BackendResponse
+        var success: Bool
+        var suppressCandidateExtraction: Bool
+        let resolvedLocalAnswer = localAnswer?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let resolvedLocalAnswer, !resolvedLocalAnswer.isEmpty {
+            response = BackendResponse(
+                text: resolvedLocalAnswer,
+                tokenCount: nil,
+                cost: nil
+            )
+            success = true
+            suppressCandidateExtraction = true
+            toolLoop?.update {
+                $0.completedAnswer = response.text
+                $0.phase = .finished
+            }
+            trace.append(TraceEvent(
+                runId: runId,
+                stage: .modelExecution,
+                message: "Answered from deterministic local product help; provider execution skipped."
+            ))
+        } else if answerFromAcceptedAuthority {
+            response = BackendResponse(
+                text: InteractiveChatPolicy.acceptedAuthorityAnswer(
+                    acceptedEvidence: Self.acceptedEvidence(from: authorityHits)
+                ),
+                tokenCount: nil,
+                cost: nil
+            )
+            success = true
+            suppressCandidateExtraction = true
+            toolLoop?.update {
+                $0.completedAnswer = response.text
+                $0.phase = .finished
+            }
+            trace.append(TraceEvent(
+                runId: runId,
+                stage: .modelExecution,
+                message: "Answered directly from accepted graph authority; model execution skipped."
+            ))
+        } else if Self.deadlineExceeded(interactiveDeadline, monitor: toolLoop) {
+            response = Self.deadlineFallbackResponse(backend: backend, monitor: toolLoop)
+            success = false
+            suppressCandidateExtraction = true
+            trace.append(TraceEvent(
+                runId: runId,
+                stage: .modelExecution,
+                message: "Interactive response deadline reached before model execution; returned bounded local evidence."
+            ))
+        } else if !tools.isEmpty,
            let toolExecutor,
            let toolBackend = backend as? ToolCapableModelBackend,
            toolBackend.supportsTools {
@@ -232,25 +354,101 @@ public struct HarnessRunService: Sendable {
                     backend: toolBackend,
                     executor: toolExecutor,
                     monitor: toolLoop,
-                    maxIterations: maxToolIterations
+                    maxIterations: maxToolIterations,
+                    interactiveDeadline: interactiveDeadline
                 )
             }
             toolLoop?.registerCancelHandler { loopTask.cancel() }
             let outcome = await loopTask.value
             response = outcome.response
             success = outcome.success
+            suppressCandidateExtraction = outcome.deadlineExceeded || !outcome.success
             trace.append(contentsOf: outcome.events)
             trace.append(TraceEvent(runId: runId, stage: .modelExecution, message: outcome.executionMessage))
         } else {
             do {
-                response = try await backend.execute(packet: packet)
-                success = true
-                trace.append(TraceEvent(runId: runId, stage: .modelExecution, message: "Model call completed with \(backend.metadata.invocationMethod)."))
+                let modelTask = Task {
+                    try await backend.execute(packet: packet)
+                }
+                toolLoop?.registerCancelHandler { modelTask.cancel() }
+                let modelResponse = try await modelTask.value
+                if Self.deadlineExceeded(interactiveDeadline, monitor: toolLoop) {
+                    response = Self.deadlineFallbackResponse(backend: backend, monitor: toolLoop)
+                    success = false
+                    suppressCandidateExtraction = true
+                    trace.append(TraceEvent(
+                        runId: runId,
+                        stage: .modelExecution,
+                        message: "Model completed after the interactive response deadline; returned bounded local evidence instead."
+                    ))
+                } else {
+                    response = modelResponse
+                    success = true
+                    suppressCandidateExtraction = false
+                    toolLoop?.update {
+                        $0.completedAnswer = modelResponse.text
+                        $0.phase = .finished
+                    }
+                    trace.append(TraceEvent(runId: runId, stage: .modelExecution, message: "Model call completed with \(backend.metadata.invocationMethod)."))
+                }
             } catch {
-                response = BackendResponse(text: "Backend failed: \(error.localizedDescription)\n\nRule: none", tokenCount: nil, cost: nil)
-                success = false
-                trace.append(TraceEvent(runId: runId, stage: .modelExecution, message: "Model call failed: \(error.localizedDescription)"))
+                if Self.isAuthorizationFailure(error) {
+                    response = Self.providerFailureResponse(backend: backend, error: error)
+                    success = false
+                    suppressCandidateExtraction = true
+                    toolLoop?.update { $0.phase = .failed }
+                    trace.append(TraceEvent(
+                        runId: runId,
+                        stage: .modelExecution,
+                        message: Self.providerFailureTrace(backend: backend, error: error)
+                    ))
+                } else if Self.deadlineExceeded(interactiveDeadline, monitor: toolLoop) {
+                    response = Self.deadlineFallbackResponse(backend: backend, monitor: toolLoop)
+                    success = false
+                    suppressCandidateExtraction = true
+                    trace.append(TraceEvent(
+                        runId: runId,
+                        stage: .modelExecution,
+                        message: "Interactive response deadline cancelled the model; returned bounded local evidence."
+                    ))
+                } else {
+                    response = Self.providerFailureResponse(backend: backend, error: error)
+                    success = false
+                    suppressCandidateExtraction = true
+                    toolLoop?.update { $0.phase = .failed }
+                    trace.append(TraceEvent(
+                        runId: runId,
+                        stage: .modelExecution,
+                        message: Self.providerFailureTrace(backend: backend, error: error)
+                    ))
+                }
             }
+        }
+
+        // A provider process exiting normally is not a successful answer when
+        // its terminal text merely promises to load, inspect, or search next.
+        // Record an honest provider failure instead of preserving a nonanswer
+        // as green ledger evidence. Deterministic local answers are already
+        // complete product copy and intentionally bypass this provider check.
+        if success,
+           resolvedLocalAnswer == nil,
+           Self.isTerminalProgressOnly(response.text) {
+            response = BackendResponse(
+                text: Self.progressOnlyFailureText(backend: backend),
+                tokenCount: response.tokenCount,
+                cost: response.cost
+            )
+            success = false
+            suppressCandidateExtraction = true
+            toolLoop?.update {
+                $0.completedAnswer = response.text
+                $0.phase = .failed
+            }
+            trace.append(TraceEvent(
+                runId: runId,
+                stage: .modelExecution,
+                message: "\(backend.metadata.backend.rawValue) returned terminal progress-only text; run recorded as failed."
+            ))
         }
         let duration = Date().timeIntervalSince(start)
 
@@ -267,12 +465,14 @@ public struct HarnessRunService: Sendable {
         evalResults.insert(graphHealth.evalResult(runId: runId), at: 0)
         trace.append(TraceEvent(runId: runId, stage: .evaluation, message: "Evaluated \(evalResults.count) deterministic checks."))
 
-        let candidates = candidateExtractor.candidates(
-            prompt: prompt,
-            response: response.text,
-            runId: runId,
-            redactor: redactor
-        )
+        let candidates = suppressCandidateExtraction
+            ? []
+            : candidateExtractor.candidates(
+                prompt: prompt,
+                response: response.text,
+                runId: runId,
+                redactor: redactor
+            )
         let validations = candidates.map { TurtleCandidateValidator().validate(candidate: $0) }
 
         trace.append(TraceEvent(runId: runId, stage: .traceSaved, message: "Saved run trace to local ledger."))
@@ -316,6 +516,7 @@ public struct HarnessRunService: Sendable {
     private struct ToolLoopOutcome: Sendable {
         let response: BackendResponse
         let success: Bool
+        let deadlineExceeded: Bool
         let events: [TraceEvent]
         let executionMessage: String
     }
@@ -332,7 +533,8 @@ public struct HarnessRunService: Sendable {
         backend: any ToolCapableModelBackend,
         executor: ToolExecutor,
         monitor: ToolLoopMonitor?,
-        maxIterations: Int
+        maxIterations: Int,
+        interactiveDeadline: ContinuousClock.Instant?
     ) async -> ToolLoopOutcome {
         var events: [TraceEvent] = []
         var transcript: [ToolLoopTurn] = []
@@ -344,6 +546,7 @@ public struct HarnessRunService: Sendable {
         // result with a "you already did this" note — never re-executed, never
         // re-prompted. The bouncer still gates every genuinely-new call.
         var executedCalls: [String: ToolResult] = [:]
+        var usage = UsageAccumulator()
         monitor?.update {
             $0.iteration = 0
             $0.maxIterations = maxIterations
@@ -352,14 +555,27 @@ public struct HarnessRunService: Sendable {
         }
 
         while true {
+            if Self.deadlineExceeded(interactiveDeadline, monitor: monitor) {
+                monitor?.exceedDeadline()
+                return ToolLoopOutcome(
+                    response: usage.applying(
+                        to: Self.deadlineFallbackResponse(backend: backend, monitor: monitor)
+                    ),
+                    success: false,
+                    deadlineExceeded: true,
+                    events: events,
+                    executionMessage: "Interactive response deadline stopped the tool loop during iteration \(iteration); returned bounded local evidence."
+                )
+            }
             if Task.isCancelled || monitor?.isCancelled == true {
                 return ToolLoopOutcome(
-                    response: BackendResponse(
+                    response: usage.applying(to: BackendResponse(
                         text: "Run cancelled by Adam before the model finished.",
                         tokenCount: nil,
                         cost: nil
-                    ),
+                    )),
                     success: false,
+                    deadlineExceeded: false,
                     events: events,
                     executionMessage: "Tool loop cancelled during iteration \(iteration)."
                 )
@@ -369,46 +585,93 @@ public struct HarnessRunService: Sendable {
             do {
                 response = try await backend.execute(packet: packet, toolTranscript: transcript)
             } catch {
+                if Self.isAuthorizationFailure(error) {
+                    monitor?.update { $0.phase = .failed }
+                    return ToolLoopOutcome(
+                        response: usage.applying(
+                            to: Self.providerFailureResponse(backend: backend, error: error)
+                        ),
+                        success: false,
+                        deadlineExceeded: false,
+                        events: events,
+                        executionMessage: Self.providerFailureTrace(
+                            backend: backend,
+                            error: error,
+                            toolIteration: iteration
+                        )
+                    )
+                }
+                if Self.deadlineExceeded(interactiveDeadline, monitor: monitor) {
+                    monitor?.exceedDeadline()
+                    return ToolLoopOutcome(
+                        response: usage.applying(
+                            to: Self.deadlineFallbackResponse(backend: backend, monitor: monitor)
+                        ),
+                        success: false,
+                        deadlineExceeded: true,
+                        events: events,
+                        executionMessage: "Interactive response deadline cancelled the model during tool iteration \(iteration); returned bounded local evidence."
+                    )
+                }
                 if Task.isCancelled || monitor?.isCancelled == true {
                     return ToolLoopOutcome(
-                        response: BackendResponse(
+                        response: usage.applying(to: BackendResponse(
                             text: "Run cancelled by Adam before the model finished.",
                             tokenCount: nil,
                             cost: nil
-                        ),
+                        )),
                         success: false,
+                        deadlineExceeded: false,
                         events: events,
                         executionMessage: "Tool loop cancelled during iteration \(iteration)."
                     )
                 }
                 monitor?.update { $0.phase = .failed }
                 return ToolLoopOutcome(
-                    response: BackendResponse(
-                        text: "Backend failed: \(error.localizedDescription)\n\nRule: none",
-                        tokenCount: nil,
-                        cost: nil
+                    response: usage.applying(
+                        to: Self.providerFailureResponse(backend: backend, error: error)
                     ),
                     success: false,
+                    deadlineExceeded: false,
                     events: events,
-                    executionMessage: "Model call failed in tool loop (iteration \(iteration)): \(error.localizedDescription)"
+                    executionMessage: Self.providerFailureTrace(
+                        backend: backend,
+                        error: error,
+                        toolIteration: iteration
+                    )
+                )
+            }
+            usage.record(response)
+
+            if Self.deadlineExceeded(interactiveDeadline, monitor: monitor) {
+                monitor?.exceedDeadline()
+                return ToolLoopOutcome(
+                    response: usage.applying(
+                        to: Self.deadlineFallbackResponse(backend: backend, monitor: monitor)
+                    ),
+                    success: false,
+                    deadlineExceeded: true,
+                    events: events,
+                    executionMessage: "Model completed after the interactive response deadline during tool iteration \(iteration); returned bounded local evidence."
                 )
             }
 
             guard !response.toolCalls.isEmpty else {
                 monitor?.update {
                     $0.currentTool = nil
+                    $0.completedAnswer = response.text
                     $0.phase = .finished
                 }
                 return ToolLoopOutcome(
-                    response: response,
+                    response: usage.applying(to: response),
                     success: true,
+                    deadlineExceeded: false,
                     events: events,
                     executionMessage: "Tool loop completed after \(iteration) tool iteration(s) with \(backend.metadata.invocationMethod)."
                 )
             }
 
             guard iteration < maxIterations else {
-                monitor?.update { $0.phase = .budgetExhausted }
                 events.append(TraceEvent(
                     runId: runId,
                     stage: .toolCall,
@@ -417,9 +680,16 @@ public struct HarnessRunService: Sendable {
                 let text = response.text.isEmpty
                     ? "Tool loop stopped: the iteration budget of \(maxIterations) was reached before a final answer."
                     : response.text + "\n\n[Tool loop stopped: the iteration budget of \(maxIterations) was reached.]"
+                monitor?.update {
+                    $0.completedAnswer = text
+                    $0.phase = .budgetExhausted
+                }
                 return ToolLoopOutcome(
-                    response: BackendResponse(text: text, tokenCount: response.tokenCount, cost: response.cost),
+                    response: usage.applying(
+                        to: BackendResponse(text: text, tokenCount: nil, cost: nil)
+                    ),
                     success: true,
+                    deadlineExceeded: false,
                     events: events,
                     executionMessage: "Tool loop stopped at the \(maxIterations)-iteration budget."
                 )
@@ -430,6 +700,18 @@ public struct HarnessRunService: Sendable {
 
             var results: [ToolCallResult] = []
             for call in response.toolCalls {
+                if Self.deadlineExceeded(interactiveDeadline, monitor: monitor) {
+                    monitor?.exceedDeadline()
+                    return ToolLoopOutcome(
+                        response: usage.applying(
+                            to: Self.deadlineFallbackResponse(backend: backend, monitor: monitor)
+                        ),
+                        success: false,
+                        deadlineExceeded: true,
+                        events: events,
+                        executionMessage: "Interactive response deadline stopped tool execution during iteration \(iteration); returned bounded local evidence."
+                    )
+                }
                 if Task.isCancelled || monitor?.isCancelled == true { break }
                 monitor?.update {
                     $0.currentTool = call.name
@@ -466,6 +748,13 @@ public struct HarnessRunService: Sendable {
                 ))
                 executedCalls[signature] = result
                 results.append(ToolCallResult(callId: call.id, result: result))
+                if !result.isError {
+                    let evidence = redactor.redact("\(call.name): \(String(result.output.prefix(240)))")
+                    monitor?.update {
+                        guard !$0.toolEvidence.contains(evidence) else { return }
+                        $0.toolEvidence = Array(($0.toolEvidence + [evidence]).prefix(4))
+                    }
+                }
             }
             transcript.append(ToolLoopTurn(
                 assistantText: response.text,
@@ -483,6 +772,68 @@ public struct HarnessRunService: Sendable {
         let text = input.jsonString
         guard text.count > 300 else { return text }
         return String(text.prefix(300)) + "…"
+    }
+
+    private static func deadlineExceeded(
+        _ deadline: ContinuousClock.Instant?,
+        monitor: ToolLoopMonitor?
+    ) -> Bool {
+        if monitor?.progressSnapshot().phase == .deadlineExceeded {
+            return true
+        }
+        guard let deadline else { return false }
+        return ContinuousClock().now >= deadline
+    }
+
+    private static func deadlineFallbackResponse(
+        backend: any ModelBackendAdapter,
+        monitor: ToolLoopMonitor?
+    ) -> BackendResponse {
+        let evidence = monitor?.progressSnapshot() ?? ToolLoopMonitor.Progress()
+        return BackendResponse(
+            text: InteractiveChatPolicy.deadlineFallback(
+                backendName: backend.metadata.backend.rawValue,
+                acceptedEvidence: evidence.acceptedEvidence,
+                supportingEvidence: evidence.supportingEvidence,
+                toolEvidence: evidence.toolEvidence
+            ),
+            tokenCount: nil,
+            cost: nil
+        )
+    }
+
+    private static func acceptedEvidence(from hits: [GraphAuthorityHit]) -> [String] {
+        boundedDistinctEvidence(hits.filter { $0.authorityLevel == .accepted }.map { hit in
+            "\(normalizedEvidence(hit.object)) — \(normalizedEvidence(hit.source))"
+        }, limit: 5)
+    }
+
+    private static func supportingEvidence(from hits: [MemoryHit]) -> [String] {
+        boundedDistinctEvidence(hits.map { hit in
+            let sourceName = URL(fileURLWithPath: hit.source).lastPathComponent
+            return "\(normalizedEvidence(hit.excerpt)) — \(sourceName)"
+        }, limit: 3)
+    }
+
+    private static func boundedDistinctEvidence(_ values: [String], limit: Int) -> [String] {
+        var seen: Set<String> = []
+        var result: [String] = []
+        for value in values {
+            let normalized = normalizedEvidence(value)
+            guard !normalized.isEmpty else { continue }
+            let key = normalized.lowercased()
+            guard seen.insert(key).inserted else { continue }
+            result.append(String(normalized.prefix(320)))
+            if result.count == limit { break }
+        }
+        return result
+    }
+
+    private static func normalizedEvidence(_ value: String) -> String {
+        value
+            .split(whereSeparator: \Character.isWhitespace)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

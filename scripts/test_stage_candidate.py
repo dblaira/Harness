@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from stage_candidate import CandidateStageError, stage_candidate, validate_candidate
+from review_queue_transaction import coordinated_compare_and_swap
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -97,6 +98,25 @@ class StageCandidateTests(unittest.TestCase):
                     REPOSITORY_ROOT,
                     expected_queue_sha="0" * 64,
                 )
+
+    def test_coordinated_compare_and_swap_preserves_a_newer_queue(self) -> None:
+        temporary, root = self.make_ontology()
+        with temporary:
+            queue_path = root / "candidates/queue.json"
+            expected = queue_path.read_bytes()
+            newer = [{"id": "cand-written-by-running-harness", "status": "pending"}]
+            queue_path.write_text(json.dumps(newer, indent=2) + "\n")
+            replacement = json.dumps([valid_candidate()], indent=2).encode()
+
+            replaced = coordinated_compare_and_swap(
+                queue_path,
+                expected,
+                replacement,
+                repository_root=REPOSITORY_ROOT,
+            )
+
+            self.assertFalse(replaced)
+            self.assertEqual(json.loads(queue_path.read_text()), newer)
 
     def test_candidate_must_be_pending_agent_proposal(self) -> None:
         candidate = valid_candidate()

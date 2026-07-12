@@ -875,7 +875,15 @@ private struct MacToolLoopStatusRow: View {
 
     private var statusText: String {
         switch monitor.progress.phase {
-        case .idle, .callingModel:
+        case .idle:
+            return fallbackStatus
+        case .checkingGraph:
+            return "Checking accepted graph…"
+        case .retrievingAuthority:
+            return "Finding accepted knowledge…"
+        case .retrievingMemory:
+            return "Searching supporting memory…"
+        case .callingModel:
             return "Calling model…"
         case .runningTool:
             return "Running \(monitor.progress.currentTool ?? "tool")…"
@@ -883,6 +891,8 @@ private struct MacToolLoopStatusRow: View {
             return "Finishing…"
         case .budgetExhausted:
             return "Tool budget exhausted"
+        case .deadlineExceeded:
+            return "Showing retrieved evidence…"
         case .cancelled:
             return "Cancelling…"
         case .failed:

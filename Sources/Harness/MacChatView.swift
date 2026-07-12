@@ -1,10 +1,11 @@
 #if os(macOS)
+import AppKit
 import SwiftUI
 import OntologyKit
 
 struct MacChatView: View {
     let ontology: Ontology
-    @StateObject private var model = MacWorkbenchModel()
+    @ObservedObject var model: MacWorkbenchModel
     @EnvironmentObject private var audioBriefPlayer: AudioBriefPlayer
     @State private var inspectorTab: WorkbenchInspectorTab = .authority
     @State private var isSidebarVisible = false
@@ -3093,11 +3094,57 @@ struct MacChatView: View {
                     reviewQueueCard(candidate)
                 }
             }
+
+            Divider()
+                .overlay(Theme.macHair)
+
+            HStack {
+                Text("CAPTURE HISTORY")
+                    .font(.caption2.weight(.bold))
+                    .tracking(1.3)
+                    .foregroundStyle(Theme.macInk.opacity(0.55))
+                Spacer()
+                Text("\(model.suiteCaptureReceipts.count) retained")
+                    .font(.caption2)
+                    .foregroundStyle(Theme.macInk.opacity(0.48))
+            }
+
+            if model.suiteCaptureReceipts.isEmpty {
+                emptyInspectorText("No suite-app captures received yet.")
+            } else {
+                ForEach(Array(model.suiteCaptureReceipts.prefix(8))) { receipt in
+                    suiteCaptureReceiptCard(receipt)
+                }
+            }
+
+            ForEach(model.suiteCaptureIssues.prefix(4), id: \.self) { issue in
+                Text(issue)
+                    .font(.caption2)
+                    .foregroundStyle(
+                        issue.hasPrefix("Waiting for first")
+                            ? Theme.macInk.opacity(0.48)
+                            : Theme.macRed.opacity(0.82)
+                    )
+                    .lineLimit(3)
+            }
         }
     }
 
     private func reviewQueueCard(_ candidate: MemoryCandidate) -> some View {
         VStack(alignment: .leading, spacing: 8) {
+            if let trustedSource = candidate.trustedSource {
+                Text("HARNESS PROPOSAL FROM \(trustedSource.uppercased())")
+                    .font(.caption2.weight(.bold))
+                    .tracking(0.8)
+                    .foregroundStyle(Theme.macRed)
+                if let captureIDs = candidate.sourceCaptureIDs, !captureIDs.isEmpty {
+                    Text(captureIDs.joined(separator: ", "))
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(Theme.macInk.opacity(0.48))
+                        .lineLimit(2)
+                }
+            }
+
             Text(candidate.plainEnglish)
                 .font(.system(size: 12).weight(.semibold))
                 .foregroundStyle(Theme.macInk)
@@ -3126,6 +3173,78 @@ struct MacChatView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.macEntry.opacity(0.24), in: RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
+    }
+
+    private func suiteCaptureReceiptCard(_ receipt: SuiteCaptureReceipt) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(suiteCaptureStateColor(receipt.state))
+                    .frame(width: 7, height: 7)
+                Text(receipt.trustedSourceName)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.macInk)
+                Spacer()
+                Text(suiteCaptureStateLabel(receipt.state))
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(Theme.macInk.opacity(0.58))
+            }
+
+            Text(receipt.capture.captureKind.replacingOccurrences(of: "_", with: " "))
+                .font(.caption)
+                .foregroundStyle(Theme.macInk.opacity(0.72))
+                .lineLimit(2)
+
+            if let detail = receipt.analysisDetail, !detail.isEmpty {
+                Text(detail)
+                    .font(.caption2)
+                    .foregroundStyle(Theme.macInk.opacity(0.56))
+                    .lineLimit(3)
+            }
+
+            HStack(spacing: 8) {
+                Text(receipt.capture.capturedAt)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(Theme.macInk.opacity(0.42))
+                    .lineLimit(1)
+                Spacer()
+                Button("Open raw") {
+                    NSWorkspace.shared.activateFileViewerSelecting([
+                        URL(fileURLWithPath: receipt.rawCapturePath)
+                    ])
+                }
+                .buttonStyle(.plain)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(Theme.macRed)
+            }
+        }
+        .padding(9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.macEntry.opacity(0.2), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.macHair, lineWidth: 1))
+    }
+
+    private func suiteCaptureStateLabel(_ state: SuiteCaptureReceiptState) -> String {
+        switch state {
+        case .analysisPending: return "waiting for Harness"
+        case .notCandidate: return "retained — no candidate"
+        case .candidateQueued: return "Harness proposal"
+        case .candidateAccepted: return "accepted by Adam"
+        case .candidateRejected: return "not adopted"
+        case .analysisFailed: return "analysis retry"
+        case .quarantined: return "retained locally"
+        case .conflict: return "conflict preserved"
+        }
+    }
+
+    private func suiteCaptureStateColor(_ state: SuiteCaptureReceiptState) -> Color {
+        switch state {
+        case .candidateQueued: return Theme.macRed
+        case .notCandidate, .candidateAccepted: return .green
+        case .candidateRejected: return Theme.macInk.opacity(0.42)
+        case .analysisPending, .analysisFailed: return .orange
+        case .quarantined, .conflict: return .yellow
+        }
     }
 
     private func reviewQueueButton(_ title: String, candidate: MemoryCandidate, decision: ReviewQueueDecision) -> some View {

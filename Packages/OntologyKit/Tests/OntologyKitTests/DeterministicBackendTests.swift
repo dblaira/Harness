@@ -400,6 +400,170 @@ import Testing
     #expect(decisions.first?.frequency == "sometimes")
 }
 
+@Test func reviewQueueConcurrentDoubleAcceptancePromotesExactlyOnce() async throws {
+    let root = try makeReviewQueueFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let ledger = try RunLedgerStore.inMemory()
+    let poster = RecordingAcceptedGraphPoster()
+    let firstStore = ReviewQueueStore(
+        ontologyRoot: root,
+        ledger: ledger,
+        turtleParser: AcceptingTurtleParser(),
+        acceptedGraphPoster: poster
+    )
+    let secondStore = ReviewQueueStore(
+        ontologyRoot: root,
+        ledger: ledger,
+        turtleParser: AcceptingTurtleParser(),
+        acceptedGraphPoster: poster
+    )
+
+    async let first = firstStore.decide(claimId: "cand-seed-001", decision: .yes)
+    async let second = secondStore.decide(claimId: "cand-seed-001", decision: .yes)
+    let outcomes = try await [first, second]
+
+    let graph = try String(
+        contentsOf: root.appendingPathComponent("accepted/accepted-graph.ttl"),
+        encoding: .utf8
+    )
+    let marker = "<https://understood.app/ontology/connection/conn-obs-seed-001>"
+    let decisions = try await ledger.listReviewQueueDecisions()
+    let posted = await poster.posted
+
+    #expect(outcomes[0].accepted && outcomes[1].accepted)
+    #expect(graph.components(separatedBy: marker).count - 1 == 1)
+    #expect(decisions.count == 1)
+    #expect(posted.count == 1)
+}
+
+@Test func reviewQueueRepeatedRejectionIsTerminalAndIdempotent() async throws {
+    let root = try makeReviewQueueFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let ledger = try RunLedgerStore.inMemory()
+    let store = ReviewQueueStore(
+        ontologyRoot: root,
+        ledger: ledger,
+        turtleParser: AcceptingTurtleParser(),
+        acceptedGraphPoster: NoopAcceptedGraphPoster()
+    )
+
+    let first = try await store.decide(claimId: "cand-seed-001", decision: .no)
+    let second = try await store.decide(claimId: "cand-seed-001", decision: .no)
+    let statuses = try await store.loadClaimStatuses()
+    let decisions = try await ledger.listReviewQueueDecisions()
+    let graph = try String(
+        contentsOf: root.appendingPathComponent("accepted/accepted-graph.ttl"),
+        encoding: .utf8
+    )
+
+    #expect(!first.accepted)
+    #expect(!second.accepted)
+    #expect(statuses["cand-seed-001"] == .rejected)
+    #expect(decisions.count == 1)
+    #expect(!graph.contains("conn-obs-seed-001"))
+}
+
+@Test func reviewQueueKeepsCandidateStagedWhileFusekiPostIsAwaiting() async throws {
+    let root = try makeReviewQueueFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let poster = BlockingAcceptedGraphPoster()
+    let store = ReviewQueueStore(
+        ontologyRoot: root,
+        ledger: try RunLedgerStore.inMemory(),
+        turtleParser: AcceptingTurtleParser(),
+        acceptedGraphPoster: poster
+    )
+    let decisionTask = Task {
+        try await store.decide(claimId: "cand-seed-001", decision: .yes)
+    }
+    await poster.waitUntilPostStarts()
+
+    let concurrentCandidate = MemoryCandidate(
+        id: "cand-concurrent-stage-001",
+        runId: "run-concurrent-stage",
+        sourceRunIds: ["run-concurrent-stage"],
+        evidenceText: "A candidate arrived while Fuseki was awaiting.",
+        proposedClaim: "A concurrent staged candidate must remain in the queue.",
+        proposedGraph: nil,
+        status: .candidate,
+        validationResult: nil,
+        sourceRef: "concurrency-test",
+        domainA: "systems",
+        domainB: "reliability",
+        connectionType: "test_observation"
+    )
+    do {
+        try CoordinatedReviewQueueMemoryStager(ontologyRoot: root)
+            .stageMemoryCandidate(concurrentCandidate)
+    } catch {
+        await poster.release()
+        _ = try? await decisionTask.value
+        throw error
+    }
+    await poster.release()
+    let outcome = try await decisionTask.value
+
+    let queueURL = root.appendingPathComponent("candidates/queue.json")
+    let rows = try #require(
+        JSONSerialization.jsonObject(with: Data(contentsOf: queueURL)) as? [[String: Any]]
+    )
+    let decided = try #require(rows.first { $0["id"] as? String == "cand-seed-001" })
+    let staged = try #require(rows.first { $0["id"] as? String == concurrentCandidate.id })
+
+    #expect(outcome.accepted)
+    #expect(decided["status"] as? String == "accepted")
+    #expect(staged["status"] as? String == "pending")
+}
+
+@Test func reviewQueueRecoveryLookupIsExactAndReadOnly() async throws {
+    let root = try makeReviewQueueFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let queueURL = root.appendingPathComponent("candidates/queue.json")
+    var rows = try #require(
+        JSONSerialization.jsonObject(with: Data(contentsOf: queueURL)) as? [[String: Any]]
+    )
+    rows[0]["source_capture_ids"] = ["capture-a", "capture-b"]
+    rows[0]["trusted_source"] = "news-calm"
+    rows[1]["trusted_source"] = "news-calm-legacy"
+    try JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted, .sortedKeys])
+        .write(to: queueURL, options: .atomic)
+    let before = try Data(contentsOf: queueURL)
+    let store = ReviewQueueStore(
+        ontologyRoot: root,
+        ledger: try RunLedgerStore.inMemory(),
+        turtleParser: AcceptingTurtleParser(),
+        acceptedGraphPoster: NoopAcceptedGraphPoster()
+    )
+
+    let captureMatch = try await store.findClaim(
+        sourceCaptureIDs: [" capture-b ", "capture-a"],
+        canonicalProducerID: "news-calm"
+    )
+    let subset = try await store.findClaim(
+        sourceCaptureIDs: ["capture-a"],
+        canonicalProducerID: "news-calm"
+    )
+    let foreignProducer = try await store.findClaim(
+        sourceCaptureIDs: ["capture-a", "capture-b"],
+        canonicalProducerID: "recall"
+    )
+    let legacyMatch = try await store.findLegacyClaim(
+        normalizedPlainText: "  Old accepted\nclaim.  ",
+        canonicalProducerID: "news-calm"
+    )
+    let modernTextExcluded = try await store.findLegacyClaim(
+        normalizedPlainText: "Focus and Sleep rise together in the same week.",
+        canonicalProducerID: "news-calm"
+    )
+
+    #expect(captureMatch == ReviewQueueClaimSnapshot(id: "cand-seed-001", status: .pending))
+    #expect(subset == nil)
+    #expect(foreignProducer == nil)
+    #expect(legacyMatch == ReviewQueueClaimSnapshot(id: "cand-old-001", status: .accepted))
+    #expect(modernTextExcluded == nil)
+    #expect(try Data(contentsOf: queueURL) == before)
+}
+
 @Test func reviewQueueMirrorsDecisionsToCanonicalJSONLedger() async throws {
     let root = try makeReviewQueueFixture()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -423,8 +587,90 @@ import Testing
     #expect(entry["claim_id"] as? String == "cand-seed-001")
     #expect(entry["decision"] as? String == "accepted")
     #expect(entry["frequency"] as? String == "sometimes")
-    #expect(entry["source"] as? String == "harness-app")
+    #expect(entry["source"] as? String == "Harness Review Queue Seed, 2026-07-01")
+    #expect(entry["source_ref"] as? String == "Harness Review Queue Seed, 2026-07-01")
+    #expect(entry["recorded_by"] as? String == "harness-app")
     #expect(entry["app_ledger_id"] as? String == appRecord.id)
+}
+
+@Test func reviewQueueAcceptancePreservesCaptureProvenanceInAuthorityAndLedgers() async throws {
+    let root = try makeReviewQueueFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let queueURL = root.appendingPathComponent("candidates/queue.json")
+    let capturedAt = Date(timeIntervalSince1970: 1_752_260_400)
+    var rows = try #require(
+        JSONSerialization.jsonObject(with: Data(contentsOf: queueURL)) as? [[String: Any]]
+    )
+    rows[0]["source"] = "/Users/adam/private-machine/Capture Receipts/raw-capture.json"
+    rows[0]["source_capture_ids"] = ["capture-news-b", "capture-news-a"]
+    rows[0]["trusted_source"] = "news-calm-legacy-queue"
+    rows[0]["source_captured_at"] = capturedAt.timeIntervalSinceReferenceDate
+    rows[0]["analyzer_version"] = "suite-capture-consolidation-v1"
+    try JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted, .sortedKeys])
+        .write(to: queueURL, options: .atomic)
+    let ledger = try RunLedgerStore.inMemory()
+    let store = ReviewQueueStore(
+        ontologyRoot: root,
+        ledger: ledger,
+        turtleParser: AcceptingTurtleParser(),
+        acceptedGraphPoster: NoopAcceptedGraphPoster()
+    )
+
+    _ = try await store.decide(claimId: "cand-seed-001", decision: .yes)
+
+    let graph = try String(
+        contentsOf: root.appendingPathComponent("accepted/accepted-graph.ttl"),
+        encoding: .utf8
+    )
+    let canonicalData = try Data(contentsOf: root.appendingPathComponent("accepted/decision-ledger.json"))
+    let canonicalEntries = try #require(
+        JSONSerialization.jsonObject(with: canonicalData) as? [[String: Any]]
+    )
+    let canonical = try #require(canonicalEntries.first)
+    let appRecord = try #require(try await ledger.listReviewQueueDecisions().first)
+    let refs = [
+        "harness-receipt://news-calm/capture-news-a",
+        "harness-receipt://news-calm/capture-news-b",
+    ]
+
+    #expect(graph.contains(#"understood:sourceCaptureID "capture-news-a""#))
+    #expect(graph.contains(#"understood:sourceCaptureID "capture-news-b""#))
+    #expect(graph.contains(#"understood:trustedSource "news-calm""#))
+    #expect(graph.contains("understood:sourceCapturedAt"))
+    #expect(graph.contains(#"understood:analyzerVersion "suite-capture-consolidation-v1""#))
+    #expect(graph.contains(#"understood:sourceRef "harness-receipt://news-calm/capture-news-a""#))
+    #expect(!graph.contains("/Users/adam/private-machine"))
+    #expect(canonical["source"] as? String == "news-calm")
+    #expect(canonical["recorded_by"] as? String == "harness-app")
+    #expect(canonical["trusted_source"] as? String == "news-calm")
+    #expect(canonical["source_capture_ids"] as? [String] == ["capture-news-a", "capture-news-b"])
+    #expect(canonical["source_receipt_refs"] as? [String] == refs)
+    #expect(canonical["source_captured_at"] as? String != nil)
+    #expect(canonical["analyzer_version"] as? String == "suite-capture-consolidation-v1")
+    #expect(appRecord.sourceRef == refs.joined(separator: ", "))
+    #expect(!appRecord.sourceRef.contains("/Users/adam/private-machine"))
+}
+
+@Test func reviewQueueExposesClaimStatusesWithoutMutatingAuthority() async throws {
+    let root = try makeReviewQueueFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let graphURL = root.appendingPathComponent("accepted/accepted-graph.ttl")
+    let queueURL = root.appendingPathComponent("candidates/queue.json")
+    let graphBefore = try Data(contentsOf: graphURL)
+    let queueBefore = try Data(contentsOf: queueURL)
+    let store = ReviewQueueStore(
+        ontologyRoot: root,
+        ledger: try RunLedgerStore.inMemory(),
+        turtleParser: AcceptingTurtleParser(),
+        acceptedGraphPoster: NoopAcceptedGraphPoster()
+    )
+
+    let statuses = try await store.loadClaimStatuses()
+
+    #expect(statuses["cand-seed-001"] == .pending)
+    #expect(statuses["cand-old-001"] == .accepted)
+    #expect(try Data(contentsOf: graphURL) == graphBefore)
+    #expect(try Data(contentsOf: queueURL) == queueBefore)
 }
 
 @Test func reviewQueueCanAcceptClaimWithoutStrength() async throws {
@@ -541,6 +787,38 @@ import Testing
     #expect(reloaded.count == 1)
     #expect(reloaded.first?.validationResult == "Blocked: Turtle did not parse.")
     #expect(decisions.isEmpty)
+}
+
+@Test func reviewQueueBlocksUnsafeCandidateIDBeforeTurtleInterpolation() async throws {
+    let root = try makeReviewQueueFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let queueURL = root.appendingPathComponent("candidates/queue.json")
+    let unsafeID = """
+    cand-safe> understood:hidden "injected" .
+    <https://understood.app/ontology/connection/conn-obs-safe
+    """
+    var queue = try #require(
+        JSONSerialization.jsonObject(with: Data(contentsOf: queueURL)) as? [[String: Any]]
+    )
+    queue[0]["id"] = unsafeID
+    try JSONSerialization.data(withJSONObject: queue, options: [.prettyPrinted, .sortedKeys])
+        .write(to: queueURL, options: .atomic)
+    let graphURL = root.appendingPathComponent("accepted/accepted-graph.ttl")
+    let graphBefore = try Data(contentsOf: graphURL)
+    let store = ReviewQueueStore(
+        ontologyRoot: root,
+        ledger: try RunLedgerStore.inMemory(),
+        turtleParser: AcceptingTurtleParser(),
+        acceptedGraphPoster: NoopAcceptedGraphPoster()
+    )
+
+    let outcome = try await store.decide(claimId: unsafeID, decision: .yes)
+    let pending = try await store.loadPendingClaims()
+
+    #expect(!outcome.accepted)
+    #expect(outcome.blockedReason == "Blocked: candidate id contains unsafe characters.")
+    #expect(try Data(contentsOf: graphURL) == graphBefore)
+    #expect(pending.first?.validationResult == outcome.blockedReason)
 }
 
 @Test func reviewQueueSHACLFailureLeavesClaimPending() async throws {
@@ -2084,6 +2362,39 @@ private actor RecordingAcceptedGraphPoster: AcceptedGraphPosting {
 
     func replaceAcceptedGraph(_ turtle: String) async throws {
         replaced.append(turtle)
+    }
+}
+
+private actor BlockingAcceptedGraphPoster: AcceptedGraphPosting {
+    private var started = false
+    private var released = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+    func postAcceptedTriples(_ turtle: String) async throws {
+        started = true
+        let waiters = startWaiters
+        startWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        guard !released else { return }
+        await withCheckedContinuation { continuation in
+            releaseWaiter = continuation
+        }
+    }
+
+    func replaceAcceptedGraph(_ turtle: String) async throws {}
+
+    func waitUntilPostStarts() async {
+        guard !started else { return }
+        await withCheckedContinuation { continuation in
+            startWaiters.append(continuation)
+        }
+    }
+
+    func release() {
+        released = true
+        releaseWaiter?.resume()
+        releaseWaiter = nil
     }
 }
 

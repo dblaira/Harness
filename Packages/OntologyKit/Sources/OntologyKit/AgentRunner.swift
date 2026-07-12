@@ -230,6 +230,10 @@ public struct AgentRunner: Sendable {
         images: [ModelImageAttachment] = [],
         apiKey: String? = nil
     ) async throws -> String {
+        if let answer = InteractiveChatPolicy.productHelpAnswer(for: user) {
+            return answer
+        }
+
         let history = ConversationTurn.cappedHistory(conversationHistory)
         let transcriptPrompt = Self.transcriptPrompt(system: system, history: history, user: user)
         switch backend {
@@ -262,24 +266,26 @@ public struct AgentRunner: Sendable {
                     system: system
                 )
             }
-            if GrokSessionClient.loadSessionToken() != nil {
+            if let sessionToken = GrokSessionClient.loadSessionToken() {
                 return try await GrokSessionClient().send(
                     messages: Self.grokMessages(history: history, user: user, images: images),
-                    system: system
+                    system: system,
+                    sessionToken: sessionToken
                 )
+            }
+            let sessionStatus = GrokSessionClient.sessionStatus()
+            if sessionStatus == .expired {
+                // The coding-agent CLI can refresh its own token, but it also
+                // injects an agent toolset and may spend its one turn planning
+                // instead of answering. Interactive chat must fail explicitly
+                // here rather than silently changing execution surfaces.
+                throw GrokSessionClient.GrokSessionError.expiredSessionToken
             }
             #if os(macOS)
             guard let bin = grokPath else { throw RunError.notFound("grok CLI") }
             return try shell(
                 bin,
-                [
-                    "-p", transcriptPrompt,
-                    "--output-format", "json",
-                    "--max-turns", "1",
-                    "--disable-web-search",
-                    "--no-subagents",
-                    "--disallowed-tools", "run_terminal_cmd,grep,web_search,web_fetch,Agent,list_dir,read_file,search_replace,write",
-                ],
+                Self.grokSingleTurnCLIArguments(prompt: transcriptPrompt),
                 timeout: 300
             )
             #else
@@ -293,6 +299,97 @@ public struct AgentRunner: Sendable {
             )
         case .hermes:
             return try await runHermesLocal(system: system, history: history, user: user)
+        }
+    }
+
+    /// Single-shot execution that preserves provider usage metadata. The
+    /// legacy `run` API remains for callers that only need text; interactive
+    /// chat uses this response-shaped path so token counts reach the ledger.
+    /// Direct clients use their tool-capable wire format with an empty tool
+    /// catalog, which grants no actions while retaining usage parsing.
+    public func runResponse(
+        backend: Backend,
+        system: String,
+        user: String,
+        conversationHistory: [ConversationTurn] = [],
+        images: [ModelImageAttachment] = [],
+        apiKey: String? = nil
+    ) async throws -> BackendResponse {
+        if let answer = InteractiveChatPolicy.productHelpAnswer(for: user) {
+            return BackendResponse(text: answer, tokenCount: 0, cost: 0)
+        }
+
+        let history = ConversationTurn.cappedHistory(conversationHistory)
+        let transcriptPrompt = Self.transcriptPrompt(system: system, history: history, user: user)
+        switch backend {
+        case .codex:
+            if let sessionToken = CodexSessionClient.loadSessionToken() {
+                return try await CodexSessionClient().send(
+                    messages: Self.codexMessages(history: history, user: user, images: images),
+                    system: system,
+                    tools: [],
+                    toolTranscript: [],
+                    sessionToken: sessionToken
+                )
+            }
+            #if os(macOS)
+            guard let bin = codexPath else { throw RunError.notFound("codex CLI") }
+            let text = try shell(
+                bin,
+                ["exec", "--skip-git-repo-check", "--ignore-user-config", "--ephemeral", transcriptPrompt],
+                timeout: 300,
+                scrubSecretEnvironment: true
+            )
+            return BackendResponse(text: text, tokenCount: nil, cost: nil)
+            #else
+            throw RunError.notFound("codex CLI")
+            #endif
+
+        case .grok:
+            let key = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !key.isEmpty {
+                return try await XAIClient(apiKey: key).send(
+                    messages: Self.xaiMessages(history: history, user: user, images: images),
+                    system: system,
+                    tools: [],
+                    toolTranscript: []
+                )
+            }
+            if let sessionToken = GrokSessionClient.loadSessionToken() {
+                return try await GrokSessionClient().send(
+                    messages: Self.grokMessages(history: history, user: user, images: images),
+                    system: system,
+                    tools: [],
+                    toolTranscript: [],
+                    sessionToken: sessionToken
+                )
+            }
+            if GrokSessionClient.sessionStatus() == .expired {
+                throw GrokSessionClient.GrokSessionError.expiredSessionToken
+            }
+            #if os(macOS)
+            guard let bin = grokPath else { throw RunError.notFound("grok CLI") }
+            let text = try shell(
+                bin,
+                Self.grokSingleTurnCLIArguments(prompt: transcriptPrompt),
+                timeout: 300
+            )
+            return BackendResponse(text: text, tokenCount: nil, cost: nil)
+            #else
+            throw RunError.notFound("xAI API key")
+            #endif
+
+        case .claude:
+            return try await ClaudeClient(apiKey: apiKey).send(
+                messages: Self.claudeMessages(history: history, user: user),
+                system: system,
+                tools: [],
+                toolTranscript: []
+            )
+
+        case .hermes:
+            let text = try await runHermesLocal(system: system, history: history, user: user)
+            return BackendResponse(text: text, tokenCount: nil, cost: nil)
         }
     }
 
@@ -346,6 +443,10 @@ public struct AgentRunner: Sendable {
         tools: [ToolSpec],
         toolTranscript: [ToolLoopTurn]
     ) async throws -> BackendResponse {
+        if let answer = InteractiveChatPolicy.productHelpAnswer(for: user) {
+            return BackendResponse(text: answer, tokenCount: 0, cost: 0)
+        }
+
         let history = ConversationTurn.cappedHistory(conversationHistory)
         // Empty strings fall back to the environment key, matching how the
         // clients' initializers treat nil.
@@ -396,6 +497,27 @@ public struct AgentRunner: Sendable {
         }
         transcript += "User: \(user)\n\nAssistant:"
         return transcript
+    }
+
+    /// Last-resort Grok CLI execution is answer-only. An empty tool allowlist
+    /// disables default tool injection; the explicit denylist protects older
+    /// CLI builds that treat an empty allowlist as unset. In particular,
+    /// `todo_write` and `ask_user_question` previously consumed the sole turn
+    /// and left Harness with only an intention sentence.
+    static func grokSingleTurnCLIArguments(prompt: String) -> [String] {
+        [
+            "-p", prompt,
+            "--output-format", "json",
+            "--max-turns", "1",
+            "--tools", "",
+            "--no-plan",
+            "--no-memory",
+            "--verbatim",
+            "--disable-web-search",
+            "--no-subagents",
+            "--disallowed-tools",
+            "run_terminal_cmd,grep,web_search,web_fetch,Agent,list_dir,read_file,search_replace,write,todo_write,ask_user_question,task,enter_plan_mode,exit_plan_mode",
+        ]
     }
 
     static let hermesStopSequences = ["\nUser:", "\n\nUser:", "\n---\nUser:"]

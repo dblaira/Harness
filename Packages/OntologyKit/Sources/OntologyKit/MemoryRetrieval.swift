@@ -411,6 +411,22 @@ public protocol CandidateMemoryExtracting: Sendable {
     func candidates(prompt: String, response: String, runId: String, redactor: SecretRedacting) -> [MemoryCandidate]
 }
 
+/// Capture consolidation owns its candidate decision explicitly. Disable the
+/// chat-only keyword heuristic there so a raw capture containing words such
+/// as “I prefer” cannot create a second, hidden proposal.
+public struct NoopCandidateMemoryExtractor: CandidateMemoryExtracting {
+    public init() {}
+
+    public func candidates(
+        prompt: String,
+        response: String,
+        runId: String,
+        redactor: SecretRedacting
+    ) -> [MemoryCandidate] {
+        []
+    }
+}
+
 public struct HeuristicCandidateMemoryExtractor: CandidateMemoryExtracting {
     public init() {}
 

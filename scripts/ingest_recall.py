@@ -1,57 +1,37 @@
 #!/usr/bin/env python3
-"""Read Re_Call evidence and append review-queue candidates.
+"""Read Re_Call records and emit neutral ``suite_capture.v1`` files.
 
-Re_Call is a separate Supabase project from Understood/Harness's own
-(https://vzaceoipwimphdvdxcpa.supabase.co, schema `recall`). This script
-follows the same authority-safe contract as ingest_evidence.py:
-
-- Supabase access is read-only (GET + select only, enforced below).
-- Accepted graph files are never edited.
-- New claims are appended only to Ontology/candidates/queue.json.
-
-Credential note: Re_Call's own .env only carries an anon publishable key,
-which cannot read the `recall` schema (PostgREST returns
-`permission denied for schema recall`, confirmed 2026-07-02). This script
-needs one of RECALL_SERVICE_ROLE_KEY or RECALL_JWT set in a local .env
-before it can do anything beyond report that it's blocked.
+Re_Call's database remains read-only here. This transport records each
+reminder and its tags without deciding whether it is a Harness candidate.
 """
 
 from __future__ import annotations
 
+import argparse
 import datetime as dt
 import json
 import os
-import re
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections import Counter, defaultdict
+from collections import defaultdict
 from pathlib import Path
 
+from suite_capture_output import build_suite_capture, utc_timestamp, write_suite_capture
+
+
 RECALL_SUPABASE_URL = "https://vzaceoipwimphdvdxcpa.supabase.co"
-MAX_NEW_CANDIDATES = 10
-DEFAULT_START_DATE = dt.date(2024, 6, 1)
-
-# Freeform Re_Call tags -> life domains. Extend as real tag vocabulary is seen.
-DOMAIN_KEYWORDS = {
-    "exercise": r"(?i)\b(run|workout|gym|training|exercise|stretch|mobility)\b",
-    "nutrition": r"(?i)\b(food|meal|protein|diet|nutrition|supplement|grocery)\b",
-    "health": r"(?i)\b(health|sleep|doctor|injury|recovery|medical)\b",
-    "work": r"(?i)\b(work|project|build|code|meeting|deploy|ship)\b",
-    "ambition": r"(?i)\b(goal|business|founder|strategy|growth)\b",
-    "social": r"(?i)\b(stephanie|family|friend|gym buddy|call|text)\b",
-    "purchase": r"(?i)\b(buy|order|purchase|shop|amazon)\b",
-    "learning": r"(?i)\b(read|learn|book|course|study|research)\b",
-    "belief": r"(?i)\b(pattern|leverage|principle|philosophy)\b",
-    "insight": r"(?i)\b(idea|reflect|insight|realize)\b",
-}
 
 
-def default_ontology_root() -> Path:
+def default_capture_inbox() -> Path:
+    configured = os.environ.get("HARNESS_RECALL_CAPTURE_INBOX")
+    if configured:
+        return Path(configured).expanduser()
     return (
         Path.home()
-        / "Library/Mobile Documents/com~apple~CloudDocs/Documents/Main/Ontology"
+        / "Library/Mobile Documents/iCloud~app~understood~recall/Documents"
+        / "Harness Captures/Pending"
     )
 
 
@@ -81,7 +61,9 @@ def recall_headers() -> dict[str, str]:
             "This script is otherwise ready to run - it needs Adam to hand over one of "
             "those two credentials for https://vzaceoipwimphdvdxcpa.supabase.co."
         )
-    apikey = os.environ.get("RECALL_PUBLISHABLE_KEY", "sb_publishable_S-wJBLUZqp7ad2D_JpT0xQ_yCTHEnpX")
+    apikey = os.environ.get(
+        "RECALL_PUBLISHABLE_KEY", "sb_publishable_S-wJBLUZqp7ad2D_JpT0xQ_yCTHEnpX"
+    )
     return {
         "apikey": apikey,
         "Authorization": f"Bearer {key}",
@@ -97,7 +79,11 @@ def rest_get(path: str, query: dict[str, str], offset: int, limit: int) -> list[
     url = f"{RECALL_SUPABASE_URL}/rest/v1/{path}?{query_string}"
     request = urllib.request.Request(
         url,
-        headers={**recall_headers(), "Range-Unit": "items", "Range": f"{offset}-{offset + limit - 1}"},
+        headers={
+            **recall_headers(),
+            "Range-Unit": "items",
+            "Range": f"{offset}-{offset + limit - 1}",
+        },
     )
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
@@ -114,7 +100,10 @@ def fetch_reminders() -> list[dict]:
     while True:
         page = rest_get(
             "reminders",
-            {"select": "id,kind,status,list_name,due_date,created_at", "order": "created_at.asc"},
+            {
+                "select": "id,kind,status,list_name,due_date,created_at",
+                "order": "created_at.asc",
+            },
             offset=offset,
             limit=page_size,
         )
@@ -129,114 +118,81 @@ def fetch_tags() -> dict[str, list[str]]:
     rows: list[dict] = []
     offset = 0
     while True:
-        page = rest_get("reminder_tags", {"select": "reminder_id,tag"}, offset=offset, limit=1000)
+        page = rest_get(
+            "reminder_tags",
+            {"select": "reminder_id,tag"},
+            offset=offset,
+            limit=1000,
+        )
         rows.extend(page)
         if len(page) < 1000:
             break
         offset += 1000
     by_reminder: dict[str, list[str]] = defaultdict(list)
     for row in rows:
-        by_reminder[row["reminder_id"]].append(row["tag"])
-    return by_reminder
+        reminder_id = row.get("reminder_id")
+        tag = row.get("tag")
+        if isinstance(reminder_id, str) and isinstance(tag, str):
+            by_reminder[reminder_id].append(tag)
+    return dict(by_reminder)
 
 
-def domain_for_tag(tag: str) -> str | None:
-    for domain, pattern in DOMAIN_KEYWORDS.items():
-        if re.search(pattern, tag):
-            return domain
-    return None
+def build_reminder_capture(
+    reminder: dict,
+    tags: list[str],
+    *,
+    now: dt.datetime | None = None,
+) -> dict:
+    source_record_id = str(reminder.get("id") or "").strip()
+    if not source_record_id:
+        raise ValueError("Re_Call reminder is missing its durable id")
+    return build_suite_capture(
+        source_slug="recall-reminder",
+        source_app="Re_Call",
+        source_record_id=source_record_id,
+        captured_at=utc_timestamp(reminder.get("created_at"), now=now),
+        capture_kind="reminder.snapshot",
+        payload={"reminder": reminder, "tags": tags},
+    )
 
 
-def load_queue(queue_path: Path) -> list[dict]:
-    if not queue_path.exists():
-        return []
-    return json.loads(queue_path.read_text())
-
-
-def save_json(path: Path, value) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
-
-
-def build_kind_practice_card(kind_counts: Counter, run_date: str) -> dict | None:
-    total = sum(kind_counts.values())
-    if total < 10:
-        return None
-    action_share = kind_counts.get("action", 0) / total
-    if action_share < 0.15:
-        return None
-    return {
-        "id": f"cand-recall-{run_date}-ambition-work-action-tracking",
-        "status": "pending",
-        "plain": (
-            f"Adam tracks not just reminders but outcomes: {round(action_share * 100)}% of his "
-            "Re_Call entries are logged as actions (with effort/energy/outcome), not plain reminders."
-        ),
-        "evidence": (
-            f"{kind_counts.get('action', 0)} of {total} Re_Call entries are kind='action' "
-            f"(vs. {kind_counts.get('reminder', 0)} plain reminders, {kind_counts.get('event', 0)} events). "
-            "Unreviewed extraction from Re_Call Supabase."
-        ),
-        "source": f"recall-ingest {run_date}",
-        "domain_a": "ambition",
-        "domain_b": "work",
-        "strength": round(min(action_share * 2, 0.85), 2),
-        "connection_type": "observed_practice",
-    }
-
-
-def run(ontology_root: Path, dry_run: bool = False) -> dict:
-    run_date = dt.date.today().isoformat()
-    candidates_dir = ontology_root / "candidates"
-    queue_path = candidates_dir / "queue.json"
-    ingest_log_path = candidates_dir / "ingest-log.json"
-
+def run(
+    capture_inbox: Path,
+    dry_run: bool = False,
+    *,
+    now: dt.datetime | None = None,
+) -> dict:
     reminders = fetch_reminders()
     tags_by_reminder = fetch_tags()
-
-    kind_counts = Counter(r.get("kind", "reminder") for r in reminders)
-    domain_hits = Counter()
+    deliveries = []
     for reminder in reminders:
-        for tag in tags_by_reminder.get(reminder["id"], []):
-            domain = domain_for_tag(tag)
-            if domain:
-                domain_hits[domain] += 1
-
-    queue = load_queue(queue_path)
-    existing_ids = {c["id"] for c in queue}
-    new_cards = []
-
-    card = build_kind_practice_card(kind_counts, run_date)
-    if card and card["id"] not in existing_ids:
-        new_cards.append(card)
-
-    new_cards = new_cards[:MAX_NEW_CANDIDATES]
-
-    result = {
-        "run_date": run_date,
+        reminder_id = str(reminder.get("id") or "")
+        capture = build_reminder_capture(
+            reminder,
+            tags_by_reminder.get(reminder_id, []),
+            now=now,
+        )
+        deliveries.append(
+            write_suite_capture(capture, capture_inbox, dry_run=dry_run)
+        )
+    return {
         "reminders_fetched": len(reminders),
-        "kind_counts": dict(kind_counts),
-        "tag_domain_hits": dict(domain_hits),
-        "candidates_created": len(new_cards),
+        "captures_emitted": len(deliveries),
+        "capture_ids": [delivery["capture_id"] for delivery in deliveries],
+        "capture_inbox": str(capture_inbox),
         "dry_run": dry_run,
     }
 
-    if not dry_run and new_cards:
-        queue.extend(new_cards)
-        save_json(queue_path, queue)
-        log = json.loads(ingest_log_path.read_text()) if ingest_log_path.exists() else []
-        log.append({
-            "run_date": run_date,
-            "source": "recall-ingest",
-            "cards_queued": len(new_cards),
-            "card_ids": [c["id"] for c in new_cards],
-        })
-        save_json(ingest_log_path, log)
 
-    return result
+def main() -> int:
+    load_local_env()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--capture-inbox", type=Path, default=default_capture_inbox())
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+    print(json.dumps(run(args.capture_inbox, dry_run=args.dry_run), indent=2, sort_keys=True))
+    return 0
 
 
 if __name__ == "__main__":
-    load_local_env()
-    dry = "--dry-run" in sys.argv
-    print(json.dumps(run(default_ontology_root(), dry_run=dry), indent=2))
+    sys.exit(main())

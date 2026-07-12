@@ -25,3 +25,5 @@ queue.json
 *.env
 secrets.plist
 .venv/
+__pycache__/
+*.py[cod]

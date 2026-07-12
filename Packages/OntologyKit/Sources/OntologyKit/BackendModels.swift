@@ -324,6 +324,15 @@ public struct MemoryCandidate: Identifiable, Codable, Sendable, Equatable {
     public let sourceRef: String
     public let strength: Double?
     public let frequency: String?
+    /// Durable capture provenance. These remain optional so older queue and
+    /// ledger rows continue to decode unchanged.
+    public let sourceCaptureIDs: [String]?
+    public let trustedSource: String?
+    public let sourceCapturedAt: Date?
+    public let analyzerVersion: String?
+    public let domainA: String?
+    public let domainB: String?
+    public let connectionType: String?
 
     public init(
         id: String = UUID().uuidString,
@@ -339,7 +348,14 @@ public struct MemoryCandidate: Identifiable, Codable, Sendable, Equatable {
         evidenceNote: String? = nil,
         sourceRef: String? = nil,
         strength: Double? = nil,
-        frequency: String? = nil
+        frequency: String? = nil,
+        sourceCaptureIDs: [String]? = nil,
+        trustedSource: String? = nil,
+        sourceCapturedAt: Date? = nil,
+        analyzerVersion: String? = nil,
+        domainA: String? = nil,
+        domainB: String? = nil,
+        connectionType: String? = nil
     ) {
         self.id = id
         self.runId = runId
@@ -355,6 +371,13 @@ public struct MemoryCandidate: Identifiable, Codable, Sendable, Equatable {
         self.sourceRef = sourceRef ?? runId
         self.strength = strength
         self.frequency = frequency
+        self.sourceCaptureIDs = sourceCaptureIDs
+        self.trustedSource = trustedSource
+        self.sourceCapturedAt = sourceCapturedAt
+        self.analyzerVersion = analyzerVersion
+        self.domainA = domainA
+        self.domainB = domainB
+        self.connectionType = connectionType
     }
 }
 
