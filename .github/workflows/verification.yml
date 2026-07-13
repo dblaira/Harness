@@ -28,7 +28,7 @@ jobs:
          github.event.pull_request.number == 19 &&
          github.event.pull_request.base.sha == '0ce97219a340d9a53f5afb2a773bb2c9eb81b807' &&
          github.repository == 'dblaira/Harness')))
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - name: Check out protected-base adversarial tests
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -42,6 +42,8 @@ jobs:
           path: proposed
           fetch-depth: 0
           persist-credentials: false
+      - name: Install protected media-test dependency
+        run: brew install ffmpeg
       - name: Run protected adversarial tests against proposed validators
         run: >-
           python3 trusted-base/scripts/run_gate_script_tests.py

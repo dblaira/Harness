@@ -1582,6 +1582,14 @@ class GateStructureTests(unittest.TestCase):
             self.assertIn("github.event.pull_request.number == 19", workflow)
             self.assertIn("0ce97219a340d9a53f5afb2a773bb2c9eb81b807", workflow)
 
+    def test_protected_gate_script_tests_run_on_the_mac_they_govern(self) -> None:
+        workflow = (Path.cwd() / ".github/workflows/verification.yml").read_text(encoding="utf-8")
+        gate_job = workflow.split("  gate-script-tests:", 1)[1].split(
+            "  validate-gate-script-evidence:", 1
+        )[0]
+        self.assertIn("runs-on: macos-latest", gate_job)
+        self.assertIn("brew install ffmpeg", gate_job)
+
     def test_merge_waits_for_exact_release_tree_artifact(self) -> None:
         merger = (Path.cwd() / "script/merge_verified_pr.sh").read_text(encoding="utf-8")
         merge = merger.index('gh pr merge')
