@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="${HARNESS_SUITE_REGRESSION_HOME:-$HOME/.local/share/harness-suite-regression}"
+exec python3 "$ROOT/scripts/suite_regression.py" \
+  --manifest "$ROOT/Regression/suite-regression.json" "$@"

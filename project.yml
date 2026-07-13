@@ -40,6 +40,8 @@ targets:
         NSSpeechRecognitionUsageDescription: "Harness uses on-device speech recognition to turn what you say into text in the delegation composer."
     settings:
       base:
+        PRODUCT_NAME: "$(TARGET_NAME)"
+        SUPPORTED_PLATFORMS: "macosx iphoneos iphonesimulator"
         PRODUCT_BUNDLE_IDENTIFIER: com.adamblair.Harness
         CODE_SIGN_ENTITLEMENTS: Sources/Harness/Harness.entitlements
         GENERATE_INFOPLIST_FILE: YES
@@ -72,6 +74,9 @@ targets:
       - package: OntologyKit
     settings:
       base:
+        PRODUCT_NAME: "$(TARGET_NAME)"
+        SUPPORTED_PLATFORMS: "macosx iphoneos iphonesimulator"
+        SWIFT_VERSION: "5.9"
         GENERATE_INFOPLIST_FILE: YES
         CODE_SIGNING_ALLOWED: NO
         "TEST_HOST[sdk=macosx*]": "$(BUILT_PRODUCTS_DIR)/Harness.app/Contents/MacOS/Harness"
