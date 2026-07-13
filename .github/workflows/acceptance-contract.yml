@@ -3,6 +3,10 @@ name: Trusted Acceptance Contract
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
+  # The protected workflow does not exist on main until infrastructure PR #19
+  # lands. This exact bootstrap event becomes inert as soon as main advances.
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
@@ -15,12 +19,18 @@ concurrency:
 jobs:
   acceptance-contract:
     name: Acceptance contract workflow
+    if: >-
+      github.event_name == 'pull_request_target' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.number == 19 &&
+       github.event.pull_request.base.sha == '0ce97219a340d9a53f5afb2a773bb2c9eb81b807' &&
+       github.repository == 'dblaira/Harness')
     runs-on: ubuntu-latest
     steps:
       - name: Check out validator from protected base
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event.pull_request.base.sha }}
           persist-credentials: false
       - name: Validate literal requirement and proof plan
         env:

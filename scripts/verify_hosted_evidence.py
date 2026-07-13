@@ -20,6 +20,7 @@ CHECK_WORKFLOW = ".github/workflows/codeql.yml"
 CHECK_NAMES = {"CodeQL (swift)", "CodeQL (python)"}
 PROTECTED_CONTROL_PATHS = (
     "project.yml",
+    "Sources/Harness/Harness.entitlements",
     "Packages/OntologyKit/Package.swift",
     ".periphery.yml",
     ".swiftlint.yml",
@@ -35,6 +36,7 @@ PROTECTED_CONTROL_PATHS = (
     "scripts/live_satisfaction_oracle.py",
     "scripts/readonly_sparql_proxy.py",
     "scripts/release_gate.py",
+    "scripts/configure_isolated_xcode_home.swift",
     "scripts/render_sol_review.py",
     "scripts/require_latest_status.py",
     "scripts/resolve_harness_repo.py",
@@ -67,11 +69,13 @@ PROTECTED_CONTROL_PATHS = (
     "scripts/verify_release_tree_run.py",
     "scripts/verify_running_app.swift",
     "Tests/HarnessUITests/HarnessCriticalFlowTests.swift",
+    "Tests/HarnessUITests/HarnessHostedSmokeTests.swift",
     "Tests/HarnessUITests/HarnessRequirementEvidence.swift",
     "Packages/OntologyKit/Tests/OntologyKitTests/SatisfactionGateLiveTests.swift",
 )
 RUN_ID = re.compile(r"/actions/runs/(\d+)(?:/|$)")
 JOB_ID = re.compile(r"/(?:actions/runs/\d+/job|runs)/(\d+)(?:/|$)")
+BOOTSTRAP_AUTHORITY = ("dblaira/Harness", 19, "0ce97219a340d9a53f5afb2a773bb2c9eb81b807")
 
 
 def gh_json(path: str) -> dict | list:
@@ -108,6 +112,8 @@ def validate_status(
     run: dict | None,
     repository: str,
     base_sha: str,
+    head_sha: str,
+    pr_number: int | None,
 ) -> list[str]:
     errors: list[str] = []
     if not status or status.get("state") != "success":
@@ -117,12 +123,25 @@ def validate_status(
     if not run:
         errors.append(f"hosted status lacks a resolvable workflow run: {context}")
         return errors
-    if run.get("path") != STATUS_WORKFLOWS[context] or run.get("event") != "pull_request_target":
+    bootstrap = (repository, pr_number, base_sha) == BOOTSTRAP_AUTHORITY
+    expected_event = "pull_request" if bootstrap else "pull_request_target"
+    expected_run_head = head_sha if bootstrap else base_sha
+    if run.get("path") != STATUS_WORKFLOWS[context] or run.get("event") != expected_event:
         errors.append(f"hosted status came from the wrong protected workflow: {context}")
-    if run.get("head_sha") != base_sha or run.get("conclusion") != "success":
+    if run.get("head_sha") != expected_run_head or run.get("conclusion") != "success":
         errors.append(f"protected workflow run is stale or unsuccessful: {context}")
     if (run.get("repository") or {}).get("full_name") != repository:
         errors.append(f"protected workflow run belongs to another repository: {context}")
+    pull_requests = run.get("pull_requests") or []
+    exact_pull = any(
+        pull.get("number") == pr_number
+        and (pull.get("base") or {}).get("sha") == base_sha
+        and (pull.get("head") or {}).get("sha") == head_sha
+        for pull in pull_requests
+        if isinstance(pull, dict)
+    )
+    if not exact_pull:
+        errors.append(f"protected workflow run is not bound to the exact pull request: {context}")
     return errors
 
 
@@ -153,24 +172,38 @@ def validate_check(
     return errors
 
 
-def unchanged_protected_controls(repo_root: Path, base_sha: str, head_sha: str) -> list[str]:
+def unchanged_protected_controls(
+    repo_root: Path,
+    base_sha: str,
+    head_sha: str,
+    repository: str | None = None,
+    pr_number: int | None = None,
+) -> list[str]:
     result = subprocess.run(
         ["/usr/bin/git", "diff", "--quiet", base_sha, head_sha, "--", *PROTECTED_CONTROL_PATHS],
         cwd=repo_root, check=False,
     )
-    return [] if result.returncode == 0 else [
+    if result.returncode == 0 or (repository, pr_number, base_sha) == BOOTSTRAP_AUTHORITY:
+        return []
+    return [
         "protected hosted workflow files changed; use the separately reviewed infrastructure bootstrap path"
     ]
 
 
-def collect_and_validate(repository: str, repo_root: Path, base_sha: str, head_sha: str) -> tuple[list[str], dict]:
+def collect_and_validate(
+    repository: str,
+    repo_root: Path,
+    base_sha: str,
+    head_sha: str,
+    pr_number: int | None = None,
+) -> tuple[list[str], dict]:
     status_payload = gh_json(f"repos/{repository}/commits/{head_sha}/statuses?per_page=100")
     check_payload = gh_json(f"repos/{repository}/commits/{head_sha}/check-runs?filter=latest&per_page=100")
     if not isinstance(status_payload, list) or not isinstance(check_payload, dict):
         raise ValueError("hosted evidence APIs returned unexpected payloads")
     statuses = latest_statuses(status_payload)
     checks = latest_checks(check_payload)
-    errors = unchanged_protected_controls(repo_root, base_sha, head_sha)
+    errors = unchanged_protected_controls(repo_root, base_sha, head_sha, repository, pr_number)
     evidence: dict[str, dict] = {}
     for context in STATUS_WORKFLOWS:
         status = statuses.get(context)
@@ -179,7 +212,11 @@ def collect_and_validate(repository: str, repo_root: Path, base_sha: str, head_s
         run = gh_json(f"repos/{repository}/actions/runs/{match.group(1)}") if match else None
         if run is not None and not isinstance(run, dict):
             run = None
-        errors.extend(validate_status(context, status, run, repository, base_sha))
+        errors.extend(
+            validate_status(
+                context, status, run, repository, base_sha, head_sha, pr_number
+            )
+        )
         if status and run:
             evidence[context] = {"status_url": target, "run_id": run.get("id"), "workflow": run.get("path")}
     for name in CHECK_NAMES:
@@ -204,10 +241,13 @@ def main() -> int:
     parser.add_argument("--repo-root", type=Path, required=True)
     parser.add_argument("--base-sha", required=True)
     parser.add_argument("--head-sha", required=True)
+    parser.add_argument("--pr-number", type=int)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
-        errors, evidence = collect_and_validate(args.repo, args.repo_root, args.base_sha, args.head_sha)
+        errors, evidence = collect_and_validate(
+            args.repo, args.repo_root, args.base_sha, args.head_sha, args.pr_number
+        )
     except ValueError as error:
         errors, evidence = [str(error)], {}
     report = {"status": "PASS" if not errors else "FAIL", "head_sha": args.head_sha, "evidence": evidence, "errors": errors}

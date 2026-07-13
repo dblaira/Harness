@@ -36,10 +36,17 @@ done
 SHA="$(git rev-parse HEAD)"
 OUTPUT_DIR="$HOME/.local/share/harness-release-evidence/Harness/$SHA"
 CANDIDATE_OUTPUT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/harness-candidate-evidence.${SHA}.XXXXXX")"
+CANDIDATE_OUTPUT_DIR="$(cd "$CANDIDATE_OUTPUT_DIR" && pwd -P)"
 PROPOSAL_PARENT="$(mktemp -d "${TMPDIR:-/tmp}/harness-proposal.${SHA}.XXXXXX")"
+PROPOSAL_PARENT="$(cd "$PROPOSAL_PARENT" && pwd -P)"
 PROPOSAL_REPO="$PROPOSAL_PARENT/repo"
 PROPOSAL_HOME="$PROPOSAL_PARENT/home"
 PROPOSAL_TMP="$PROPOSAL_PARENT/tmp"
+BUILD_PROJECT_ROOT="$PROPOSAL_PARENT/generated-project"
+BUILD_DEPENDENCIES="$PROPOSAL_PARENT/SourcePackages"
+BUILD_PACKAGE_ROOT="$PROPOSAL_PARENT/OntologyKit"
+BUILD_PROBE_ROOT="$PROPOSAL_PARENT/build-sandbox-probe"
+EMPTY_ACCEPTED_ROOT="$PROPOSAL_PARENT/empty-accepted"
 ISOLATED_ONTOLOGY_ROOT="$PROPOSAL_PARENT/ontology"
 LIVE_ONTOLOGY_ROOT="$HOME/Library/Mobile Documents/com~apple~CloudDocs/Documents/Main/Ontology"
 PROCESS_REPORTS_DIR="$CANDIDATE_OUTPUT_DIR/process-reports"
@@ -51,8 +58,11 @@ RECORDED_WRAPPER_PID=""
 FINAL_WRAPPER_PID=""
 OPERATOR_HOME="$HOME"
 rm -rf "$UI_STAGING_ROOT"
-mkdir -p "$PROPOSAL_HOME" "$PROPOSAL_TMP" "$ISOLATED_ONTOLOGY_ROOT" "$PROCESS_REPORTS_DIR" "$UI_STAGING_ROOT/tmp"
+mkdir -p "$PROPOSAL_HOME" "$PROPOSAL_TMP" "$BUILD_PROJECT_ROOT" "$BUILD_DEPENDENCIES" \
+  "$BUILD_PROBE_ROOT" "$EMPTY_ACCEPTED_ROOT" "$ISOLATED_ONTOLOGY_ROOT" \
+  "$PROCESS_REPORTS_DIR" "$UI_STAGING_ROOT/tmp"
 git worktree add --detach "$PROPOSAL_REPO" "$SHA" >/dev/null
+/bin/cp -R "$PROPOSAL_REPO/Packages/OntologyKit" "$BUILD_PACKAGE_ROOT"
 for authority_directory in accepted candidates; do
   if [[ -d "$LIVE_ONTOLOGY_ROOT/$authority_directory" ]]; then
     /bin/cp -R "$LIVE_ONTOLOGY_ROOT/$authority_directory" "$ISOLATED_ONTOLOGY_ROOT/"
@@ -80,10 +90,10 @@ set_artifact_paths() {
 }
 
 set_artifact_paths "$CANDIDATE_OUTPUT_DIR"
-CANDIDATE_DERIVED_DATA="$UI_STAGING_ROOT/DerivedData"
+CANDIDATE_DERIVED_DATA="$PROPOSAL_PARENT/CandidateDerivedData"
 BUILT_APP_BUNDLE="$CANDIDATE_DERIVED_DATA/Build/Products/Debug/Harness.app"
 APP_BUNDLE="$OUTPUT_DIR/Harness.app"
-UNIT_DERIVED_DATA="$PROPOSAL_REPO/.build/HarnessUnitDerivedData"
+UNIT_DERIVED_DATA="$PROPOSAL_PARENT/HarnessUnitDerivedData"
 PROPOSAL_LIVE_SWIFT_DIR="$PROPOSAL_TMP/live-satisfaction-swift"
 GRAPH_SNAPSHOT="$OUTPUT_DIR/accepted-graph-before.json"
 GRAPH_SNAPSHOT_AFTER="$OUTPUT_DIR/accepted-graph-after.json"
@@ -124,7 +134,10 @@ done
 READONLY_PROXY_PORT="$(jq -r .port "$READONLY_PROXY_READY")"
 [[ "$READONLY_PROXY_PORT" =~ ^[0-9]+$ ]] || { echo "The protected query proxy returned an invalid port." >&2; exit 1; }
 
-PROPOSAL_SANDBOX="(version 1)(allow default)(deny network-outbound)(allow network-outbound (remote ip \"localhost:$READONLY_PROXY_PORT\"))(allow network-outbound (remote ip \"localhost:11434\"))(deny appleevent-send)(deny mach-lookup (global-name \"com.apple.pboard\"))(deny file-read* (subpath \"$HOME\") (subpath \"$LIVE_ONTOLOGY_ROOT\"))(allow file-read* (subpath \"$APP_BUNDLE\"))(deny file-write* (subpath \"$CONTROL_DIR\") (subpath \"$ROOT_DIR\") (subpath \"$OUTPUT_DIR\") (subpath \"$CANDIDATE_OUTPUT_DIR\") (subpath \"$PROCESS_REPORTS_DIR\") (subpath \"$UI_STAGING_ROOT\") (subpath \"$HOME/.local/bin\") (subpath \"$LIVE_ONTOLOGY_ROOT\") (literal \"$HOME/.codex/hooks.json\"))(deny process-exec (literal \"/usr/bin/security\") (literal \"/usr/bin/ssh\") (literal \"/usr/bin/osascript\") (literal \"/usr/bin/open\") (literal \"/usr/bin/automator\") (literal \"/usr/bin/shortcuts\") (literal \"/usr/sbin/screencapture\") (literal \"/usr/bin/pbcopy\") (literal \"/usr/bin/pbpaste\") (literal \"/opt/homebrew/bin/gh\") (literal \"/usr/local/bin/gh\"))"
+PROPOSAL_SANDBOX="(version 1)(allow default)(deny network-outbound)(allow network-outbound (remote ip \"localhost:$READONLY_PROXY_PORT\"))(allow network-outbound (remote ip \"localhost:11434\"))(deny appleevent-send)(deny mach-lookup (global-name \"com.apple.pboard\"))(deny process-fork)(deny signal)(allow signal (target self))(allow signal (target children))(allow signal (target same-sandbox))(deny file-read* (subpath \"$HOME\") (subpath \"$LIVE_ONTOLOGY_ROOT\"))(allow file-read* (subpath \"$APP_BUNDLE\"))(deny file-write* (subpath \"$CONTROL_DIR\") (subpath \"$ROOT_DIR\") (subpath \"$OUTPUT_DIR\") (subpath \"$CANDIDATE_OUTPUT_DIR\") (subpath \"$PROCESS_REPORTS_DIR\") (subpath \"$UI_STAGING_ROOT\") (subpath \"$HOME/.local/bin\") (subpath \"$LIVE_ONTOLOGY_ROOT\") (literal \"$HOME/.codex/hooks.json\"))(deny process-exec (literal \"/bin/launchctl\") (literal \"/usr/bin/launchctl\") (literal \"/usr/bin/security\") (literal \"/usr/bin/ssh\") (literal \"/usr/bin/osascript\") (literal \"/usr/bin/open\") (literal \"/usr/bin/automator\") (literal \"/usr/bin/shortcuts\") (literal \"/usr/sbin/screencapture\") (literal \"/usr/bin/pbcopy\") (literal \"/usr/bin/pbpaste\") (literal \"/opt/homebrew/bin/gh\") (literal \"/usr/local/bin/gh\"))"
+BUILD_SANDBOX_BASE="(version 1)(allow default)(deny appleevent-send)(deny mach-lookup (global-name \"com.apple.pboard\"))(deny signal)(allow signal (target self))(allow signal (target children))(allow signal (target same-sandbox))(deny file-read* (subpath \"$OPERATOR_HOME\") (subpath \"$LIVE_ONTOLOGY_ROOT\"))(deny file-write* (subpath \"$OPERATOR_HOME\") (subpath \"$LIVE_ONTOLOGY_ROOT\") (subpath \"$PROPOSAL_REPO\") (subpath \"$CONTROL_DIR\") (subpath \"$ROOT_DIR\") (subpath \"$OUTPUT_DIR\") (subpath \"$CANDIDATE_OUTPUT_DIR\") (subpath \"$PROCESS_REPORTS_DIR\") (subpath \"$UI_STAGING_ROOT\"))(allow file-write* (subpath \"$BUILD_PROJECT_ROOT\"))(deny process-exec (literal \"/bin/launchctl\") (literal \"/usr/bin/launchctl\") (literal \"/usr/bin/security\") (literal \"/usr/bin/ssh\") (literal \"/usr/bin/osascript\") (literal \"/usr/bin/open\") (literal \"/usr/bin/automator\") (literal \"/usr/bin/shortcuts\") (literal \"/usr/sbin/screencapture\") (literal \"/usr/bin/pbcopy\") (literal \"/usr/bin/pbpaste\") (literal \"/opt/homebrew/bin/gh\") (literal \"/usr/local/bin/gh\"))"
+BUILD_SANDBOX="${BUILD_SANDBOX_BASE}(deny network-outbound)"
+DEPENDENCY_SANDBOX="${BUILD_SANDBOX_BASE}(allow network-outbound)"
 
 proposal_exec() {
   local report label
@@ -133,7 +146,8 @@ proposal_exec() {
   (
     cd "$PROPOSAL_REPO"
     python3 "$CONTROL_DIR/scripts/run_with_timeout.py" \
-      --seconds "${PROPOSAL_TIMEOUT:-1200}" --label "$label" --process-report "$report" -- \
+      --seconds "${PROPOSAL_TIMEOUT:-1200}" --label "$label" --process-report "$report" \
+      --launchd-coalition -- \
       /usr/bin/env -i HOME="$PROPOSAL_HOME" TMPDIR="$PROPOSAL_TMP" \
       PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
       USER="${USER:-adamblair}" LOGNAME="${LOGNAME:-adamblair}" LANG="en_US.UTF-8" \
@@ -152,11 +166,9 @@ proposal_exec() {
   )
 }
 
-# Xcode cannot run inside an outer sandbox because SwiftPM invokes its own
-# nested sandbox. These commands are limited to compiler/signing orchestration
-# over protected build inputs. Candidate application and unit-test code is only
-# executed by proposal_exec or proposal_start. Signed UI actions are executed by
-# the immutable installed accessibility driver, never by proposal test code.
+# Protected orchestration, signing, and evidence tools never execute candidate
+# build phases. Candidate project generation, dependency resolution, compiler
+# plugins, and build phases all run through build_exec's outer sandbox.
 trusted_exec() {
   local report label
   label="${TRUSTED_LABEL:-trusted-orchestrator}"
@@ -178,6 +190,24 @@ trusted_exec() {
   )
 }
 
+build_exec() {
+  local report label profile
+  label="${BUILD_LABEL:-confined-build}"
+  profile="${BUILD_PROFILE:-$BUILD_SANDBOX}"
+  report="$(mktemp "$PROCESS_REPORTS_DIR/${label}.XXXXXX.json")"
+  (
+    cd "$PROPOSAL_REPO"
+    python3 "$CONTROL_DIR/scripts/run_with_timeout.py" \
+      --seconds "${BUILD_TIMEOUT:-1200}" --label "$label" --process-report "$report" \
+      --launchd-coalition -- \
+      /usr/bin/env -i HOME="$PROPOSAL_HOME" CFFIXED_USER_HOME="$PROPOSAL_HOME" TMPDIR="$PROPOSAL_TMP" \
+      PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+      USER="${USER:-adamblair}" LOGNAME="${LOGNAME:-adamblair}" LANG="en_US.UTF-8" \
+      HARNESS_REPO_ROOT="$PROPOSAL_REPO" ONTOLOGY_ACCEPTED_DIR="$EMPTY_ACCEPTED_ROOT" \
+      /usr/bin/sandbox-exec -p "$profile" -- "$@"
+  )
+}
+
 proposal_start() {
   local report ready
   report="$(mktemp "$PROCESS_REPORTS_DIR/background.XXXXXX.json")"
@@ -186,7 +216,7 @@ proposal_start() {
     cd "$PROPOSAL_REPO"
     python3 "$CONTROL_DIR/scripts/run_with_timeout.py" \
       --seconds 600 --label background-app --termination-ok \
-      --process-report "$report" --ready-file "$ready" -- \
+      --process-report "$report" --ready-file "$ready" --launchd-coalition -- \
       /usr/bin/env -i HOME="$PROPOSAL_HOME" TMPDIR="$PROPOSAL_TMP" \
       PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
       USER="${USER:-adamblair}" LOGNAME="${LOGNAME:-adamblair}" LANG="en_US.UTF-8" \
@@ -292,6 +322,15 @@ Path(os.environ["LIVE_SWIFT_INVENTORY"]).write_text(
 )
 PY
 
+/bin/cp "$CONTROL_DIR/.github/codex/build-sandbox-probe/project.yml" "$BUILD_PROBE_ROOT/project.yml"
+/bin/cp "$CONTROL_DIR/.github/codex/build-sandbox-probe/BuildSandboxProbe.swift" "$BUILD_PROBE_ROOT/BuildSandboxProbe.swift"
+/bin/ln -s "$PROPOSAL_REPO/scripts" "$BUILD_PROJECT_ROOT/scripts"
+/bin/mkdir -p "$BUILD_PROJECT_ROOT/Generated"
+/bin/cp "$PROPOSAL_REPO/Generated/Info.plist" "$BUILD_PROJECT_ROOT/Generated/Info.plist"
+/usr/bin/env -i HOME="$PROPOSAL_HOME" CFFIXED_USER_HOME="$PROPOSAL_HOME" TMPDIR="$PROPOSAL_TMP" \
+  PATH="/usr/bin:/bin:/usr/sbin:/sbin" USER="${USER:-adamblair}" LOGNAME="${LOGNAME:-adamblair}" \
+  /usr/bin/xcrun swift "$CONTROL_DIR/scripts/configure_isolated_xcode_home.swift"
+
 if PROPOSAL_LABEL=expected-denial proposal_exec /usr/bin/curl -fsS https://api.github.com >/dev/null 2>&1; then
   echo "The proposal sandbox unexpectedly reached the public network." >&2
   exit 1
@@ -314,6 +353,11 @@ if PROPOSAL_LABEL=expected-denial proposal_exec /usr/bin/osascript -e 'return 1'
 fi
 if PROPOSAL_LABEL=expected-denial proposal_exec /usr/bin/pbpaste >/dev/null 2>&1; then
   echo "The proposal sandbox unexpectedly read the operator clipboard." >&2
+  exit 1
+fi
+if PROPOSAL_LABEL=expected-denial proposal_exec /bin/launchctl submit \
+  -l "com.adamblair.harness.runtime-probe.$$" -- /usr/bin/true >/dev/null 2>&1; then
+  echo "The proposal sandbox unexpectedly submitted a detached launchd job." >&2
   exit 1
 fi
 if PROPOSAL_LABEL=expected-denial proposal_exec /usr/bin/curl -fsS \
@@ -340,25 +384,79 @@ if PROPOSAL_LABEL=expected-denial proposal_exec /usr/bin/curl -fsS -X POST \
   exit 1
 fi
 
-HARNESS_EXPECTED_PID=0 HARNESS_EXPECTED_WINDOW_BOUNDS=UNSET HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER=UNSET HARNESS_ATTACH_EXISTING_APP=0 \
-  TRUSTED_LABEL=trusted-project-generation trusted_exec xcodegen generate
-TRUSTED_LABEL=trusted-app-build trusted_exec xcodebuild build \
-  -project Harness.xcodeproj \
+BUILD_LABEL=confined-build-probe-generation build_exec xcodegen generate --no-env \
+  --spec "$BUILD_PROBE_ROOT/project.yml" --project "$BUILD_PROBE_ROOT"
+BUILD_LABEL=confined-build-phase-probe build_exec xcodebuild build \
+  -project "$BUILD_PROBE_ROOT/HarnessBuildSandboxProbe.xcodeproj" \
+  -scheme HarnessBuildSandboxProbe \
+  -configuration Debug \
+  -destination 'platform=macOS' \
+  -derivedDataPath "$BUILD_PROBE_ROOT/DerivedData" \
+  HARNESS_BUILD_REPOSITORY_PROBE="$PROPOSAL_REPO/Sources/Harness/.build-phase-probe" \
+  HARNESS_BUILD_CONTROL_PROBE="$CONTROL_DIR/.build-phase-probe" \
+  HARNESS_BUILD_BIN_PROBE="$OPERATOR_HOME/.local/bin/.build-phase-probe" \
+  HARNESS_BUILD_HOOK_PROBE="$OPERATOR_HOME/.codex/.build-phase-probe" \
+  HARNESS_BUILD_OPERATOR_PROBE="$OPERATOR_HOME/Documents/.build-phase-probe" \
+  HARNESS_BUILD_ONTOLOGY_PROBE="$LIVE_ONTOLOGY_ROOT/.build-phase-probe" \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+
+BUILD_LABEL=confined-project-generation build_exec xcodegen generate --no-env \
+  --spec "$PROPOSAL_REPO/project.yml" --project "$BUILD_PROJECT_ROOT" --project-root "$PROPOSAL_REPO"
+BUILD_PROFILE="$DEPENDENCY_SANDBOX" BUILD_LABEL=confined-dependency-resolution build_exec \
+  /usr/bin/xcrun swift package resolve --disable-sandbox \
+  --package-path "$BUILD_PACKAGE_ROOT" \
+  --scratch-path "$BUILD_DEPENDENCIES"
+BUILD_LABEL=confined-live-swift-test-build build_exec \
+  /usr/bin/xcrun swift build --disable-sandbox --build-tests --only-use-versions-from-resolved-file \
+  --package-path "$BUILD_PACKAGE_ROOT" \
+  --scratch-path "$BUILD_DEPENDENCIES"
+LIVE_SWIFT_TEST_BINARY="$(find "$BUILD_DEPENDENCIES" -type f \
+  -path '*/OntologyKitPackageTests.xctest/Contents/MacOS/OntologyKitPackageTests' -print)"
+[[ -n "$LIVE_SWIFT_TEST_BINARY" && "$LIVE_SWIFT_TEST_BINARY" != *$'\n'* ]] || {
+  echo "The confined build did not produce exactly one OntologyKit Swift Testing bundle." >&2
+  exit 1
+}
+SWIFT_TOOLCHAIN_BIN="$(dirname "$(/usr/bin/xcrun --find swift)")"
+SWIFT_TESTING_HELPER="$SWIFT_TOOLCHAIN_BIN/../libexec/swift/pm/swiftpm-testing-helper"
+SWIFT_TESTING_FRAMEWORKS="$(/usr/bin/xcrun --sdk macosx --show-sdk-platform-path)/Developer/Library/Frameworks"
+[[ -x "$SWIFT_TESTING_HELPER" && -d "$SWIFT_TESTING_FRAMEWORKS" ]] || {
+  echo "The immutable Swift Testing runner is unavailable in the selected Xcode toolchain." >&2
+  exit 1
+}
+BUILD_LABEL=confined-app-build build_exec xcodebuild build \
+  -project "$BUILD_PROJECT_ROOT/Harness.xcodeproj" \
   -scheme Harness \
   -configuration Debug \
   -destination 'platform=macOS' \
-  -derivedDataPath "$CANDIDATE_DERIVED_DATA"
-TRUSTED_LABEL=trusted-unit-build trusted_exec xcodebuild build-for-testing \
-  -project Harness.xcodeproj \
+  -derivedDataPath "$CANDIDATE_DERIVED_DATA" \
+  -clonedSourcePackagesDirPath "$BUILD_DEPENDENCIES" \
+  -disableAutomaticPackageResolution \
+  -onlyUsePackageVersionsFromResolvedFile \
+  'OTHER_SWIFT_FLAGS=$(inherited) -disable-sandbox' \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+BUILD_LABEL=confined-unit-build build_exec xcodebuild build-for-testing \
+  -project "$BUILD_PROJECT_ROOT/Harness.xcodeproj" \
   -scheme HarnessUnitVerification \
   -configuration Debug \
   -destination 'platform=macOS' \
-  -derivedDataPath "$UNIT_DERIVED_DATA"
+  -derivedDataPath "$UNIT_DERIVED_DATA" \
+  -clonedSourcePackagesDirPath "$BUILD_DEPENDENCIES" \
+  -disableAutomaticPackageResolution \
+  -onlyUsePackageVersionsFromResolvedFile \
+  'OTHER_SWIFT_FLAGS=$(inherited) -disable-sandbox' \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
 
 [[ -d "$BUILT_APP_BUNDLE" ]] || { echo "The built Harness.app bundle is missing." >&2; exit 1; }
 /bin/cp -R "$BUILT_APP_BUNDLE" "$APP_BUNDLE"
 SIGNING_IDENTITY="$(/usr/bin/security find-identity -v -p codesigning | awk -F '"' '/Apple Development: Adam Blair/{print $2; exit}')"
 [[ -n "$SIGNING_IDENTITY" ]] || { echo "Adam's trusted Apple Development signing identity is unavailable." >&2; exit 1; }
+SIGNED_ENTITLEMENTS="$PROPOSAL_TMP/Harness.signed.entitlements"
+/bin/cp "$PROPOSAL_REPO/Sources/Harness/Harness.entitlements" "$SIGNED_ENTITLEMENTS"
+/usr/libexec/PlistBuddy -c 'Add :com.apple.application-identifier string 7FKUS5M5QS.com.adamblair.Harness' "$SIGNED_ENTITLEMENTS"
+/usr/libexec/PlistBuddy -c 'Add :com.apple.developer.team-identifier string 7FKUS5M5QS' "$SIGNED_ENTITLEMENTS"
+TRUSTED_LABEL=trusted-app-signing trusted_exec /usr/bin/codesign --force --deep \
+  --sign "$SIGNING_IDENTITY" --entitlements "$SIGNED_ENTITLEMENTS" \
+  --options runtime "$APP_BUNDLE"
 python3 "$CONTROL_DIR/scripts/verify_app_identity.py" \
   --app "$APP_BUNDLE" --output "$APP_IDENTITY"
 TEAM_IDENTIFIER="$(jq -r .team_identifier "$APP_IDENTITY")"
@@ -377,7 +475,7 @@ done
 TRUSTED_LABEL=trusted-unit-signing trusted_exec /usr/bin/codesign --force --deep \
   --sign "$SIGNING_IDENTITY" "$UNIT_TEST_BUNDLE"
 TRUSTED_LABEL=trusted-unit-host-signing trusted_exec /usr/bin/codesign --force --deep \
-  --sign "$SIGNING_IDENTITY" --preserve-metadata=entitlements,requirements,flags,runtime "$UNIT_HOST_APP"
+  --sign "$SIGNING_IDENTITY" --entitlements "$SIGNED_ENTITLEMENTS" --options runtime "$UNIT_HOST_APP"
 
 pkill -x Harness >/dev/null 2>&1 || true
 for _ in {1..20}; do
@@ -560,10 +658,12 @@ PROPOSAL_TIMEOUT=600 \
   HARNESS_REQUIRE_LIVE_SATISFACTION=1 \
   HARNESS_SATISFACTION_COMMIT="$SHA" \
   HARNESS_SATISFACTION_OUTPUT_DIR="$PROPOSAL_LIVE_SWIFT_DIR" \
-  proposal_exec /usr/bin/xcrun swift test \
-      --disable-sandbox \
-      --package-path "$PROPOSAL_REPO/Packages/OntologyKit" \
+  proposal_exec /usr/bin/env DYLD_FRAMEWORK_PATH="$SWIFT_TESTING_FRAMEWORKS" \
+      "$SWIFT_TESTING_HELPER" \
+      --test-bundle-path "$LIVE_SWIFT_TEST_BINARY" \
       --filter "${LIVE_SWIFT_TEST#*.}" \
+      "$LIVE_SWIFT_TEST_BINARY" \
+      --testing-library swift-testing \
   2>&1 | tee "$LIVE_SWIFT_TRANSCRIPT"
 LIVE_SWIFT_STATUS="${PIPESTATUS[0]}"
 set -e
@@ -616,7 +716,7 @@ for path in sorted(directory.glob("*.json")):
         continue
     reports.append(report)
     if report.get("retained_pids") != [] or report.get("timed_out") is not False:
-        errors.append(f"process group was not clean: {path.name}")
+        errors.append(f"process job boundary was not clean: {path.name}")
     if report.get("label") == "expected-denial":
         if report.get("returncode") in (None, 0):
             errors.append(f"adversarial isolation probe unexpectedly passed: {path.name}")

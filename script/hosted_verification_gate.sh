@@ -26,7 +26,8 @@ gh api -X POST "repos/$REPO/statuses/$SHA" \
   -f target_url="https://github.com/$REPO/pull/$PR_NUMBER" >/dev/null
 STATE=failure
 if python3 "$CONTROL_DIR/scripts/verify_hosted_evidence.py" \
-  --repo "$REPO" --repo-root "$ROOT_DIR" --base-sha "$BASE_SHA" --head-sha "$SHA" --output "$REPORT"; then
+  --repo "$REPO" --repo-root "$ROOT_DIR" --base-sha "$BASE_SHA" --head-sha "$SHA" \
+  --pr-number "$PR_NUMBER" --output "$REPORT"; then
   STATE=success
 fi
 COMMENT_URL="$(gh api -X POST "repos/$REPO/issues/$PR_NUMBER/comments" \

@@ -389,8 +389,10 @@ class ReleaseGateTests(unittest.TestCase):
 
     def test_manifest_path_git_failure_blocks_completion(self) -> None:
         original_changes = release_gate.guarded_changes
+        original_dirty = release_gate.working_tree_changes
         original_manifest = release_gate.manifest_path
         release_gate.guarded_changes = lambda _root: ["Sources/Harness/Feature.swift"]
+        release_gate.working_tree_changes = lambda _root: []
         release_gate.manifest_path = lambda _root: (_ for _ in ()).throw(
             release_gate.GitInspectionError("git rev-parse HEAD failed: repository unreadable")
         )
@@ -400,6 +402,7 @@ class ReleaseGateTests(unittest.TestCase):
             self.assertIn("repository unreadable", result["reason"])
         finally:
             release_gate.guarded_changes = original_changes
+            release_gate.working_tree_changes = original_dirty
             release_gate.manifest_path = original_manifest
 
     def test_final_commit_read_failure_blocks_completion(self) -> None:
@@ -437,9 +440,11 @@ class ReleaseGateTests(unittest.TestCase):
 
     def test_hook_explicitly_blocks_operational_validation_exception(self) -> None:
         original_changes = release_gate.guarded_changes
+        original_dirty = release_gate.working_tree_changes
         original_manifest = release_gate.manifest_path
         original_validate = release_gate.validate_manifest
         release_gate.guarded_changes = lambda _root: ["Sources/Harness/Feature.swift"]
+        release_gate.working_tree_changes = lambda _root: []
         release_gate.manifest_path = lambda _root: Path(__file__)
         release_gate.validate_manifest = lambda *_args: (_ for _ in ()).throw(TimeoutError("stalled"))
         try:
@@ -448,8 +453,58 @@ class ReleaseGateTests(unittest.TestCase):
             self.assertIn("could not complete", result["reason"])
         finally:
             release_gate.guarded_changes = original_changes
+            release_gate.working_tree_changes = original_dirty
             release_gate.manifest_path = original_manifest
             release_gate.validate_manifest = original_validate
+
+    def test_stale_release_proof_cannot_override_new_working_tree_changes(self) -> None:
+        originals = (
+            release_gate.guarded_changes,
+            release_gate.working_tree_changes,
+            release_gate.completion_evidence,
+            release_gate.validate_release_tree_completion,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "manifest.json"
+            manifest.write_text("{}\n", encoding="utf-8")
+            (manifest.parent / "release-tree-verification.json").write_text("{}\n", encoding="utf-8")
+            release_gate.guarded_changes = lambda _root: ["Sources/Harness/Feature.swift"]
+            release_gate.working_tree_changes = lambda _root: ["Sources/Harness/Feature.swift"]
+            release_gate.completion_evidence = lambda _root: (manifest, "a" * 40)
+            release_gate.validate_release_tree_completion = lambda *_args, **_kwargs: []
+            try:
+                result = release_gate.hook(Path("."), {"last_assistant_message": "Implemented."})
+            finally:
+                (
+                    release_gate.guarded_changes,
+                    release_gate.working_tree_changes,
+                    release_gate.completion_evidence,
+                    release_gate.validate_release_tree_completion,
+                ) = originals
+        self.assertEqual(result["decision"], "block")
+        self.assertIn("repository state changed after evidence capture", result["reason"])
+
+    def test_clean_completion_claim_requires_final_merged_tree_proof(self) -> None:
+        originals = (
+            release_gate.guarded_changes,
+            release_gate.working_tree_changes,
+            release_gate.completion_evidence,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "manifest.json"
+            release_gate.guarded_changes = lambda _root: []
+            release_gate.working_tree_changes = lambda _root: []
+            release_gate.completion_evidence = lambda _root: (manifest, "b" * 40)
+            try:
+                result = release_gate.hook(Path("."), {"last_assistant_message": "Everything passes."})
+            finally:
+                (
+                    release_gate.guarded_changes,
+                    release_gate.working_tree_changes,
+                    release_gate.completion_evidence,
+                ) = originals
+        self.assertEqual(result["decision"], "block")
+        self.assertIn("final merged-tree proof is absent", result["reason"])
 
     def test_package_manifests_are_product_changes(self) -> None:
         original = release_gate.changed_files
@@ -1116,6 +1171,32 @@ class HostedAuthorityTests(unittest.TestCase):
                 ).strip()
                 self.assertTrue(verify_hosted_evidence.unchanged_protected_controls(root, base, head))
 
+    def test_only_the_named_infrastructure_bootstrap_may_change_protected_controls(self) -> None:
+        original = verify_hosted_evidence.subprocess.run
+        verify_hosted_evidence.subprocess.run = lambda *_args, **_kwargs: subprocess.CompletedProcess([], 1)
+        try:
+            self.assertEqual(
+                verify_hosted_evidence.unchanged_protected_controls(
+                    Path("."),
+                    "0ce97219a340d9a53f5afb2a773bb2c9eb81b807",
+                    "b" * 40,
+                    "dblaira/Harness",
+                    19,
+                ),
+                [],
+            )
+            self.assertTrue(
+                verify_hosted_evidence.unchanged_protected_controls(
+                    Path("."),
+                    "0ce97219a340d9a53f5afb2a773bb2c9eb81b807",
+                    "b" * 40,
+                    "dblaira/Harness",
+                    20,
+                )
+            )
+        finally:
+            verify_hosted_evidence.subprocess.run = original
+
     def test_spoofed_status_workflow_event_is_rejected(self) -> None:
         status = {"state": "success", "creator": {"login": "github-actions[bot]"}}
         run = {
@@ -1126,9 +1207,52 @@ class HostedAuthorityTests(unittest.TestCase):
             "repository": {"full_name": "dblaira/Harness"},
         }
         errors = verify_hosted_evidence.validate_status(
-            "Acceptance contract", status, run, "dblaira/Harness", "b" * 40
+            "Acceptance contract", status, run, "dblaira/Harness", "b" * 40, "c" * 40, 20
         )
         self.assertIn("hosted status came from the wrong protected workflow: Acceptance contract", errors)
+
+    def test_hosted_status_run_must_name_the_exact_pull_request_and_head(self) -> None:
+        base = "b" * 40
+        head = "c" * 40
+        status = {"state": "success", "creator": {"login": "github-actions[bot]"}}
+        run = {
+            "path": ".github/workflows/acceptance-contract.yml",
+            "event": "pull_request_target",
+            "head_sha": base,
+            "conclusion": "success",
+            "repository": {"full_name": "dblaira/Harness"},
+            "pull_requests": [
+                {"number": 21, "base": {"sha": base}, "head": {"sha": head}}
+            ],
+        }
+        errors = verify_hosted_evidence.validate_status(
+            "Acceptance contract", status, run, "dblaira/Harness", base, head, 20
+        )
+        self.assertIn(
+            "protected workflow run is not bound to the exact pull request: Acceptance contract",
+            errors,
+        )
+
+    def test_exact_infrastructure_bootstrap_accepts_pull_request_workflow_run(self) -> None:
+        base = "0ce97219a340d9a53f5afb2a773bb2c9eb81b807"
+        head = "c" * 40
+        status = {"state": "success", "creator": {"login": "github-actions[bot]"}}
+        run = {
+            "path": ".github/workflows/acceptance-contract.yml",
+            "event": "pull_request",
+            "head_sha": head,
+            "conclusion": "success",
+            "repository": {"full_name": "dblaira/Harness"},
+            "pull_requests": [
+                {"number": 19, "base": {"sha": base}, "head": {"sha": head}}
+            ],
+        }
+        self.assertEqual(
+            verify_hosted_evidence.validate_status(
+                "Acceptance contract", status, run, "dblaira/Harness", base, head, 19
+            ),
+            [],
+        )
 
     def test_spoofed_local_merge_status_creator_is_rejected(self) -> None:
         marker = "pr:20 binding:abc"
@@ -1316,12 +1440,28 @@ class GateStructureTests(unittest.TestCase):
         self.assertIn('(subpath \\"$CANDIDATE_OUTPUT_DIR\\")', handoff)
         self.assertIn('(subpath \\"$UI_STAGING_ROOT\\")', handoff)
         self.assertIn("CANDIDATE_OUTPUT_DIR=", handoff)
-        self.assertIn("trusted_exec xcodebuild build-for-testing", handoff)
+        self.assertIn("BUILD_LABEL=confined-unit-build build_exec xcodebuild build-for-testing", handoff)
         self.assertIn('proposal_exec "$XCTEST_BINARY" "$UNIT_TEST_BUNDLE"', handoff)
-        self.assertEqual(handoff.count("trusted_exec xcodegen generate"), 1)
-        self.assertNotIn("proposal_exec xcodegen generate", handoff)
-        self.assertNotIn("proposal_exec xcodebuild", handoff)
-        self.assertEqual(handoff.count('/usr/bin/sandbox-exec -p "$PROPOSAL_SANDBOX"'), 2)
+        self.assertIn("BUILD_LABEL=confined-project-generation build_exec xcodegen generate", handoff)
+        self.assertIn("BUILD_LABEL=confined-app-build build_exec xcodebuild build", handoff)
+        self.assertIn('/usr/bin/sandbox-exec -p "$profile"', handoff)
+        self.assertIn("BUILD_SANDBOX=", handoff)
+        self.assertIn("DEPENDENCY_SANDBOX=", handoff)
+        self.assertIn("confined-build-phase-probe", handoff)
+        self.assertIn("build-sandbox-probe", handoff)
+        self.assertIn("configure_isolated_xcode_home.swift", handoff)
+        self.assertIn('CFFIXED_USER_HOME="$PROPOSAL_HOME"', handoff)
+        self.assertIn("swift package resolve --disable-sandbox", handoff)
+        self.assertIn("swift build --disable-sandbox --build-tests --only-use-versions-from-resolved-file", handoff)
+        self.assertIn('--package-path "$BUILD_PACKAGE_ROOT"', handoff)
+        self.assertIn("-disable-sandbox'", handoff)
+        self.assertIn("(deny process-fork)", handoff)
+        self.assertIn("(deny signal)", handoff)
+        self.assertIn("(allow signal (target children))", handoff)
+        self.assertGreaterEqual(handoff.count("--launchd-coalition"), 3)
+        process_wrapper = (Path.cwd() / "scripts/run_with_timeout.py").read_text(encoding="utf-8")
+        self.assertIn("coalition_info_pid_list", process_wrapper)
+        self.assertIn('"type": "launchd-service-coalition"', process_wrapper)
         self.assertIn("git worktree add --detach", handoff)
         self.assertIn('/usr/bin/env -i HOME="$PROPOSAL_HOME"', handoff)
         self.assertIn('(deny network-outbound)', handoff)
@@ -1344,6 +1484,8 @@ class GateStructureTests(unittest.TestCase):
         self.assertIn("scripts/snapshot_authority_state.py", verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
         self.assertIn("scripts/run_accessibility_contract.swift", verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
         self.assertIn("scripts/validate_xctest_transcript.py", verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
+        self.assertIn("Sources/Harness/Harness.entitlements", verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
+        self.assertIn("Tests/HarnessUITests/HarnessHostedSmokeTests.swift", verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
         self.assertIn(".github/codex", verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
         store = (Path.cwd() / "Packages/OntologyKit/Sources/OntologyKit/ReviewQueueStore.swift").read_text()
         self.assertIn('environment["HARNESS_ONTOLOGY_ROOT"]', store)
@@ -1353,6 +1495,9 @@ class GateStructureTests(unittest.TestCase):
         self.assertIn("satisfactionGateAdamRealQuestionGetsCompleteAnswer", handoff)
         self.assertIn("HARNESS_REQUIRE_LIVE_SATISFACTION=1", handoff)
         self.assertIn("HARNESS_SATISFACTION_OUTPUT_DIR", handoff)
+        self.assertIn("swiftpm-testing-helper", handoff)
+        self.assertIn('--test-bundle-path "$LIVE_SWIFT_TEST_BINARY"', handoff)
+        self.assertNotIn('proposal_exec /usr/bin/xcrun swift test', handoff)
         self.assertIn("validate_swiftpm_tests.py", handoff)
         self.assertIn("LIVE_SWIFT_TRANSCRIPT", handoff)
 
@@ -1414,12 +1559,28 @@ class GateStructureTests(unittest.TestCase):
 
     def test_candidate_cannot_use_operator_signing_authority(self) -> None:
         handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
-        trusted_build = handoff.index("TRUSTED_LABEL=trusted-app-build trusted_exec xcodebuild build")
+        confined_build = handoff.index("BUILD_LABEL=confined-app-build build_exec xcodebuild build")
+        trusted_signing = handoff.index("TRUSTED_LABEL=trusted-app-signing trusted_exec /usr/bin/codesign")
         identity = handoff.index("verify_app_identity.py")
-        self.assertLess(trusted_build, identity)
+        self.assertLess(confined_build, trusted_signing)
+        self.assertLess(trusted_signing, identity)
         self.assertNotIn("trusted-ui-runner-signing", handoff)
         self.assertNotIn("proposal_exec /usr/bin/codesign", handoff)
-        self.assertIn('(deny process-exec (literal \\"/usr/bin/security\\")', handoff)
+        self.assertIn('(literal \\"/usr/bin/security\\")', handoff)
+
+    def test_hosted_ci_executes_and_freshly_revalidates_exact_ui_test(self) -> None:
+        verification = (Path.cwd() / ".github/workflows/verification.yml").read_text(encoding="utf-8")
+        acceptance = (Path.cwd() / ".github/workflows/acceptance-contract.yml").read_text(encoding="utf-8")
+        self.assertIn("HarnessHostedSmokeTests/testDelegationSurfaceAppears", verification)
+        self.assertIn('-only-testing:"$UI_TEST_IDENTIFIER"', verification)
+        self.assertIn("HarnessUITests.xcresult", verification)
+        self.assertGreaterEqual(verification.count("--required-test \"$"), 2)
+        self.assertIn("fresh-hosted-ui-visible-result.png", verification)
+        self.assertIn("cmp \"$RUNNER_TEMP/fresh-hosted-ui-visible-result.png\"", verification)
+        for workflow in (verification, acceptance):
+            self.assertIn("pull_request:", workflow)
+            self.assertIn("github.event.pull_request.number == 19", workflow)
+            self.assertIn("0ce97219a340d9a53f5afb2a773bb2c9eb81b807", workflow)
 
     def test_merge_waits_for_exact_release_tree_artifact(self) -> None:
         merger = (Path.cwd() / "script/merge_verified_pr.sh").read_text(encoding="utf-8")
@@ -1571,6 +1732,111 @@ class ReleaseTreeTests(unittest.TestCase):
                 subprocess.run(["/bin/kill", "-0", child_pid], capture_output=True, check=False).returncode,
                 0,
             )
+
+    @unittest.skipUnless(sys.platform == "darwin", "launchd coalitions are macOS-only")
+    def test_process_job_wrapper_kills_an_identity_cleared_setsid_child(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            child_pid_path = root / "setsid-child.pid"
+            report_path = root / "setsid-report.json"
+            program = (
+                "import subprocess,sys; "
+                "child=subprocess.Popen(['/usr/bin/env','-i',sys.executable,'-c',"
+                "'import time; time.sleep(30)'], "
+                "start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); "
+                "open(sys.argv[1],'w').write(str(child.pid))"
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "run_with_timeout.py"),
+                    "--seconds", "10",
+                    "--process-report", str(report_path),
+                    "--launchd-coalition",
+                    "--",
+                    sys.executable, "-c", program, str(child_pid_path),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["schema_version"], 3)
+            self.assertEqual(report["retained_pids"], [])
+            self.assertEqual(report["status"], "PASS")
+            self.assertEqual(report["job_boundary"]["type"], "launchd-service-coalition")
+            self.assertTrue(report["job_boundary"]["removed"])
+            child_pid = child_pid_path.read_text(encoding="utf-8").strip()
+            self.assertIn(int(child_pid), report["tracked_pids"])
+            self.assertNotEqual(
+                subprocess.run(["/bin/kill", "-0", child_pid], capture_output=True, check=False).returncode,
+                0,
+            )
+
+    @unittest.skipUnless(sys.platform == "darwin", "sandbox-exec is macOS-only")
+    def test_proposal_sandbox_rejects_fork_before_a_child_can_detach(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            child_pid_path = root / "forbidden-child.pid"
+            report_path = root / "fork-denial-report.json"
+            program = (
+                "import subprocess,sys; "
+                "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)'], "
+                "start_new_session=True); open(sys.argv[1],'w').write(str(child.pid))"
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "run_with_timeout.py"),
+                    "--seconds", "10",
+                    "--process-report", str(report_path),
+                    "--",
+                    "/usr/bin/sandbox-exec", "-p",
+                    "(version 1)(allow default)(deny process-fork)",
+                    "--", sys.executable, "-c", program, str(child_pid_path),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(child_pid_path.exists())
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["retained_pids"], [])
+            self.assertEqual(report["status"], "FAIL")
+
+    @unittest.skipUnless(sys.platform == "darwin", "launchd coalitions are macOS-only")
+    def test_launchd_coalition_preserves_the_outer_sandbox(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            forbidden = root / "forbidden-write"
+            report_path = root / "coalition-sandbox-report.json"
+            profile = (
+                "(version 1)(allow default)"
+                f'(deny file-write* (subpath "{root}"))'
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "run_with_timeout.py"),
+                    "--seconds", "10",
+                    "--process-report", str(report_path),
+                    "--launchd-coalition",
+                    "--",
+                    "/usr/bin/sandbox-exec", "-p", profile,
+                    "--", "/usr/bin/touch", str(forbidden),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(forbidden.exists())
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["schema_version"], 3)
+            self.assertEqual(report["retained_pids"], [])
+            self.assertTrue(report["job_boundary"]["removed"])
 
     def test_process_group_permission_error_falls_back_to_owned_members(self) -> None:
         original_killpg = run_with_timeout.os.killpg

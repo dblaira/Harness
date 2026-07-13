@@ -151,6 +151,11 @@ def guarded_changes(root: Path) -> list[str]:
     return sorted(changed_files(root))
 
 
+def working_tree_changes(root: Path) -> list[str]:
+    status = run_git(root, "status", "--porcelain", "--untracked-files=normal")
+    return [line[3:] if len(line) > 3 else line for line in status.splitlines() if line]
+
+
 def resolve_artifact(root: Path, value: Any) -> Path | None:
     if not isinstance(value, str) or not value.strip():
         return None
@@ -786,6 +791,7 @@ def validate_manifest(
                 "--repo-root", str(root),
                 "--base-sha", str(manifest.get("base_sha") or ""),
                 "--head-sha", expected_commit,
+                "--pr-number", str(manifest.get("pull_request_number") or ""),
                 "--output", str(hosted_output),
                 cwd=root,
             )
@@ -797,24 +803,47 @@ def validate_manifest(
 
 
 def manifest_path(root: Path) -> Path:
+    return evidence_manifest_path(current_commit(root))
+
+
+def evidence_manifest_path(commit: str) -> Path:
     return (
         Path.home()
         / ".local"
         / "share"
         / "harness-release-evidence"
         / "Harness"
-        / current_commit(root)
+        / commit
         / "manifest.json"
     )
 
 
-def validate_release_tree_completion(root: Path, manifest: Path) -> list[str]:
+def completion_evidence(root: Path) -> tuple[Path, str]:
+    current = current_commit(root)
+    current_path = evidence_manifest_path(current)
+    if (current_path.parent / "release-tree-verification.json").exists():
+        return current_path, current
+    try:
+        reviewed_head = run_git(root, "rev-parse", "HEAD^2")
+    except GitInspectionError:
+        return current_path, current
+    reviewed_path = evidence_manifest_path(reviewed_head)
+    return reviewed_path, reviewed_head
+
+
+def validate_release_tree_completion(
+    root: Path,
+    manifest: Path,
+    *,
+    expected_head: str | None = None,
+) -> list[str]:
     proof_path = manifest.parent / "release-tree-verification.json"
     try:
         proof = json.loads(proof_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         return [f"cannot read final merged-tree proof: {error}"]
-    expected_head = current_commit(root)
+    local_head = current_commit(root)
+    expected_head = expected_head or local_head
     repository_result = run_command(
         "gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner", cwd=root,
     )
@@ -823,6 +852,8 @@ def validate_release_tree_completion(root: Path, manifest: Path) -> list[str]:
     errors: list[str] = []
     if proof.get("status") != "PASS" or proof.get("verified_head") != expected_head:
         errors.append("final merged-tree proof is not bound to the exact reviewed head")
+    if local_head != expected_head and proof.get("merge_sha") != local_head:
+        errors.append("local merged tree is not the exact attested merge")
     if not repository or proof.get("repository") != repository:
         errors.append("final merged-tree proof belongs to another repository")
         return errors
@@ -897,19 +928,29 @@ def explicit_user_question(message: str) -> bool:
 def hook(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
     try:
         message = str(payload.get("last_assistant_message", ""))
-        changes = guarded_changes(root)
         if explicit_blocked_exit(message) or explicit_user_question(message):
             return {"continue": True}
-        path = manifest_path(root)
-        if path.exists() and (path.parent / "release-tree-verification.json").exists():
-            release_errors = validate_release_tree_completion(root, path)
-            if not release_errors:
-                return {"continue": True}
-        if not changes:
+        changes = guarded_changes(root)
+        dirty = working_tree_changes(root)
+        path, reviewed_head = completion_evidence(root)
+        release_proof_exists = (path.parent / "release-tree-verification.json").exists()
+        if not changes and not completion_claim(message):
             return {"continue": True}
-        errors = validate_manifest(root, path) if path.exists() else ["handoff manifest is absent"]
-        if path.exists():
-            errors.extend(validate_release_tree_completion(root, path))
+        if dirty:
+            errors = [
+                "repository state changed after evidence capture; commit or remove every working-tree change"
+            ]
+        elif release_proof_exists:
+            errors = validate_release_tree_completion(root, path, expected_head=reviewed_head)
+        elif changes:
+            current_path = manifest_path(root)
+            errors = (
+                validate_manifest(root, current_path)
+                if current_path.exists()
+                else ["handoff manifest is absent"]
+            )
+        else:
+            errors = ["final merged-tree proof is absent for this clean completion claim"]
         if not errors:
             return {"continue": True}
         changed = ", ".join(changes[:6])

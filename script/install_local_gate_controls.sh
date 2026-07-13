@@ -19,10 +19,11 @@ python3 scripts/verify_repository_gate_state.py --repo "$REPO"
 VERSION="$(git rev-parse HEAD)"
 DEST="$HOME/.local/share/harness-release-gates/$VERSION"
 BIN="$HOME/.local/bin"
-mkdir -p "$DEST/script" "$DEST/scripts" "$DEST/.github/codex" "$BIN"
+mkdir -p "$DEST/script" "$DEST/scripts" "$DEST/.github/codex/build-sandbox-probe" "$BIN"
 install -m 0755 script/sol_review_gate.sh script/handoff_gate.sh script/hosted_verification_gate.sh script/merge_verified_pr.sh "$DEST/script/"
 install -m 0755 \
   scripts/release_gate.py \
+  scripts/configure_isolated_xcode_home.swift \
   scripts/evidence_binding.py \
   scripts/live_satisfaction_oracle.py \
   scripts/readonly_sparql_proxy.py \
@@ -58,6 +59,10 @@ install -m 0644 \
   .github/codex/review.schema.json \
   .github/codex/sol-review.md \
   "$DEST/.github/codex/"
+install -m 0644 \
+  .github/codex/build-sandbox-probe/project.yml \
+  .github/codex/build-sandbox-probe/BuildSandboxProbe.swift \
+  "$DEST/.github/codex/build-sandbox-probe/"
 
 DEST="$DEST" /usr/bin/python3 - <<'PY'
 import hashlib, json, os

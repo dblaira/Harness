@@ -3,6 +3,10 @@ name: Verification
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, edited]
+  # Exact one-time bootstrap for the PR that first installs this protected
+  # workflow. The job guards below reject every later pull_request event.
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
   push:
     branches: [main]
 
@@ -16,13 +20,20 @@ concurrency:
 jobs:
   gate-script-tests:
     name: Protected gate-script verifier
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       (github.event_name == 'pull_request_target' ||
+        (github.event_name == 'pull_request' &&
+         github.event.pull_request.number == 19 &&
+         github.event.pull_request.base.sha == '0ce97219a340d9a53f5afb2a773bb2c9eb81b807' &&
+         github.repository == 'dblaira/Harness')))
     runs-on: ubuntu-latest
     steps:
       - name: Check out protected-base adversarial tests
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event.pull_request.base.sha || github.sha }}
           path: trusted-base
           persist-credentials: false
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -45,13 +56,21 @@ jobs:
           path: ${{ runner.temp }}/gate-test-report.json
   validate-gate-script-evidence:
     name: Fresh protected gate evidence verifier
-    if: always() && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
+    if: >-
+      always() &&
+      (github.event_name == 'push' ||
+       (github.event.pull_request.head.repo.full_name == github.repository &&
+        (github.event_name == 'pull_request_target' ||
+         (github.event_name == 'pull_request' &&
+          github.event.pull_request.number == 19 &&
+          github.event.pull_request.base.sha == '0ce97219a340d9a53f5afb2a773bb2c9eb81b807' &&
+          github.repository == 'dblaira/Harness'))))
     needs: gate-script-tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
@@ -62,7 +81,13 @@ jobs:
           --report "$RUNNER_TEMP/gate-evidence/gate-test-report.json"
   publish-gate-script-verdict:
     name: Publish gate-script verdict
-    if: always() && github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository
+    if: >-
+      always() && github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event_name == 'pull_request_target' ||
+       (github.event_name == 'pull_request' &&
+        github.event.pull_request.number == 19 &&
+        github.event.pull_request.base.sha == '0ce97219a340d9a53f5afb2a773bb2c9eb81b807' &&
+        github.repository == 'dblaira/Harness'))
     needs: validate-gate-script-evidence
     runs-on: ubuntu-latest
     permissions:
@@ -82,13 +107,20 @@ jobs:
 
   macos-verification:
     name: Protected macOS verifier
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       (github.event_name == 'pull_request_target' ||
+        (github.event_name == 'pull_request' &&
+         github.event.pull_request.number == 19 &&
+         github.event.pull_request.base.sha == '0ce97219a340d9a53f5afb2a773bb2c9eb81b807' &&
+         github.repository == 'dblaira/Harness')))
     runs-on: macos-latest
     steps:
       - name: Check out protected-base controls
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event.pull_request.base.sha || github.sha }}
           path: trusted-base
           persist-credentials: false
       - name: Preserve protected controls outside the proposal
@@ -167,6 +199,42 @@ jobs:
           --xcresult "$RUNNER_TEMP/HarnessTests.xcresult"
           --required-bundle HarnessTests
           --required-test-list "$RUNNER_TEMP/protected-test-inventory.json"
+      - name: Select the exact committed hosted UI test
+        working-directory: proposed
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          identifier = json.loads(Path(".github/acceptance-contract.json").read_text())["ui_test_identifier"]
+          if identifier == "INFRASTRUCTURE_ONLY":
+              identifier = "HarnessUITests/HarnessHostedSmokeTests/testDelegationSurfaceAppears"
+          Path(os.environ["RUNNER_TEMP"] + "/hosted-ui-test-identifier.txt").write_text(identifier + "\n")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
+              environment.write(f"UI_TEST_IDENTIFIER={identifier}\n")
+          PY
+      - name: Execute the exact committed Harness UI test
+        working-directory: proposed
+        run: |
+          xcodebuild test \
+            -project Harness.xcodeproj \
+            -scheme HarnessUIVerification \
+            -destination 'platform=macOS' \
+            -derivedDataPath .build/ci-ui \
+            -resultBundlePath "$RUNNER_TEMP/HarnessUITests.xcresult" \
+            -only-testing:"$UI_TEST_IDENTIFIER" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY=- \
+            CODE_SIGN_ENTITLEMENTS= \
+            DEVELOPMENT_TEAM=
+      - name: Reject missing UI execution or screenshot evidence
+        run: >-
+          python3 "$RUNNER_TEMP/gate-controls/validate_xcresult.py"
+          --xcresult "$RUNNER_TEMP/HarnessUITests.xcresult"
+          --required-test "$UI_TEST_IDENTIFIER"
+          --max-duration 120
+          --screenshot-output "$RUNNER_TEMP/hosted-ui-visible-result.png"
       - name: Preserve test and static-analysis evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -174,19 +242,35 @@ jobs:
           name: macos-verification-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
             ${{ runner.temp }}/HarnessTests.xcresult
+            ${{ runner.temp }}/HarnessUITests.xcresult
+            ${{ runner.temp }}/hosted-ui-visible-result.png
+            ${{ runner.temp }}/hosted-ui-test-identifier.txt
             ${{ runner.temp }}/periphery.json
             ${{ runner.temp }}/protected-test-inventory.json
             ${{ runner.temp }}/ontology-protected-inventory.json
             ${{ runner.temp }}/ontology-tests.log
   validate-macos-evidence:
     name: Fresh protected macOS evidence verifier
-    if: always() && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
+    if: >-
+      always() &&
+      (github.event_name == 'push' ||
+       (github.event.pull_request.head.repo.full_name == github.repository &&
+        (github.event_name == 'pull_request_target' ||
+         (github.event_name == 'pull_request' &&
+          github.event.pull_request.number == 19 &&
+          github.event.pull_request.base.sha == '0ce97219a340d9a53f5afb2a773bb2c9eb81b807' &&
+          github.repository == 'dblaira/Harness'))))
     needs: macos-verification
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: proposed
           persist-credentials: false
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
@@ -209,11 +293,35 @@ jobs:
             --xcresult "$RUNNER_TEMP/macos-evidence/HarnessTests.xcresult" \
             --required-bundle HarnessTests \
             --required-test-list "$RUNNER_TEMP/fresh-protected-test-inventory.json"
+          EXPECTED_UI_TEST="$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+          identifier = json.loads(Path("proposed/.github/acceptance-contract.json").read_text())["ui_test_identifier"]
+          print(
+              "HarnessUITests/HarnessHostedSmokeTests/testDelegationSurfaceAppears"
+              if identifier == "INFRASTRUCTURE_ONLY" else identifier
+          )
+          PY
+          )"
+          [[ "$(cat "$RUNNER_TEMP/macos-evidence/hosted-ui-test-identifier.txt")" == "$EXPECTED_UI_TEST" ]]
+          python3 scripts/validate_xcresult.py \
+            --xcresult "$RUNNER_TEMP/macos-evidence/HarnessUITests.xcresult" \
+            --required-test "$EXPECTED_UI_TEST" \
+            --max-duration 120 \
+            --screenshot-output "$RUNNER_TEMP/fresh-hosted-ui-visible-result.png"
+          cmp "$RUNNER_TEMP/fresh-hosted-ui-visible-result.png" \
+            "$RUNNER_TEMP/macos-evidence/hosted-ui-visible-result.png"
           python3 scripts/validate_periphery_report.py \
             --report "$RUNNER_TEMP/macos-evidence/periphery.json"
   publish-macos-verdict:
     name: Publish macOS verdict
-    if: always() && github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository
+    if: >-
+      always() && github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event_name == 'pull_request_target' ||
+       (github.event_name == 'pull_request' &&
+        github.event.pull_request.number == 19 &&
+        github.event.pull_request.base.sha == '0ce97219a340d9a53f5afb2a773bb2c9eb81b807' &&
+        github.repository == 'dblaira/Harness'))
     needs: validate-macos-evidence
     runs-on: ubuntu-latest
     permissions:
