@@ -478,12 +478,16 @@ def main() -> int:
                         environment["CI"] = "1"
                         environment["PATH"] = ":".join(
                             [
+                                str(worktree / ".regression-venv" / "bin"),
                                 str(Path.home() / ".local/bin"),
                                 "/opt/homebrew/bin",
                                 "/usr/local/bin",
                                 environment.get("PATH", ""),
                             ]
                         )
+                        regression_python = worktree / ".regression-venv" / "bin" / "python"
+                        if regression_python.is_file():
+                            environment.setdefault("HARNESS_RDFLIB_PYTHON", str(regression_python))
                         environment.setdefault("DEVELOPER_DIR", "/Applications/Xcode.app/Contents/Developer")
                         for key, value in check.get("environment", {}).items():
                             environment[key] = substitute(value, variables)
