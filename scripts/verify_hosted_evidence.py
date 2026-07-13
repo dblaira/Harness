@@ -19,6 +19,8 @@ STATUS_WORKFLOWS = {
 CHECK_WORKFLOW = ".github/workflows/codeql.yml"
 CHECK_NAMES = {"CodeQL (swift)", "CodeQL (python)"}
 PROTECTED_CONTROL_PATHS = (
+    "project.yml",
+    "Packages/OntologyKit/Package.swift",
     ".periphery.yml",
     ".swiftlint.yml",
     ".github/workflows",

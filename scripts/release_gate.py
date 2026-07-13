@@ -81,6 +81,12 @@ FILE_ARTIFACTS = {
     "recorded_running_app_proof",
     "media_proof",
     "protected_test_inventory",
+    "live_swift_transcript",
+    "live_swift_artifact",
+    "live_swift_inventory",
+    "accepted_graph_snapshot",
+    "live_service_identity",
+    "live_service_identity_after",
 }
 DIRECTORY_ARTIFACTS = {
     "unit_xcresult",
@@ -277,7 +283,9 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
     if manifest.get("git_tree") != expected_tree:
         errors.append("manifest git tree does not match HEAD")
     if not isinstance(manifest.get("app_pid"), int) or manifest.get("app_pid", 0) <= 0:
-        errors.append("a live signed app PID is required")
+        errors.append("the recorded signed app PID is required")
+    if manifest.get("proposal_processes_terminated") is not True:
+        errors.append("proposal processes were not terminated before final evidence generation")
     if manifest.get("working_tree_clean") is not True:
         errors.append("working tree was not clean when evidence was captured")
     if current_status:
@@ -329,7 +337,8 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
         "macos-unit-tests",
         "macos-ui-tests",
         "final-relaunch-ui-test",
-        "live-satisfaction-gate",
+        "live-satisfaction-swift-test",
+        "live-satisfaction-oracle",
         "trusted-hosted-verification",
         "window-bound-ui-evidence",
     }
@@ -388,6 +397,12 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
         "media_proof",
         "protected_test_inventory",
         "satisfaction_artifact",
+        "live_swift_transcript",
+        "live_swift_artifact",
+        "live_swift_inventory",
+        "accepted_graph_snapshot",
+        "live_service_identity",
+        "live_service_identity_after",
         "app_bundle",
         "app_identity",
     ):
@@ -411,6 +426,12 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
     ui_xcresult = resolve_artifact(root, artifacts.get("ui_xcresult"))
     final_ui_xcresult = resolve_artifact(root, artifacts.get("final_ui_xcresult"))
     satisfaction = resolve_artifact(root, artifacts.get("satisfaction_artifact"))
+    live_swift_transcript = resolve_artifact(root, artifacts.get("live_swift_transcript"))
+    live_swift_artifact = resolve_artifact(root, artifacts.get("live_swift_artifact"))
+    live_swift_inventory = resolve_artifact(root, artifacts.get("live_swift_inventory"))
+    accepted_graph_snapshot = resolve_artifact(root, artifacts.get("accepted_graph_snapshot"))
+    live_service_identity = resolve_artifact(root, artifacts.get("live_service_identity"))
+    live_service_identity_after = resolve_artifact(root, artifacts.get("live_service_identity_after"))
     app_bundle = resolve_artifact(root, artifacts.get("app_bundle"))
     app_identity = resolve_artifact(root, artifacts.get("app_identity"))
     running_app_proof = resolve_artifact(root, artifacts.get("running_app_proof"))
@@ -464,6 +485,7 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
             "- Accepted-only supporting memory hits: 0",
             "- Accepted-only authority separation: PASS",
             "- Direct accepted-only Fuseki preflight hits:",
+            "- Grounded accepted authority ids:",
             "- Synthesis authority separation: PASS",
             "## Accepted-only answer as produced",
             "## Answer as produced",
@@ -473,6 +495,55 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
         match = re.search(r"- Direct accepted-only Fuseki preflight hits: (\d+)", text)
         if not match or int(match.group(1)) < 1:
             errors.append("live satisfaction artifact has no Fuseki-sourced authority hit")
+        if accepted_graph_snapshot and accepted_graph_snapshot.is_file():
+            try:
+                snapshot = json.loads(accepted_graph_snapshot.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                snapshot = {}
+            digest = snapshot.get("sha256")
+            if (
+                not isinstance(digest, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", digest)
+                or snapshot.get("triple_count", 0) < 1
+                or f"- Accepted graph SHA-256: {digest}" not in text
+            ):
+                errors.append("accepted graph snapshot does not match the protected direct proof")
+    if live_swift_transcript and live_swift_transcript.is_file() and live_swift_inventory and live_swift_inventory.is_file():
+        validator = Path(__file__).with_name("validate_swiftpm_tests.py")
+        result = run_command(
+            sys.executable,
+            str(validator),
+            "--expected", str(live_swift_inventory),
+            "--transcript", str(live_swift_transcript),
+        )
+        if result.returncode:
+            errors.append(result.stderr.strip() or result.stdout.strip())
+    if live_swift_artifact and live_swift_artifact.is_file():
+        text = live_swift_artifact.read_text(encoding="utf-8", errors="replace")
+        required_markers = (
+            "# Satisfaction Gate — live full-pipeline proof",
+            f"- Commit: {expected_commit}",
+            "- Accepted-only supporting memory hits: 0",
+            "- Accepted-only authority separation: PASS",
+            "- Synthesis authority separation: PASS",
+            "- Run success: true",
+            "- Fuseki graph health: healthy",
+            "- Fuseki authority hits:",
+            "## Accepted-only answer as produced",
+            "## Answer as produced",
+        )
+        if live_swift_artifact.stat().st_size < 500 or any(marker not in text for marker in required_markers):
+            errors.append("full-pipeline live Swift artifact is incomplete or not commit-bound")
+        match = re.search(r"- Fuseki authority hits: (\d+)", text)
+        if not match or int(match.group(1)) < 1:
+            errors.append("full-pipeline live Swift artifact has no Fuseki authority hit")
+    if live_service_identity and live_service_identity_after:
+        if (
+            not live_service_identity.is_file()
+            or not live_service_identity_after.is_file()
+            or sha256_path(live_service_identity) != sha256_path(live_service_identity_after)
+        ):
+            errors.append("live Fuseki or Ollama service identity changed during proposal execution")
     if app_bundle and app_bundle.is_dir():
         verify = run_command("/usr/bin/codesign", "--verify", "--deep", "--strict", str(app_bundle))
         detail = run_command("/usr/bin/codesign", "-dvvv", str(app_bundle))
@@ -520,8 +591,8 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
     if isinstance(pid, int) and pid > 0 and app_bundle:
         process = run_command("/bin/ps", "-p", str(pid), "-o", "command=")
         expected_command = str(app_bundle / "Contents" / "MacOS" / "Harness")
-        if process.returncode or not process.stdout.strip().startswith(expected_command):
-            errors.append("manifest PID is not the current signed Harness app process")
+        if process.returncode == 0 and process.stdout.strip().startswith(expected_command):
+            errors.append("proposal Harness process remains alive during final evidence validation")
         if running_app_proof and running_app_proof.is_file():
             try:
                 proof = json.loads(running_app_proof.read_text(encoding="utf-8"))
@@ -596,11 +667,23 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
 
 
 def manifest_path(root: Path) -> Path:
-    return root / ".local-artifacts" / "release-gate" / current_commit(root) / "manifest.json"
+    return (
+        Path.home()
+        / ".local"
+        / "share"
+        / "harness-release-evidence"
+        / "Harness"
+        / current_commit(root)
+        / "manifest.json"
+    )
 
 
 def completion_claim(message: str) -> bool:
-    return bool(COMPLETION_WORDS.search(message)) and not bool(NON_COMPLETION.search(message))
+    # Negation applies to the completion phrase it directly modifies, not to
+    # every other completion claim in the message. A trailing "unverified"
+    # caveat cannot erase an earlier "passes" claim.
+    unnegated = NEGATED_COMPLETION.sub("", message)
+    return bool(COMPLETION_WORDS.search(unnegated))
 
 
 def explicit_blocked_exit(message: str) -> bool:
@@ -621,29 +704,29 @@ def explicit_user_question(message: str) -> bool:
 
 
 def hook(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
-    message = str(payload.get("last_assistant_message", ""))
     try:
+        message = str(payload.get("last_assistant_message", ""))
         changes = guarded_changes(root)
-    except GitInspectionError as error:
-        return {"decision": "block", "reason": f"Task completion is blocked. {error}"}
-    if not changes:
-        return {"continue": True}
-    if explicit_blocked_exit(message) or explicit_user_question(message):
-        return {"continue": True}
-    path = manifest_path(root)
-    try:
+        if not changes:
+            return {"continue": True}
+        if explicit_blocked_exit(message) or explicit_user_question(message):
+            return {"continue": True}
+        path = manifest_path(root)
         errors = validate_manifest(root, path) if path.exists() else ["handoff manifest is absent"]
-    except Exception as error:  # Fail closed on every operational validator failure.
-        errors = [f"handoff validation could not complete: {error}"]
-    if not errors:
-        return {"continue": True}
-    changed = ", ".join(changes[:6])
-    reason = (
-        "Task completion is blocked. Run the signed local handoff gate and bind visible "
-        f"evidence to commit {current_commit(root)}. Product changes: {changed}. "
-        + " ".join(errors)
-    )
-    return {"decision": "block", "reason": reason}
+        if not errors:
+            return {"continue": True}
+        changed = ", ".join(changes[:6])
+        reason = (
+            "Task completion is blocked. Run the signed local handoff gate and bind visible "
+            f"evidence to commit {current_commit(root)}. Product changes: {changed}. "
+            + " ".join(errors)
+        )
+        return {"decision": "block", "reason": reason}
+    except Exception as error:  # The complete Stop path must always fail closed.
+        return {
+            "decision": "block",
+            "reason": f"Task completion is blocked. Handoff validation could not complete: {error}",
+        }
 
 
 def main() -> int:

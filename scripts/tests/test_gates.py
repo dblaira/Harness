@@ -5,6 +5,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -253,6 +254,11 @@ class ReleaseGateTests(unittest.TestCase):
     def test_completion_language(self) -> None:
         self.assertTrue(release_gate.completion_claim("Implemented and verified."))
         self.assertFalse(release_gate.completion_claim("Blocked; this is not verified."))
+        self.assertTrue(
+            release_gate.completion_claim(
+                "Should I stop now that the feature passes, even though the handoff is unverified?"
+            )
+        )
 
     def test_hook_allows_only_explicit_blocked_exit_without_evidence(self) -> None:
         original = release_gate.guarded_changes
@@ -355,6 +361,42 @@ class ReleaseGateTests(unittest.TestCase):
             self.assertIn("repository unreadable", result["reason"])
         finally:
             release_gate.guarded_changes = original
+
+    def test_manifest_path_git_failure_blocks_completion(self) -> None:
+        original_changes = release_gate.guarded_changes
+        original_manifest = release_gate.manifest_path
+        release_gate.guarded_changes = lambda _root: ["Sources/Harness/Feature.swift"]
+        release_gate.manifest_path = lambda _root: (_ for _ in ()).throw(
+            release_gate.GitInspectionError("git rev-parse HEAD failed: repository unreadable")
+        )
+        try:
+            result = release_gate.hook(Path("."), {"last_assistant_message": "Implemented."})
+            self.assertEqual(result["decision"], "block")
+            self.assertIn("repository unreadable", result["reason"])
+        finally:
+            release_gate.guarded_changes = original_changes
+            release_gate.manifest_path = original_manifest
+
+    def test_final_commit_read_failure_blocks_completion(self) -> None:
+        original_changes = release_gate.guarded_changes
+        original_manifest = release_gate.manifest_path
+        original_validate = release_gate.validate_manifest
+        original_commit = release_gate.current_commit
+        release_gate.guarded_changes = lambda _root: ["Sources/Harness/Feature.swift"]
+        release_gate.manifest_path = lambda _root: Path(__file__)
+        release_gate.validate_manifest = lambda *_args: ["handoff manifest is invalid"]
+        release_gate.current_commit = lambda _root: (_ for _ in ()).throw(
+            release_gate.GitInspectionError("git rev-parse HEAD failed: repository unreadable")
+        )
+        try:
+            result = release_gate.hook(Path("."), {"last_assistant_message": "Implemented."})
+            self.assertEqual(result["decision"], "block")
+            self.assertIn("repository unreadable", result["reason"])
+        finally:
+            release_gate.guarded_changes = original_changes
+            release_gate.manifest_path = original_manifest
+            release_gate.validate_manifest = original_validate
+            release_gate.current_commit = original_commit
 
     def test_subprocess_timeout_returns_explicit_failure(self) -> None:
         original = subprocess.run
@@ -555,11 +597,24 @@ class SwiftPMInventoryTests(unittest.TestCase):
 class ProtectedLiveOracleTests(unittest.TestCase):
     def test_oracle_uses_direct_network_results_and_writes_required_markers(self) -> None:
         original = live_satisfaction_oracle.request
-        live_satisfaction_oracle.request = lambda url, data=None, content_type=None: (
-            {"results": {"bindings": [{"s": {"value": "accepted"}}]}}
-            if "3030" in url else
-            ({"models": [{"name": "fixture"}]} if url.endswith("/api/tags") else {"response": "A substantive synthesis that keeps accepted authority separate from supporting context."})
-        )
+        def grounded_request(url, data=None, content_type=None):
+            if "3030" in url:
+                return {"results": {"bindings": [{
+                    "s": {"value": "accepted"},
+                    "p": {"value": "says"},
+                    "o": {"value": "capturing value matters"},
+                }]}}
+            if url.endswith("/api/tags"):
+                return {"models": [{"name": "fixture"}]}
+            prompt = json.loads(data)["prompt"]
+            authority_id = re.search(r'"id": "([0-9a-f]+)"', prompt).group(1)
+            return {"response": json.dumps({
+                "authority_ids": [authority_id],
+                "supporting_context": [],
+                "separation": "PASS",
+                "answer": "Capturing value matters because the supplied accepted authority says it preserves useful outcomes.",
+            })}
+        live_satisfaction_oracle.request = grounded_request
         try:
             with tempfile.TemporaryDirectory() as directory:
                 original_argv = sys.argv
@@ -583,6 +638,41 @@ class ProtectedLiveOracleTests(unittest.TestCase):
             ),
             [],
         )
+
+    def test_oracle_rejects_unrelated_ungrounded_synthesis(self) -> None:
+        original = live_satisfaction_oracle.request
+        live_satisfaction_oracle.request = lambda url, data=None, content_type=None: (
+            {"results": {"bindings": [{"s": {"value": "accepted"}, "p": {"value": "says"}, "o": {"value": "capturing value matters"}}]}}
+            if "3030" in url else
+            ({"models": [{"name": "fixture"}]} if url.endswith("/api/tags") else {"response": "A long but unrelated answer that cites none of the accepted graph evidence supplied to it."})
+        )
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                original_argv = sys.argv
+                sys.argv = ["oracle", "--commit", "a" * 40, "--output-dir", directory]
+                with self.assertRaisesRegex(SystemExit, "grounded accepted authority"):
+                    live_satisfaction_oracle.main()
+        finally:
+            live_satisfaction_oracle.request = original
+            sys.argv = original_argv
+
+    def test_oracle_rejects_accepted_graph_snapshot_drift(self) -> None:
+        original = live_satisfaction_oracle.request
+        live_satisfaction_oracle.request = lambda url, data=None, content_type=None: {
+            "results": {"bindings": [{"s": {"value": "accepted"}, "p": {"value": "says"}, "o": {"value": "capturing value matters"}}]}
+        }
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                original_argv = sys.argv
+                sys.argv = [
+                    "oracle", "--commit", "a" * 40, "--output-dir", directory,
+                    "--expected-graph-digest", "0" * 64,
+                ]
+                with self.assertRaisesRegex(SystemExit, "accepted graph changed"):
+                    live_satisfaction_oracle.main()
+        finally:
+            live_satisfaction_oracle.request = original
+            sys.argv = original_argv
 
 
 class CommitStatusTests(unittest.TestCase):
@@ -1110,10 +1200,36 @@ class GateStructureTests(unittest.TestCase):
         self.assertIn('(deny file-write* (subpath \\"$CONTROL_DIR\\")', handoff)
         self.assertIn('(subpath \\"$HOME/.local/bin\\")', handoff)
         self.assertIn('(literal \\"$HOME/.codex/hooks.json\\")', handoff)
+        self.assertIn('(subpath \\"$OUTPUT_DIR\\")', handoff)
+        self.assertIn("CANDIDATE_OUTPUT_DIR=", handoff)
         self.assertIn("proposal_exec xcodebuild build-for-testing", handoff)
         self.assertIn("proposal_exec xcodebuild test", handoff)
         self.assertEqual(handoff.count("proposal_exec xcodegen generate"), 3)
         self.assertGreaterEqual(handoff.count('/usr/bin/sandbox-exec -p "$PROPOSAL_SANDBOX"'), 3)
+
+    def test_test_topology_is_part_of_the_protected_control_boundary(self) -> None:
+        self.assertIn("project.yml", verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
+        self.assertIn("Packages/OntologyKit/Package.swift", verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
+
+    def test_signed_handoff_runs_and_validates_the_reserved_live_swift_test(self) -> None:
+        handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
+        self.assertIn("satisfactionGateAdamRealQuestionGetsCompleteAnswer", handoff)
+        self.assertIn("HARNESS_REQUIRE_LIVE_SATISFACTION=1", handoff)
+        self.assertIn("HARNESS_SATISFACTION_OUTPUT_DIR", handoff)
+        self.assertIn("validate_swiftpm_tests.py", handoff)
+        self.assertIn("LIVE_SWIFT_TRANSCRIPT", handoff)
+
+    def test_proposal_processes_stop_before_verifier_owned_live_evidence(self) -> None:
+        handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
+        terminated = handoff.rindex("terminate_proposal_processes")
+        final_inventory = handoff.rindex('swift_test_inventory.py"')
+        direct_oracle = handoff.rindex('live_satisfaction_oracle.py"')
+        manifest = handoff.index("MID_PR_HEAD=")
+        self.assertLess(terminated, final_inventory)
+        self.assertLess(terminated, direct_oracle)
+        self.assertLess(direct_oracle, manifest)
+        self.assertIn("--snapshot-output", handoff)
+        self.assertIn("--expected-graph-digest", handoff)
 
     def test_video_is_bound_to_the_verified_candidate_window_not_main_display(self) -> None:
         handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
@@ -1261,6 +1377,9 @@ class GateStructureTests(unittest.TestCase):
         self.assertNotIn("HEAD:main", probe)
         self.assertIn("$PROBE_SHA:refs/heads/$PROBE_BASE", probe)
         self.assertIn("Production main changed", probe)
+        self.assertIn("git push --force git@github.com:dblaira/Harness.git", probe)
+        self.assertNotIn("--force-with-lease", probe)
+        self.assertIn("merges? are not allowed", probe)
 
 
 class ReleaseTreeTests(unittest.TestCase):

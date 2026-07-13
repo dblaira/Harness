@@ -68,7 +68,7 @@ PR_NUMBER="${PR_URL##*/}"
 set +e
 git push git@github.com:dblaira/Harness.git "$PROBE_SHA:refs/heads/$PROBE_BASE" > "$OUTPUT_DIR/direct-push.log" 2>&1
 DIRECT_RESULT=$?
-git push --force-with-lease git@github.com:dblaira/Harness.git "$PROBE_SHA:refs/heads/$PROBE_BASE" > "$OUTPUT_DIR/force-push.log" 2>&1
+git push --force git@github.com:dblaira/Harness.git "$PROBE_SHA:refs/heads/$PROBE_BASE" > "$OUTPUT_DIR/force-push.log" 2>&1
 FORCE_RESULT=$?
 for METHOD in merge squash rebase; do
   gh api -X PUT "repos/$REPO/pulls/$PR_NUMBER/merge" -f merge_method="$METHOD" \
@@ -83,7 +83,10 @@ from pathlib import Path
 
 root = Path(os.environ["OUTPUT_DIR"])
 push_rejection = re.compile(r"GH0(?:06|13)|protected branch|repository rule violations", re.I)
-merge_rejection = re.compile(r"required status check|protected branch|not mergeable|merge cannot be performed", re.I)
+merge_rejection = re.compile(
+    r"required status check|protected branch|not mergeable|merge cannot be performed|merges? are not allowed",
+    re.I,
+)
 
 def rejected(result: int, log_name: str, pattern: re.Pattern[str]) -> bool:
     text = (root / log_name).read_text(encoding="utf-8", errors="replace")

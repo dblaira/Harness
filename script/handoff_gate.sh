@@ -34,33 +34,57 @@ done
 }
 
 SHA="$(git rev-parse HEAD)"
-OUTPUT_DIR="$ROOT_DIR/.local-artifacts/release-gate/$SHA"
-UNIT_RESULT_BUNDLE="$OUTPUT_DIR/HarnessUnitTests.xcresult"
-UI_RESULT_BUNDLE="$OUTPUT_DIR/HarnessRequirementUI.xcresult"
-FINAL_UI_RESULT_BUNDLE="$OUTPUT_DIR/HarnessFinalRelaunchUI.xcresult"
-SCREENSHOT="$OUTPUT_DIR/visible-result.png"
-FEATURE_SCREENSHOT="$OUTPUT_DIR/feature-visible-result.png"
-FINAL_SCREENSHOT="$OUTPUT_DIR/final-relaunch-visible-result.png"
-FINAL_UI_SCREENSHOT="$OUTPUT_DIR/final-relaunch-xcuitest-result.png"
-FINAL_FEATURE_SCREENSHOT="$OUTPUT_DIR/final-feature-visible-result.png"
-RUNNING_APP_PROOF="$OUTPUT_DIR/final-running-app.json"
-INITIAL_RUNNING_APP_PROOF="$OUTPUT_DIR/recorded-running-app.json"
-MEDIA_PROOF="$OUTPUT_DIR/media-proof.json"
-TEST_INVENTORY="$OUTPUT_DIR/protected-test-inventory.json"
-VIDEO="$OUTPUT_DIR/visible-requirement.mov"
-SATISFACTION_DIR="$OUTPUT_DIR/satisfaction-gate"
+OUTPUT_DIR="$HOME/.local/share/harness-release-evidence/Harness/$SHA"
+CANDIDATE_OUTPUT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/harness-candidate-evidence.${SHA}.XXXXXX")"
+
+set_artifact_paths() {
+  local directory="$1"
+  UNIT_RESULT_BUNDLE="$directory/HarnessUnitTests.xcresult"
+  UI_RESULT_BUNDLE="$directory/HarnessRequirementUI.xcresult"
+  FINAL_UI_RESULT_BUNDLE="$directory/HarnessFinalRelaunchUI.xcresult"
+  SCREENSHOT="$directory/visible-result.png"
+  FEATURE_SCREENSHOT="$directory/feature-visible-result.png"
+  FINAL_SCREENSHOT="$directory/final-relaunch-visible-result.png"
+  FINAL_UI_SCREENSHOT="$directory/final-relaunch-xcuitest-result.png"
+  FINAL_FEATURE_SCREENSHOT="$directory/final-feature-visible-result.png"
+  RUNNING_APP_PROOF="$directory/final-running-app.json"
+  INITIAL_RUNNING_APP_PROOF="$directory/recorded-running-app.json"
+  MEDIA_PROOF="$directory/media-proof.json"
+  TEST_INVENTORY="$directory/protected-test-inventory.json"
+  VIDEO="$directory/visible-requirement.mov"
+  SATISFACTION_DIR="$directory/satisfaction-gate"
+  APP_IDENTITY="$directory/app-identity.json"
+  LIVE_SWIFT_TRANSCRIPT="$directory/live-satisfaction-swift.log"
+  LIVE_SWIFT_DIR="$directory/live-satisfaction-swift"
+}
+
+set_artifact_paths "$CANDIDATE_OUTPUT_DIR"
 APP_BUNDLE="$ROOT_DIR/.build/HarnessCandidateDerivedData/Build/Products/Debug/Harness.app"
-APP_IDENTITY="$OUTPUT_DIR/app-identity.json"
 CANDIDATE_DERIVED_DATA="$ROOT_DIR/.build/HarnessCandidateDerivedData"
 UNIT_DERIVED_DATA="$ROOT_DIR/.build/HarnessUnitDerivedData"
+GRAPH_SNAPSHOT="$OUTPUT_DIR/accepted-graph-before.json"
+LIVE_SWIFT_INVENTORY="$OUTPUT_DIR/live-satisfaction-swift-inventory.json"
+LIVE_SERVICE_IDENTITY="$OUTPUT_DIR/live-service-identity.txt"
+mkdir -p "$OUTPUT_DIR" "$CANDIDATE_OUTPUT_DIR"
+rm -rf "$OUTPUT_DIR"
 mkdir -p "$OUTPUT_DIR"
 rm -rf "$UNIT_RESULT_BUNDLE" "$UI_RESULT_BUNDLE" "$FINAL_UI_RESULT_BUNDLE" "$SATISFACTION_DIR"
 rm -f "$SCREENSHOT" "$FEATURE_SCREENSHOT" "$FINAL_SCREENSHOT" "$FINAL_UI_SCREENSHOT" "$FINAL_FEATURE_SCREENSHOT" "$RUNNING_APP_PROOF" "$INITIAL_RUNNING_APP_PROOF" "$MEDIA_PROOF" "$TEST_INVENTORY" "$VIDEO"
 mkdir -p "$SATISFACTION_DIR"
 
-PROPOSAL_SANDBOX="(version 1)(allow default)(deny file-write* (subpath \"$CONTROL_DIR\") (subpath \"$HOME/.local/bin\") (literal \"$HOME/.codex/hooks.json\"))"
+PROPOSAL_SANDBOX="(version 1)(allow default)(deny file-write* (subpath \"$CONTROL_DIR\") (subpath \"$OUTPUT_DIR\") (subpath \"$HOME/.local/bin\") (literal \"$HOME/.codex/hooks.json\"))"
 proposal_exec() {
   /usr/bin/sandbox-exec -p "$PROPOSAL_SANDBOX" -- "$@"
+}
+
+terminate_proposal_processes() {
+  pkill -x Harness >/dev/null 2>&1 || true
+  for _ in {1..20}; do
+    [[ -z "$(pgrep -x Harness || true)" ]] && return 0
+    sleep 0.25
+  done
+  echo "A proposal Harness process survived final evidence capture." >&2
+  return 1
 }
 
 REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
@@ -131,6 +155,33 @@ command -v ffmpeg >/dev/null
 command -v ffprobe >/dev/null
 python3 "$CONTROL_DIR/scripts/swift_test_inventory.py" \
   --git-ref "$BASE_SHA" --repo-root "$ROOT_DIR" --output "$TEST_INVENTORY"
+python3 "$CONTROL_DIR/scripts/live_satisfaction_oracle.py" \
+  --snapshot-output "$GRAPH_SNAPSHOT"
+GRAPH_DIGEST="$(jq -r .sha256 "$GRAPH_SNAPSHOT")"
+[[ "$GRAPH_DIGEST" =~ ^[0-9a-f]{64}$ ]] || {
+  echo "The protected accepted-graph snapshot is invalid." >&2
+  exit 1
+}
+{
+  for port in 3030 11434; do
+    echo "PORT:$port"
+    /usr/sbin/lsof -nP -iTCP:"$port" -sTCP:LISTEN -Fpc 2>/dev/null || true
+  done
+} > "$LIVE_SERVICE_IDENTITY"
+grep -q '^p' "$LIVE_SERVICE_IDENTITY" || {
+  echo "The protected Fuseki and Ollama service identities are unavailable." >&2
+  exit 1
+}
+LIVE_SWIFT_INVENTORY="$LIVE_SWIFT_INVENTORY" /usr/bin/python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+Path(os.environ["LIVE_SWIFT_INVENTORY"]).write_text(
+    json.dumps(["OntologyKitTests.satisfactionGateAdamRealQuestionGetsCompleteAnswer()"], indent=2) + "\n",
+    encoding="utf-8",
+)
+PY
 
 HARNESS_EXPECTED_PID=0 HARNESS_EXPECTED_WINDOW_BOUNDS=UNSET HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER=UNSET HARNESS_ATTACH_EXISTING_APP=0 proposal_exec xcodegen generate
 proposal_exec xcodebuild build-for-testing \
@@ -138,7 +189,7 @@ proposal_exec xcodebuild build-for-testing \
   -scheme HarnessUIVerification \
   -configuration Debug \
   -destination 'platform=macOS' \
-  -derivedDataPath "$CANDIDATE_DERIVED_DATA" | tee "$OUTPUT_DIR/signed-build.log"
+  -derivedDataPath "$CANDIDATE_DERIVED_DATA" | tee "$CANDIDATE_OUTPUT_DIR/signed-build.log"
 
 [[ -d "$APP_BUNDLE" ]] || { echo "The built Harness.app bundle is missing." >&2; exit 1; }
 python3 "$CONTROL_DIR/scripts/verify_app_identity.py" \
@@ -168,17 +219,8 @@ python3 "$CONTROL_DIR/scripts/validate_xcresult.py" \
   --required-bundle HarnessTests \
   --required-test-list "$TEST_INVENTORY"
 
-python3 "$CONTROL_DIR/scripts/live_satisfaction_oracle.py" \
-  --commit "$SHA" --output-dir "$SATISFACTION_DIR" | tee "$OUTPUT_DIR/live-satisfaction.log"
-SATISFACTION_COUNT="$(find "$SATISFACTION_DIR" -type f -name 'gate-*.md' | wc -l | tr -d ' ')"
-[[ "$SATISFACTION_COUNT" == "1" ]] || {
-  echo "The required live satisfaction test did not produce exactly one proof artifact." >&2
-  exit 1
-}
-SATISFACTION_ARTIFACT="$(find "$SATISFACTION_DIR" -type f -name 'gate-*.md' -print -quit)"
-
 pkill -x Harness >/dev/null 2>&1 || true
-proposal_exec "$APP_BUNDLE/Contents/MacOS/Harness" >"$OUTPUT_DIR/recorded-app.log" 2>&1 &
+proposal_exec "$APP_BUNDLE/Contents/MacOS/Harness" >"$CANDIDATE_OUTPUT_DIR/recorded-app.log" 2>&1 &
 RECORDED_PID=""
 for _ in {1..30}; do
   while IFS= read -r CANDIDATE_PID; do
@@ -261,7 +303,7 @@ done
   echo "A stale Harness process survived before the final normal relaunch." >&2
   exit 1
 }
-proposal_exec "$APP_BUNDLE/Contents/MacOS/Harness" >"$OUTPUT_DIR/final-app.log" 2>&1 &
+proposal_exec "$APP_BUNDLE/Contents/MacOS/Harness" >"$CANDIDATE_OUTPUT_DIR/final-app.log" 2>&1 &
 for _ in {1..20}; do
   PID=""
   while IFS= read -r CANDIDATE_PID; do
@@ -341,10 +383,77 @@ python3 "$CONTROL_DIR/scripts/validate_media.py" \
   --video "$VIDEO" \
   --output "$MEDIA_PROOF"
 
-# Proposal code has finished. Rebuild the inventory from the protected base so
-# the release validator cannot consume an inventory modified by the candidate.
+# The reserved full-pipeline Swift test is the only protected OntologyKit test
+# omitted by hosted CI. It must pass here with live dependencies required.
+LIVE_SWIFT_TEST="OntologyKitTests.satisfactionGateAdamRealQuestionGetsCompleteAnswer"
+rm -rf "$LIVE_SWIFT_DIR"
+mkdir -p "$LIVE_SWIFT_DIR"
+set +e
+python3 "$CONTROL_DIR/scripts/run_with_timeout.py" --seconds 600 -- \
+  /usr/bin/sandbox-exec -p "$PROPOSAL_SANDBOX" -- \
+  /usr/bin/env \
+    HARNESS_REQUIRE_LIVE_SATISFACTION=1 \
+    HARNESS_SATISFACTION_COMMIT="$SHA" \
+    HARNESS_SATISFACTION_OUTPUT_DIR="$LIVE_SWIFT_DIR" \
+    /usr/bin/xcrun swift test \
+      --package-path "$ROOT_DIR/Packages/OntologyKit" \
+      --filter "${LIVE_SWIFT_TEST#*.}" \
+  2>&1 | tee "$LIVE_SWIFT_TRANSCRIPT"
+LIVE_SWIFT_STATUS="${PIPESTATUS[0]}"
+set -e
+[[ "$LIVE_SWIFT_STATUS" == "0" ]] || {
+  echo "The reserved live satisfaction Swift test failed or exceeded its evidence deadline." >&2
+  exit 1
+}
+python3 "$CONTROL_DIR/scripts/validate_swiftpm_tests.py" \
+  --expected "$LIVE_SWIFT_INVENTORY" \
+  --transcript "$LIVE_SWIFT_TRANSCRIPT"
+LIVE_SWIFT_COUNT="$(find "$LIVE_SWIFT_DIR" -type f -name 'gate-*.md' | wc -l | tr -d ' ')"
+[[ "$LIVE_SWIFT_COUNT" == "1" ]] || {
+  echo "The reserved live satisfaction Swift test did not produce exactly one proof artifact." >&2
+  exit 1
+}
+
+# No proposal process may remain alive while protected controls promote and
+# generate the final evidence bundle.
+terminate_proposal_processes
+LIVE_SERVICE_IDENTITY_AFTER="$OUTPUT_DIR/live-service-identity-after.txt"
+{
+  for port in 3030 11434; do
+    echo "PORT:$port"
+    /usr/sbin/lsof -nP -iTCP:"$port" -sTCP:LISTEN -Fpc 2>/dev/null || true
+  done
+} > "$LIVE_SERVICE_IDENTITY_AFTER"
+cmp -s "$LIVE_SERVICE_IDENTITY" "$LIVE_SERVICE_IDENTITY_AFTER" || {
+  echo "A live Fuseki or Ollama service changed identity during proposal execution." >&2
+  exit 1
+}
+
+# Proposal output is promoted only after proposal processes stop. The sandbox
+# denied every proposal process write access to this verifier-owned directory.
+/bin/cp -R "$CANDIDATE_OUTPUT_DIR"/. "$OUTPUT_DIR"/
+set_artifact_paths "$OUTPUT_DIR"
+LIVE_SWIFT_ARTIFACT="$(find "$LIVE_SWIFT_DIR" -type f -name 'gate-*.md' -print -quit)"
+
+# Rebuild protected inventories after promotion, then create the independent
+# direct-network proof against the unchanged accepted graph.
 python3 "$CONTROL_DIR/scripts/swift_test_inventory.py" \
   --git-ref "$BASE_SHA" --repo-root "$ROOT_DIR" --output "$TEST_INVENTORY"
+python3 "$CONTROL_DIR/scripts/validate_swiftpm_tests.py" \
+  --expected "$LIVE_SWIFT_INVENTORY" \
+  --transcript "$LIVE_SWIFT_TRANSCRIPT"
+rm -rf "$SATISFACTION_DIR"
+mkdir -p "$SATISFACTION_DIR"
+python3 "$CONTROL_DIR/scripts/live_satisfaction_oracle.py" \
+  --commit "$SHA" \
+  --output-dir "$SATISFACTION_DIR" \
+  --expected-graph-digest "$GRAPH_DIGEST" | tee "$OUTPUT_DIR/live-satisfaction.log"
+SATISFACTION_COUNT="$(find "$SATISFACTION_DIR" -type f -name 'gate-*.md' | wc -l | tr -d ' ')"
+[[ "$SATISFACTION_COUNT" == "1" ]] || {
+  echo "The protected direct live satisfaction oracle did not produce exactly one proof artifact." >&2
+  exit 1
+}
+SATISFACTION_ARTIFACT="$(find "$SATISFACTION_DIR" -type f -name 'gate-*.md' -print -quit)"
 
 MID_PR_HEAD="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .head.sha)"
 [[ "$MID_PR_HEAD" == "$SHA" ]] || {
@@ -360,6 +469,9 @@ FINAL_UI_SCREENSHOT="$FINAL_UI_SCREENSHOT" RUNNING_APP_PROOF="$RUNNING_APP_PROOF
 INITIAL_RUNNING_APP_PROOF="$INITIAL_RUNNING_APP_PROOF" RECORDED_WINDOW_ID="$RECORDED_WINDOW_ID" \
 MEDIA_PROOF="$MEDIA_PROOF" \
 TEST_INVENTORY="$TEST_INVENTORY" \
+LIVE_SWIFT_TRANSCRIPT="$LIVE_SWIFT_TRANSCRIPT" LIVE_SWIFT_ARTIFACT="$LIVE_SWIFT_ARTIFACT" \
+LIVE_SWIFT_INVENTORY="$LIVE_SWIFT_INVENTORY" GRAPH_SNAPSHOT="$GRAPH_SNAPSHOT" \
+LIVE_SERVICE_IDENTITY="$LIVE_SERVICE_IDENTITY" LIVE_SERVICE_IDENTITY_AFTER="$LIVE_SERVICE_IDENTITY_AFTER" \
 APP_BUNDLE="$APP_BUNDLE" PID="$PID" SOL_URL="$SOL_URL" HOSTED_URL="$HOSTED_URL" ACTUAL_UI_TEST="$UI_TEST" \
 BINDING_TEST_IDENTIFIER="$BINDING_UI_TEST" FINAL_ATTACH_TEST="$BINDING_UI_TEST" FINAL_ACCESSIBILITY_IDENTIFIER="$FINAL_ACCESSIBILITY_IDENTIFIER" \
 APP_IDENTITY="$APP_IDENTITY" \
@@ -401,6 +513,12 @@ artifacts = {
     "media_proof": os.environ["MEDIA_PROOF"],
     "protected_test_inventory": os.environ["TEST_INVENTORY"],
     "satisfaction_artifact": os.environ["SATISFACTION_ARTIFACT"],
+    "live_swift_transcript": os.environ["LIVE_SWIFT_TRANSCRIPT"],
+    "live_swift_artifact": os.environ["LIVE_SWIFT_ARTIFACT"],
+    "live_swift_inventory": os.environ["LIVE_SWIFT_INVENTORY"],
+    "accepted_graph_snapshot": os.environ["GRAPH_SNAPSHOT"],
+    "live_service_identity": os.environ["LIVE_SERVICE_IDENTITY"],
+    "live_service_identity_after": os.environ["LIVE_SERVICE_IDENTITY_AFTER"],
     "app_bundle": os.environ["APP_BUNDLE"],
     "app_identity": os.environ["APP_IDENTITY"],
 }
@@ -424,6 +542,7 @@ manifest = {
     "observed_visible_result": observed,
     "app_bundle": os.environ["APP_BUNDLE"],
     "app_pid": int(os.environ["PID"]),
+    "proposal_processes_terminated": True,
     "recording_window_id": int(os.environ["RECORDED_WINDOW_ID"]),
     "codesign_verified": True,
     "app_cdhash": os.environ["CDHASH"],
@@ -435,7 +554,8 @@ manifest = {
         {"name": "macos-ui-tests", "status": "PASS", "test_identifier": os.environ["ACTUAL_UI_TEST"]},
         {"name": "window-bound-ui-evidence", "status": "PASS", "test_identifier": os.environ["BINDING_TEST_IDENTIFIER"]},
         {"name": "final-relaunch-ui-test", "status": "PASS", "test_identifier": os.environ["FINAL_ATTACH_TEST"]},
-        {"name": "live-satisfaction-gate", "status": "PASS"},
+        {"name": "live-satisfaction-swift-test", "status": "PASS"},
+        {"name": "live-satisfaction-oracle", "status": "PASS"},
         {"name": "trusted-hosted-verification", "status": "PASS"},
     ],
     "sol_review": {"status": "PASS", "check_run_url": os.environ["SOL_URL"]},

@@ -25,7 +25,7 @@ if ! "$CONTROL_DIR/script/hosted_verification_gate.sh"; then
   echo "Fresh hosted evidence verification failed; merge authority was not evaluated." >&2
   exit 1
 fi
-MANIFEST="$ROOT_DIR/.local-artifacts/release-gate/$SHA/manifest.json"
+MANIFEST="$HOME/.local/share/harness-release-evidence/Harness/$SHA/manifest.json"
 python3 "$CONTROL_DIR/scripts/release_gate.py" validate --manifest "$MANIFEST"
 gh api "repos/$REPO/commits/$SHA/statuses?per_page=100" | \
   python3 "$CONTROL_DIR/scripts/verify_merge_authority.py" --marker "pr:$PR_NUMBER binding:${BINDING:0:24}"
