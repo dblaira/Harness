@@ -7,14 +7,15 @@
   "critical_flow": [
     "Open an agent-owned pull request whose exact commit contains Adam's literal acceptance contract.",
     "Run hosted macOS tests, SwiftLint, changed-line Periphery, and Swift/Python CodeQL; require every test in the protected-base Swift inventory and revalidate raw evidence in fresh protected-base jobs.",
+    "Require every protected-base OntologyKit test to emit an explicit pass, reject every unexpected omission or skip, and reserve only the named live satisfaction test for signed handoff.",
     "Run GPT-5.6 Sol through Adam's ChatGPT/Codex subscription against an inert read-only base/head bundle.",
     "Use Adam's trusted local identity to verify exact hosted workflow paths, events, runs, creators, and CodeQL jobs before aggregating hosted evidence.",
     "Reject ordinary product pull requests that modify protected gate tests, linter configurations, TCC preflight, generic UI evidence helpers, workflows, validators, or installed control inputs; those changes require the separately reviewed infrastructure bootstrap path.",
     "Protect the live Fuseki/Ollama satisfaction test itself and reject any proposal that replaces its oracle before signed handoff execution.",
     "Build and verify the signed app, bind the contracted accessibility identifier to one unambiguous candidate window, execute the exact named XCUITest while recording only that window, and require a direct accepted-only Fuseki preflight plus a separate production-route Ollama synthesis proof.",
-    "Run every proposal-owned feature XCUITest beside an immutable wrapper that requires a process-specific accessibility marker for the expected PID, scopes the contracted final identifier and screenshot to the single XCUITest window matching verified CGWindow bounds, and rejects cross-window evidence; rerun both after normal launch.",
+    "Run every proposal-owned feature XCUITest beside an immutable wrapper, require both tests to attach pixel-identical evidence from the process-specific PID and verified CGWindow bounds, reject the generic wrapper as a product contract test, and rerun both after normal launch.",
     "Require protected main and the installed harness-merge command to rerun the underlying hosted evidence verifier immediately before authority evaluation; reject missing, spoofed, cached-only, stale, or failed evidence; permit merge commits only and attest the final tree.",
-    "Require the Stop hook to reject task completion when any repository change lacks current handoff evidence, including BLOCKED-prefixed messages that also claim done, verified, passing, or working behavior."
+    "Require the Stop hook to reject task completion when any repository change lacks current handoff evidence, including BLOCKED-prefixed success claims, dependency timeouts, and operational validation failures."
   ],
   "required_proof": [
     "Adversarial gate tests with a protected-base inventory proving every expected Swift test executed, fresh-job macOS evidence validation, deterministic Swift tests, SwiftLint, changed-line Periphery, and CodeQL.",

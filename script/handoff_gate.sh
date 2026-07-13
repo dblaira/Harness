@@ -39,8 +39,10 @@ UNIT_RESULT_BUNDLE="$OUTPUT_DIR/HarnessUnitTests.xcresult"
 UI_RESULT_BUNDLE="$OUTPUT_DIR/HarnessRequirementUI.xcresult"
 FINAL_UI_RESULT_BUNDLE="$OUTPUT_DIR/HarnessFinalRelaunchUI.xcresult"
 SCREENSHOT="$OUTPUT_DIR/visible-result.png"
+FEATURE_SCREENSHOT="$OUTPUT_DIR/feature-visible-result.png"
 FINAL_SCREENSHOT="$OUTPUT_DIR/final-relaunch-visible-result.png"
 FINAL_UI_SCREENSHOT="$OUTPUT_DIR/final-relaunch-xcuitest-result.png"
+FINAL_FEATURE_SCREENSHOT="$OUTPUT_DIR/final-feature-visible-result.png"
 RUNNING_APP_PROOF="$OUTPUT_DIR/final-running-app.json"
 INITIAL_RUNNING_APP_PROOF="$OUTPUT_DIR/recorded-running-app.json"
 MEDIA_PROOF="$OUTPUT_DIR/media-proof.json"
@@ -53,7 +55,7 @@ CANDIDATE_DERIVED_DATA="$ROOT_DIR/.build/HarnessCandidateDerivedData"
 UNIT_DERIVED_DATA="$ROOT_DIR/.build/HarnessUnitDerivedData"
 mkdir -p "$OUTPUT_DIR"
 rm -rf "$UNIT_RESULT_BUNDLE" "$UI_RESULT_BUNDLE" "$FINAL_UI_RESULT_BUNDLE" "$SATISFACTION_DIR"
-rm -f "$SCREENSHOT" "$FINAL_SCREENSHOT" "$FINAL_UI_SCREENSHOT" "$RUNNING_APP_PROOF" "$INITIAL_RUNNING_APP_PROOF" "$MEDIA_PROOF" "$TEST_INVENTORY" "$VIDEO"
+rm -f "$SCREENSHOT" "$FEATURE_SCREENSHOT" "$FINAL_SCREENSHOT" "$FINAL_UI_SCREENSHOT" "$FINAL_FEATURE_SCREENSHOT" "$RUNNING_APP_PROOF" "$INITIAL_RUNNING_APP_PROOF" "$MEDIA_PROOF" "$TEST_INVENTORY" "$VIDEO"
 mkdir -p "$SATISFACTION_DIR"
 
 REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
@@ -102,6 +104,10 @@ fi
   exit 1
 }
 UI_TEST_ARGS=("-only-testing:$BINDING_UI_TEST")
+[[ "$CONTRACT_UI_TEST" == "INFRASTRUCTURE_ONLY" || "$UI_TEST" != "$BINDING_UI_TEST" ]] || {
+  echo "A product contract must name its feature XCUITest; the immutable binding test runs beside it." >&2
+  exit 1
+}
 if [[ "$UI_TEST" != "$BINDING_UI_TEST" ]]; then
   UI_TEST_ARGS+=("-only-testing:$UI_TEST")
 fi
@@ -230,13 +236,16 @@ wait "$VIDEO_PID"
 trap - EXIT
 if [[ "$UI_TEST" != "$BINDING_UI_TEST" ]]; then
   python3 "$CONTROL_DIR/scripts/validate_xcresult.py" \
-    --xcresult "$UI_RESULT_BUNDLE" --required-test "$UI_TEST" --result-only
+    --xcresult "$UI_RESULT_BUNDLE" --required-test "$UI_TEST" --max-duration 55 --screenshot-output "$FEATURE_SCREENSHOT"
 fi
 python3 "$CONTROL_DIR/scripts/validate_xcresult.py" \
   --xcresult "$UI_RESULT_BUNDLE" \
   --required-test "$BINDING_UI_TEST" \
   --max-duration 55 \
   --screenshot-output "$SCREENSHOT"
+if [[ "$UI_TEST" != "$BINDING_UI_TEST" ]]; then
+  cmp -s "$FEATURE_SCREENSHOT" "$SCREENSHOT" || { echo "Feature-test screenshot is not the immutable PID/window-bound evidence surface." >&2; exit 1; }
+fi
 [[ -s "$VIDEO" && -s "$SCREENSHOT" ]] || {
   echo "The exact visible requirement did not produce both video and screenshot evidence." >&2
   exit 1
@@ -289,13 +298,16 @@ python3 "$CONTROL_DIR/scripts/run_with_timeout.py" --seconds 110 -- xcodebuild t
   "${UI_TEST_ARGS[@]}"
 if [[ "$UI_TEST" != "$BINDING_UI_TEST" ]]; then
   python3 "$CONTROL_DIR/scripts/validate_xcresult.py" \
-    --xcresult "$FINAL_UI_RESULT_BUNDLE" --required-test "$UI_TEST" --result-only
+    --xcresult "$FINAL_UI_RESULT_BUNDLE" --required-test "$UI_TEST" --max-duration 55 --screenshot-output "$FINAL_FEATURE_SCREENSHOT"
 fi
 python3 "$CONTROL_DIR/scripts/validate_xcresult.py" \
   --xcresult "$FINAL_UI_RESULT_BUNDLE" \
   --required-test "$BINDING_UI_TEST" \
   --max-duration 55 \
   --screenshot-output "$FINAL_UI_SCREENSHOT"
+if [[ "$UI_TEST" != "$BINDING_UI_TEST" ]]; then
+  cmp -s "$FINAL_FEATURE_SCREENSHOT" "$FINAL_UI_SCREENSHOT" || { echo "Final feature-test screenshot is not the immutable PID/window-bound evidence surface." >&2; exit 1; }
+fi
 [[ -s "$FINAL_UI_SCREENSHOT" ]] || {
   echo "The final normal relaunch did not produce visible requirement evidence." >&2
   exit 1

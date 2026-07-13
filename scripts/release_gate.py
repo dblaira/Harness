@@ -156,14 +156,14 @@ def sha256_path(path: Path) -> str:
 
 
 def run_command(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        args,
-        cwd=cwd,
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=30,
-    )
+    try:
+        return subprocess.run(
+            args, cwd=cwd, text=True, capture_output=True, check=False, timeout=30,
+        )
+    except subprocess.TimeoutExpired as error:
+        return subprocess.CompletedProcess(
+            args, 124, error.stdout or "", f"verification dependency timed out: {' '.join(args)}",
+        )
 
 
 def validate_png(path: Path) -> list[str]:
@@ -451,10 +451,10 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
     if unit_xcresult and unit_xcresult.is_dir() and test_inventory and test_inventory.is_file():
         errors.extend(validate_xcresult(unit_xcresult, required_bundle="HarnessTests", required_test_list=test_inventory))
     if ui_xcresult and ui_xcresult.is_dir() and screenshot and screenshot.is_file():
-        errors.extend(validate_xcresult(ui_xcresult, required_test=ui_test_identifier, result_only=True))
+        errors.extend(validate_xcresult(ui_xcresult, required_test=ui_test_identifier, expected_screenshot=screenshot))
         errors.extend(validate_xcresult(ui_xcresult, required_test=binding_ui_test_identifier, expected_screenshot=screenshot))
     if final_ui_xcresult and final_ui_xcresult.is_dir() and final_ui_screenshot and final_ui_screenshot.is_file():
-        errors.extend(validate_xcresult(final_ui_xcresult, required_test=ui_test_identifier, result_only=True))
+        errors.extend(validate_xcresult(final_ui_xcresult, required_test=ui_test_identifier, expected_screenshot=final_ui_screenshot))
         errors.extend(validate_xcresult(final_ui_xcresult, required_test=final_attach_test, expected_screenshot=final_ui_screenshot))
     if satisfaction and satisfaction.is_file():
         text = satisfaction.read_text(encoding="utf-8", errors="replace")
@@ -631,7 +631,10 @@ def hook(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
     if explicit_blocked_exit(message) or explicit_user_question(message):
         return {"continue": True}
     path = manifest_path(root)
-    errors = validate_manifest(root, path) if path.exists() else ["handoff manifest is absent"]
+    try:
+        errors = validate_manifest(root, path) if path.exists() else ["handoff manifest is absent"]
+    except Exception as error:  # Fail closed on every operational validator failure.
+        errors = [f"handoff validation could not complete: {error}"]
     if not errors:
         return {"continue": True}
     changed = ", ".join(changes[:6])

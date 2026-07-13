@@ -47,6 +47,7 @@ PROTECTED_CONTROL_PATHS = (
     "scripts/validate_periphery_report.py",
     "scripts/validate_sol_review.py",
     "scripts/validate_xcresult.py",
+    "scripts/validate_swiftpm_tests.py",
     "scripts/verify_app_identity.py",
     "scripts/verify_codex_auth.py",
     "scripts/verify_codex_runtime.py",

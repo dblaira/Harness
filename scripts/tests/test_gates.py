@@ -29,6 +29,7 @@ import validate_media  # noqa: E402
 import validate_gate_test_report  # noqa: E402
 import validate_sol_review  # noqa: E402
 import validate_xcresult  # noqa: E402
+import validate_swiftpm_tests  # noqa: E402
 import verify_release_tree  # noqa: E402
 import verify_codex_auth  # noqa: E402
 import verify_codex_runtime  # noqa: E402
@@ -183,6 +184,29 @@ Signed app, provider authentication, and accepted graph remain distinct.
             [],
         )
 
+    def test_governance_or_proof_only_change_remains_stale(self) -> None:
+        base = {
+            **COMMIT_BOUND_FIXTURE,
+            "requirement_verbatim": "Exact requirement",
+            "visible_surface": "Harness window",
+            "expected_visible_result": "Exact result",
+            "ui_test_identifier": "HarnessUITests/AnswerTests/testVisibleAnswer",
+            "final_accessibility_identifier": "VisibleAnswer",
+        }
+        for field, value in (
+            ("risk_and_authority_boundaries", "Different but sufficiently long risk prose."),
+            ("threat_model", "Different but sufficiently long threat prose."),
+            ("required_proof", ["Different screenshot and test proof."]),
+            ("critical_flow", ["Different execution flow statement."]),
+        ):
+            proposed = {**base, field: value}
+            self.assertIn(
+                "acceptance contract is stale and unchanged from the protected base",
+                validate_acceptance_contract.freshness_errors(
+                    proposed, base, {".github/acceptance-contract.json"}, is_bootstrap=False
+                ),
+            )
+
     def test_placeholders_in_every_commit_bound_field_are_rejected(self) -> None:
         for field, value in (
             ("critical_flow", ["TODO replace this critical flow"]),
@@ -325,6 +349,34 @@ class ReleaseGateTests(unittest.TestCase):
             self.assertIn("repository unreadable", result["reason"])
         finally:
             release_gate.guarded_changes = original
+
+    def test_subprocess_timeout_returns_explicit_failure(self) -> None:
+        original = subprocess.run
+        subprocess.run = lambda *args, **kwargs: (_ for _ in ()).throw(
+            subprocess.TimeoutExpired(cmd=args[0], timeout=30)
+        )
+        try:
+            result = release_gate.run_command("stalled-verifier")
+            self.assertEqual(result.returncode, 124)
+            self.assertIn("timed out", result.stderr)
+        finally:
+            subprocess.run = original
+
+    def test_hook_explicitly_blocks_operational_validation_exception(self) -> None:
+        original_changes = release_gate.guarded_changes
+        original_manifest = release_gate.manifest_path
+        original_validate = release_gate.validate_manifest
+        release_gate.guarded_changes = lambda _root: ["Sources/Harness/Feature.swift"]
+        release_gate.manifest_path = lambda _root: Path(__file__)
+        release_gate.validate_manifest = lambda *_args: (_ for _ in ()).throw(TimeoutError("stalled"))
+        try:
+            result = release_gate.hook(Path("."), {"last_assistant_message": "Implemented."})
+            self.assertEqual(result["decision"], "block")
+            self.assertIn("could not complete", result["reason"])
+        finally:
+            release_gate.guarded_changes = original_changes
+            release_gate.manifest_path = original_manifest
+            release_gate.validate_manifest = original_validate
 
     def test_package_manifests_are_product_changes(self) -> None:
         original = release_gate.changed_files
@@ -476,6 +528,29 @@ class XCResultGateTests(unittest.TestCase):
         let example = "func inventedTest()"
         '''
         self.assertEqual(swift_test_inventory.identifiers(source), {"multilineTest"})
+
+
+class SwiftPMInventoryTests(unittest.TestCase):
+    def test_missing_or_skipped_protected_test_fails(self) -> None:
+        expected = ["OntologyKitTests.first()", "OntologyKitTests.second()"]
+        errors = validate_swiftpm_tests.validate(
+            expected,
+            "✔ Test first() passed after 0.1 seconds.\n↷ Test second() skipped",
+            set(),
+        )
+        self.assertTrue(any("omitted" in error for error in errors))
+        self.assertTrue(any("skipped" in error for error in errors))
+
+    def test_only_live_satisfaction_test_may_be_absent(self) -> None:
+        expected = ["OntologyKitTests.first()", "OntologyKitTests.satisfactionGate()"]
+        self.assertEqual(
+            validate_swiftpm_tests.validate(
+                expected,
+                "✔ Test first() passed after 0.1 seconds.",
+                {"OntologyKitTests.satisfactionGate"},
+            ),
+            [],
+        )
 
 
 class CommitStatusTests(unittest.TestCase):
@@ -979,6 +1054,11 @@ class GateStructureTests(unittest.TestCase):
         self.assertIn("FINAL_PR_HEAD=", handoff)
         self.assertLess(handoff.index("preflight_tcc.swift"), handoff.index("xcodegen generate"))
 
+    def test_installed_stop_hook_has_validation_budget_and_replaces_stale_entry(self) -> None:
+        installer = (Path.cwd() / "script/install_local_gate_controls.sh").read_text(encoding="utf-8")
+        self.assertIn('"timeout": 300', installer)
+        self.assertIn("hooks[:] = [entry for entry in hooks", installer)
+
     def test_merge_revalidates_hosted_evidence_immediately_before_status_authority(self) -> None:
         merger = (Path.cwd() / "script/merge_verified_pr.sh").read_text(encoding="utf-8")
         rerun = merger.index('if ! "$CONTROL_DIR/script/hosted_verification_gate.sh"')
@@ -1008,7 +1088,8 @@ class GateStructureTests(unittest.TestCase):
         self.assertGreaterEqual(handoff.count("HARNESS_EXPECTED_WINDOW_BOUNDS="), 3)
         self.assertIn('UI_TEST_ARGS=("-only-testing:$BINDING_UI_TEST")', handoff)
         self.assertIn('UI_TEST_ARGS+=("-only-testing:$UI_TEST")', handoff)
-        self.assertIn('--required-test "$UI_TEST" --result-only', handoff)
+        self.assertIn('--required-test "$UI_TEST" --max-duration 55 --screenshot-output "$FEATURE_SCREENSHOT"', handoff)
+        self.assertIn('cmp -s "$FEATURE_SCREENSHOT" "$SCREENSHOT"', handoff)
         self.assertIn('--required-test "$BINDING_UI_TEST"', handoff)
 
     def test_live_satisfaction_oracle_change_is_rejected_before_handoff_execution(self) -> None:

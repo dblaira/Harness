@@ -33,6 +33,7 @@ install -m 0755 \
   scripts/validate_acceptance_contract.py \
   scripts/validate_sol_review.py \
   scripts/validate_xcresult.py \
+  scripts/validate_swiftpm_tests.py \
   scripts/verify_codex_auth.py \
   scripts/verify_codex_runtime.py \
   scripts/verify_control_bundle.py \
@@ -110,9 +111,10 @@ except FileNotFoundError:
     data = {}
 hooks = data.setdefault("hooks", {}).setdefault("Stop", [])
 command = str(Path.home() / ".local/bin/harness-stop-gate")
-entry = {"hooks": [{"type": "command", "command": command, "timeout": 30}]}
-if entry not in hooks:
-    hooks.append(entry)
+hooks[:] = [entry for entry in hooks if not any(
+    hook.get("command") == command for hook in entry.get("hooks", []) if isinstance(hook, dict)
+)]
+hooks.append({"hooks": [{"type": "command", "command": command, "timeout": 300}]})
 path.parent.mkdir(parents=True, exist_ok=True)
 path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 PY

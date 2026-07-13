@@ -40,6 +40,13 @@ CONTRACT_KEYS = frozenset({
     *COMMIT_BOUND_LIST_FIELDS,
     *COMMIT_BOUND_TEXT_FIELDS,
 })
+REQUIREMENT_FRESHNESS_FIELDS = (
+    "requirement_verbatim",
+    "visible_surface",
+    "expected_visible_result",
+    "ui_test_identifier",
+    "final_accessibility_identifier",
+)
 UI_TEST_PATTERN = re.compile(r"^HarnessUITests/[A-Za-z_][A-Za-z0-9_]*/test[A-Za-z0-9_]+$")
 ACCESSIBILITY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._:/-]{0,127}$")
 BOOTSTRAP_REPO = "dblaira/Harness"
@@ -122,7 +129,7 @@ def freshness_errors(
     if base_contract is None:
         if not is_bootstrap:
             errors.append("protected-base acceptance contract is required for freshness validation")
-    elif acceptance_fields(base_contract) == acceptance_fields(contract):
+    elif all(base_contract.get(key) == contract.get(key) for key in REQUIREMENT_FRESHNESS_FIELDS):
         errors.append("acceptance contract is stale and unchanged from the protected base")
     if ".github/acceptance-contract.json" not in changed_paths and not is_bootstrap:
         errors.append("every guarded pull request must commit a fresh acceptance contract")

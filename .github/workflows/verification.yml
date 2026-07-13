@@ -130,10 +130,19 @@ jobs:
           --base "$BASE_SHA" --output "$RUNNER_TEMP/periphery.json"
           --config "$RUNNER_TEMP/gate-controls/periphery.yml"
       - name: OntologyKit deterministic tests
-        working-directory: proposed
-        run: >-
-          swift test --package-path Packages/OntologyKit
-          --skip satisfactionGateAdamRealQuestionGetsCompleteAnswer
+        run: |
+          swift test --package-path trusted-base/Packages/OntologyKit list > "$RUNNER_TEMP/ontology-protected-list.txt"
+          python3 trusted-base/scripts/validate_swiftpm_tests.py \
+            --listing "$RUNNER_TEMP/ontology-protected-list.txt" \
+            --write-inventory "$RUNNER_TEMP/ontology-protected-inventory.json"
+          set -o pipefail
+          swift test --package-path proposed/Packages/OntologyKit \
+            --skip satisfactionGateAdamRealQuestionGetsCompleteAnswer \
+            2>&1 | tee "$RUNNER_TEMP/ontology-tests.log"
+          python3 trusted-base/scripts/validate_swiftpm_tests.py \
+            --expected "$RUNNER_TEMP/ontology-protected-inventory.json" \
+            --transcript "$RUNNER_TEMP/ontology-tests.log" \
+            --allow-missing OntologyKitTests.satisfactionGateAdamRealQuestionGetsCompleteAnswer
       - name: Require live satisfaction proof in signed handoff
         run: |
           echo 'The live Ollama + Fuseki satisfaction test is intentionally excluded here.'
@@ -167,6 +176,8 @@ jobs:
             ${{ runner.temp }}/HarnessTests.xcresult
             ${{ runner.temp }}/periphery.json
             ${{ runner.temp }}/protected-test-inventory.json
+            ${{ runner.temp }}/ontology-protected-inventory.json
+            ${{ runner.temp }}/ontology-tests.log
   validate-macos-evidence:
     name: Fresh protected macOS evidence verifier
     if: always() && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
@@ -183,6 +194,14 @@ jobs:
           path: ${{ runner.temp }}/macos-evidence
       - name: Validate raw evidence with fresh protected controls
         run: |
+          swift test --package-path Packages/OntologyKit list > "$RUNNER_TEMP/fresh-ontology-list.txt"
+          python3 scripts/validate_swiftpm_tests.py \
+            --listing "$RUNNER_TEMP/fresh-ontology-list.txt" \
+            --write-inventory "$RUNNER_TEMP/fresh-ontology-inventory.json"
+          python3 scripts/validate_swiftpm_tests.py \
+            --expected "$RUNNER_TEMP/fresh-ontology-inventory.json" \
+            --transcript "$RUNNER_TEMP/macos-evidence/ontology-tests.log" \
+            --allow-missing OntologyKitTests.satisfactionGateAdamRealQuestionGetsCompleteAnswer
           python3 scripts/swift_test_inventory.py \
             --source-root Tests/HarnessTests \
             --output "$RUNNER_TEMP/fresh-protected-test-inventory.json"
