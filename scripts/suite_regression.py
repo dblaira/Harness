@@ -444,7 +444,7 @@ def main() -> int:
                 app_result["status"] = "FAIL"
                 print(f"CHECKOUT_FAIL: {app['id']}: {error}", flush=True)
 
-        for app, app_result in zip(apps, result["apps"], strict=True):
+        for app, app_result in zip(apps, result["apps"]):
             worktree = prepared_worktrees.get(app["id"])
             if worktree is None:
                 continue
