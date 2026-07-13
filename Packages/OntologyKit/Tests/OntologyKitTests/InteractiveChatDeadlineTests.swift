@@ -89,14 +89,41 @@ private actor CountingToolBackend: ToolCapableModelBackend {
     }
 }
 
+private actor BackendStartProbe {
+    private var started = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func markStarted() {
+        started = true
+        let pending = waiters
+        waiters.removeAll()
+        for waiter in pending {
+            waiter.resume()
+        }
+    }
+
+    func waitUntilStarted() async {
+        if started { return }
+        await withCheckedContinuation { continuation in
+            if started {
+                continuation.resume()
+            } else {
+                waiters.append(continuation)
+            }
+        }
+    }
+}
+
 private struct CooperativeStalledBackend: ModelBackendAdapter {
     let metadata = BackendMetadata(
         backend: .grok,
         modelName: "stalled-fixture",
         invocationMethod: "unit-test"
     )
+    let startProbe: BackendStartProbe
 
     func execute(packet: ModelPacket) async throws -> BackendResponse {
+        await startProbe.markStarted()
         try await Task.sleep(for: .seconds(30))
         return BackendResponse(text: "Late answer", tokenCount: nil, cost: nil)
     }
@@ -156,21 +183,22 @@ private struct CooperativeStalledBackend: ModelBackendAdapter {
 
 @Test func responseDeadlineReturnsAcceptedEvidenceWhenProviderStalls() async throws {
     let monitor = ToolLoopMonitor(terminatesSubprocesses: false)
+    let startProbe = BackendStartProbe()
     let clock = ContinuousClock()
-    let deadline = clock.now.advanced(by: .milliseconds(40))
+    let deadline = clock.now.advanced(by: .seconds(5))
     let started = clock.now
 
     let run = Task {
         try await deadlineService().createRun(
             prompt: "What approved information confirms capturing value?",
             ontology: .empty,
-            backend: CooperativeStalledBackend(),
+            backend: CooperativeStalledBackend(startProbe: startProbe),
             toolLoop: monitor,
             interactiveDeadline: deadline
         )
     }
 
-    try await Task.sleep(for: .milliseconds(60))
+    await startProbe.waitUntilStarted()
     monitor.exceedDeadline()
     let detail = try await run.value
     let elapsed = started.duration(to: clock.now)

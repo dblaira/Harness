@@ -1,0 +1,350 @@
+{
+  "schema_version": 1,
+  "suite_name": "Understood Suite Regression Patrol",
+  "apps": [
+    {
+      "id": "harness",
+      "name": "Harness",
+      "repo_url": "git@github.com:dblaira/Harness.git",
+      "branch": "main",
+      "local_candidates": [
+        "/Users/adamblair/Developer/GitHub/Harness",
+        "/Users/blairstudio/Developer/GitHub/Harness"
+      ],
+      "checks": [
+        {
+          "id": "python-venv",
+          "name": "Harness isolated Python environment",
+          "kind": "command",
+          "profiles": ["smoke", "full", "stress"],
+          "command": ["python3", "-m", "venv", ".regression-venv"],
+          "timeout_seconds": 300
+        },
+        {
+          "id": "python-dependencies",
+          "name": "Harness pinned SHACL test dependencies",
+          "kind": "command",
+          "profiles": ["smoke", "full", "stress"],
+          "command": [
+            ".regression-venv/bin/python", "-m", "pip", "install",
+            "--disable-pip-version-check", "--no-input",
+            "-r", "{bundle_root}/Regression/python-requirements.txt"
+          ],
+          "timeout_seconds": 900
+        },
+        {
+          "id": "python-contracts",
+          "name": "Harness Python contract tests",
+          "kind": "command",
+          "profiles": ["smoke", "full", "stress"],
+          "command": [".regression-venv/bin/python", "-m", "unittest", "discover", "-s", "scripts", "-p", "test_*.py"],
+          "timeout_seconds": 300,
+          "stressable": true
+        },
+        {
+          "id": "ontologykit-deterministic",
+          "name": "Harness deterministic Swift tests",
+          "kind": "command",
+          "profiles": ["smoke", "full", "stress"],
+          "command": ["swift", "test", "--package-path", "Packages/OntologyKit", "--skip", "satisfactionGateAdamRealQuestionGetsCompleteAnswer"],
+          "timeout_seconds": 1200,
+          "stressable": true
+        },
+        {
+          "id": "project-generation",
+          "name": "Harness Xcode project generation",
+          "kind": "command",
+          "profiles": ["full", "stress"],
+          "command": ["xcodegen", "generate"],
+          "timeout_seconds": 300
+        },
+        {
+          "id": "macos-unit-tests",
+          "name": "Harness macOS app unit tests",
+          "kind": "command",
+          "profiles": ["full", "stress"],
+          "command": [
+            "xcodebuild", "test",
+            "-project", "Harness.xcodeproj",
+            "-scheme", "Harness",
+            "-destination", "platform=macOS",
+            "-derivedDataPath", ".regression-derived-data",
+            "-only-testing:HarnessTests"
+          ],
+          "timeout_seconds": 1800,
+          "stressable": true
+        },
+        {
+          "id": "live-satisfaction",
+          "name": "Harness live accepted-graph answer",
+          "kind": "command",
+          "profiles": ["full", "stress"],
+          "command": [
+            "swift", "test",
+            "--package-path", "Packages/OntologyKit",
+            "--filter", "satisfactionGateAdamRealQuestionGetsCompleteAnswer"
+          ],
+          "environment": {
+            "HARNESS_REQUIRE_LIVE_SATISFACTION": "1",
+            "HARNESS_FUSEKI_SPARQL_ENDPOINT": "http://100.111.154.126:3030/understood/sparql",
+            "HARNESS_SATISFACTION_OUTPUT_DIR": "{artifact_dir}/live-satisfaction"
+          },
+          "timeout_seconds": 600
+        }
+      ]
+    },
+    {
+      "id": "understood-app",
+      "name": "Understood web/exporter",
+      "repo_url": "git@github.com:dblaira/understood-app.git",
+      "branch": "main",
+      "local_candidates": [
+        "/Users/adamblair/Developer/GitHub/understood-app",
+        "/Users/blairstudio/Developer/GitHub/understood-app"
+      ],
+      "checks": [
+        {
+          "id": "node-install",
+          "name": "Understood exporter locked dependency install",
+          "kind": "command",
+          "profiles": ["smoke", "full", "stress"],
+          "command": ["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
+          "timeout_seconds": 1200
+        },
+        {
+          "id": "harness-capture-coverage",
+          "name": "Understood exporter Harness capture coverage",
+          "kind": "path_glob",
+          "profiles": ["smoke", "full", "stress"],
+          "pattern": "tests/harness-capture*.test.ts",
+          "coverage_requirement": "The exported Harness capture contract must have a committed automated test on main."
+        }
+      ]
+    },
+    {
+      "id": "understood",
+      "name": "Understood",
+      "repo_url": "git@github.com:dblaira/Understood.git",
+      "branch": "main",
+      "local_candidates": [
+        "/Users/adamblair/Developer/GitHub/Understood",
+        "/Users/blairstudio/Developer/GitHub/Understood"
+      ],
+      "checks": [
+        {
+          "id": "simulator-build",
+          "name": "Understood native iOS build",
+          "kind": "command",
+          "profiles": ["smoke", "full", "stress"],
+          "command": ["./scripts/agent-ios-check.sh"],
+          "timeout_seconds": 1800,
+          "stressable": true
+        },
+        {
+          "id": "visible-regression-target",
+          "name": "Understood visible regression test target",
+          "kind": "path_glob",
+          "profiles": ["smoke", "full", "stress"],
+          "pattern": "**/*UITests/**/*.swift",
+          "coverage_requirement": "A native UI test must execute Adam's capture flow and prove it survives relaunch."
+        }
+      ]
+    },
+    {
+      "id": "recall",
+      "name": "Re_Call",
+      "repo_url": "git@github.com:dblaira/Re_Call.git",
+      "branch": "main",
+      "local_candidates": [
+        "/Users/adamblair/Developer/GitHub/Re_Call",
+        "/Users/blairstudio/Developer/GitHub/Re_Call"
+      ],
+      "checks": [
+        {
+          "id": "node-install",
+          "name": "Re_Call locked dependency install",
+          "kind": "command",
+          "profiles": ["smoke", "full", "stress"],
+          "command": ["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
+          "timeout_seconds": 900
+        },
+        {
+          "id": "engine-tests",
+          "name": "Re_Call recommendation engine tests",
+          "kind": "command",
+          "profiles": ["smoke", "full", "stress"],
+          "command": ["npm", "test", "--silent"],
+          "timeout_seconds": 900,
+          "stressable": true
+        },
+        {
+          "id": "native-ios-tests",
+          "name": "Re_Call native iOS regression tests",
+          "kind": "command",
+          "profiles": ["full", "stress"],
+          "command": ["./scripts/agent-ios-check.sh"],
+          "timeout_seconds": 1800,
+          "stressable": true
+        }
+      ]
+    },
+    {
+      "id": "savy",
+      "name": "SAVY",
+      "repo_url": "git@github.com:dblaira/SAVY-iOS.git",
+      "branch": "main",
+      "local_candidates": [
+        "/Users/adamblair/Developer/GitHub/SAVY-iOS",
+        "/Users/blairstudio/Developer/GitHub/SAVY-iOS"
+      ],
+      "checks": [
+        {
+          "id": "gateway-install",
+          "name": "SAVY gateway locked dependency install",
+          "kind": "command",
+          "profiles": ["smoke", "full", "stress"],
+          "working_directory": "gateway",
+          "command": ["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
+          "timeout_seconds": 900
+        },
+        {
+          "id": "engine-install",
+          "name": "SAVY graph-engine dependency install",
+          "kind": "command",
+          "profiles": ["smoke", "full", "stress"],
+          "working_directory": "packages/suite-graph-engine",
+          "command": ["npm", "install", "--ignore-scripts", "--no-audit", "--no-fund"],
+          "timeout_seconds": 900
+        },
+        {
+          "id": "gateway-tests",
+          "name": "SAVY gateway and RDF engine tests",
+          "kind": "command",
+          "profiles": ["smoke", "full", "stress"],
+          "working_directory": "gateway",
+          "command": ["npm", "test"],
+          "timeout_seconds": 1200,
+          "stressable": true
+        },
+        {
+          "id": "project-generation",
+          "name": "SAVY Xcode project generation",
+          "kind": "command",
+          "profiles": ["full", "stress"],
+          "command": ["xcodegen", "generate"],
+          "timeout_seconds": 300
+        },
+        {
+          "id": "native-ios-tests",
+          "name": "SAVY native iOS unit and visible-flow tests",
+          "kind": "command",
+          "profiles": ["full", "stress"],
+          "command": [
+            "xcodebuild", "test",
+            "-project", "SAVY.xcodeproj",
+            "-scheme", "SAVY",
+            "-destination", "platform=iOS Simulator,name=iPhone 17",
+            "-derivedDataPath", ".regression-derived-data"
+          ],
+          "timeout_seconds": 2400,
+          "stressable": true
+        }
+      ]
+    },
+    {
+      "id": "news-calm",
+      "name": "News Calm",
+      "repo_url": "git@github.com:dblaira/Boring_News.git",
+      "branch": "main",
+      "local_candidates": [
+        "/Users/adamblair/Developer/boring-news",
+        "/Users/adamblair/Developer/Developer/boring-news",
+        "/Users/blairstudio/Developer/boring-news"
+      ],
+      "checks": [
+        {
+          "id": "node-install",
+          "name": "News Calm locked dependency install",
+          "kind": "command",
+          "profiles": ["smoke", "full", "stress"],
+          "command": ["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
+          "timeout_seconds": 900
+        },
+        {
+          "id": "node-tests",
+          "name": "News Calm backend and rewrite tests",
+          "kind": "command",
+          "profiles": ["smoke", "full", "stress"],
+          "command": ["npm", "test"],
+          "timeout_seconds": 1200,
+          "stressable": true
+        },
+        {
+          "id": "typecheck",
+          "name": "News Calm TypeScript contract",
+          "kind": "command",
+          "profiles": ["smoke", "full", "stress"],
+          "command": ["npm", "run", "typecheck"],
+          "timeout_seconds": 900,
+          "stressable": true
+        },
+        {
+          "id": "swift-package-tests",
+          "name": "News Calm Swift API-client tests",
+          "kind": "command",
+          "profiles": ["smoke", "full", "stress"],
+          "command": ["swift", "test", "--package-path", "app/BoringNewsKit"],
+          "timeout_seconds": 1200,
+          "stressable": true
+        },
+        {
+          "id": "live-delete-route",
+          "name": "News Calm deployed DELETE route contract",
+          "kind": "command",
+          "profiles": ["smoke", "full", "stress"],
+          "command": [
+            "python3",
+            "{bundle_root}/scripts/regression_probes/news_calm_delete_route.py",
+            "--project", "app/project.yml"
+          ],
+          "timeout_seconds": 60,
+          "stressable": true
+        },
+        {
+          "id": "delete-visible-result",
+          "name": "News Calm visible delete result",
+          "kind": "text_contains",
+          "profiles": ["smoke", "full", "stress"],
+          "path": "app/BoringNewsUITests/DeviceScreenshotTests.swift",
+          "needle": "card.wait(for: \\.exists, toEqual: false",
+          "coverage_requirement": "The UI test must tap Delete and prove the card is gone, not only reveal the button."
+        },
+        {
+          "id": "project-generation",
+          "name": "News Calm Xcode project generation",
+          "kind": "command",
+          "profiles": ["full", "stress"],
+          "working_directory": "app",
+          "command": ["xcodegen", "generate", "--spec", "project.yml"],
+          "timeout_seconds": 300
+        },
+        {
+          "id": "visible-delete-test",
+          "name": "News Calm disposable visible delete flow",
+          "kind": "command",
+          "profiles": ["full", "stress"],
+          "command": [
+            "xcodebuild", "test",
+            "-project", "app/BoringNews.xcodeproj",
+            "-scheme", "BoringNews",
+            "-destination", "platform=iOS Simulator,name=iPhone 17",
+            "-derivedDataPath", ".regression-derived-data",
+            "-only-testing:BoringNewsUITests/DeviceScreenshotTests/testDeleteRemovesRegressionFixture"
+          ],
+          "timeout_seconds": 1800,
+          "stressable": true
+        }
+      ]
+    }
+  ]
+}
