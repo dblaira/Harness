@@ -24,6 +24,7 @@ install -m 0755 script/sol_review_gate.sh script/handoff_gate.sh script/hosted_v
 install -m 0755 \
   scripts/release_gate.py \
   scripts/evidence_binding.py \
+  scripts/live_satisfaction_oracle.py \
   scripts/select_pull_request.py \
   scripts/sanitize_review_bundle.py \
   scripts/swift_test_inventory.py \

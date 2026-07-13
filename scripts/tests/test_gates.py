@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import contextlib
+import io
 import json
 import os
 import shutil
@@ -15,6 +17,7 @@ SCRIPTS = Path(os.environ.get("HARNESS_SCRIPTS_UNDER_TEST", Path(__file__).resol
 sys.path.insert(0, str(SCRIPTS))
 
 import release_gate  # noqa: E402
+import live_satisfaction_oracle  # noqa: E402
 import evidence_binding  # noqa: E402
 import periphery_changed_gate  # noqa: E402
 import resolve_harness_repo  # noqa: E402
@@ -49,6 +52,9 @@ COMMIT_BOUND_FIXTURE = {
 
 
 class AcceptanceContractTests(unittest.TestCase):
+    def test_documented_product_contract_example_is_schema_valid(self) -> None:
+        example = json.loads((Path.cwd() / "Docs/verification/acceptance-contract.example.json").read_text())
+        self.assertEqual(validate_acceptance_contract.validate_handoff_contract(example), [])
     def test_placeholders_fail_closed(self) -> None:
         body = "\n".join(f"## {name}\n\nREPLACE_WITH_VALUE" for name in validate_acceptance_contract.REQUIRED_SECTIONS)
         self.assertTrue(validate_acceptance_contract.validate(body))
@@ -540,6 +546,28 @@ class SwiftPMInventoryTests(unittest.TestCase):
         )
         self.assertTrue(any("omitted" in error for error in errors))
         self.assertTrue(any("skipped" in error for error in errors))
+
+
+class ProtectedLiveOracleTests(unittest.TestCase):
+    def test_oracle_uses_direct_network_results_and_writes_required_markers(self) -> None:
+        original = live_satisfaction_oracle.request
+        live_satisfaction_oracle.request = lambda url, data=None, content_type=None: (
+            {"results": {"bindings": [{"s": {"value": "accepted"}}]}}
+            if "3030" in url else
+            ({"models": [{"name": "fixture"}]} if url.endswith("/api/tags") else {"response": "A substantive synthesis that keeps accepted authority separate from supporting context."})
+        )
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                original_argv = sys.argv
+                sys.argv = ["oracle", "--commit", "a" * 40, "--output-dir", directory]
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(live_satisfaction_oracle.main(), 0)
+                text = next(Path(directory).glob("gate-*.md")).read_text()
+                self.assertIn("- Fuseki graph health: healthy", text)
+                self.assertIn("- Direct accepted-only Fuseki preflight hits: 1", text)
+        finally:
+            live_satisfaction_oracle.request = original
+            sys.argv = original_argv
 
     def test_only_live_satisfaction_test_may_be_absent(self) -> None:
         expected = ["OntologyKitTests.first()", "OntologyKitTests.satisfactionGate()"]
@@ -1096,7 +1124,10 @@ class GateStructureTests(unittest.TestCase):
         handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
         protected = "Packages/OntologyKit/Tests/OntologyKitTests/SatisfactionGateLiveTests.swift"
         self.assertIn(protected, verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
-        self.assertLess(handoff.index("hosted_verification_gate.sh"), handoff.index("HARNESS_REQUIRE_LIVE_SATISFACTION=1"))
+        self.assertLess(handoff.index("hosted_verification_gate.sh"), handoff.index("live_satisfaction_oracle.py"))
+        oracle = (Path.cwd() / "scripts/live_satisfaction_oracle.py").read_text(encoding="utf-8")
+        for proposal_type in ("FusekiGraphHealthChecker", "HarnessRunService", "AgentRunnerBackendAdapter"):
+            self.assertNotIn(proposal_type, oracle)
 
     def test_protected_test_inventory_is_rebuilt_after_proposal_execution(self) -> None:
         handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")

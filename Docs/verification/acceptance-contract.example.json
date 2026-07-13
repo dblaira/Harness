@@ -1,6 +1,15 @@
 {
-  "requirement_verbatim": "Paste Adam's exact requirement here.",
-  "visible_surface": "Name the exact window, screen, or device.",
-  "expected_visible_result": "State what must be visibly true at the end of the flow.",
-  "ui_test_identifier": "HarnessUITests/ExactRequirementTests/testExactVisibleRequirement"
+  "requirement_verbatim": "Show the accepted result in the signed Harness window.",
+  "visible_surface": "The signed Harness macOS app on Adam's Mac.",
+  "expected_visible_result": "The accepted result is visible in the verified app window.",
+  "ui_test_identifier": "HarnessUITests/AcceptedResultTests/testAcceptedResultAppears",
+  "final_accessibility_identifier": "AcceptedResult",
+  "critical_flow": [
+    "Launch the signed app and execute the exact visible requirement."
+  ],
+  "required_proof": [
+    "Capture passing tests, a screenshot, and exact-window video evidence."
+  ],
+  "risk_and_authority_boundaries": "Signing, visible UI evidence, provider output, and accepted graph authority remain distinct.",
+  "threat_model": "The authenticated operator is trusted; proposal code cannot issue release authority."
 }

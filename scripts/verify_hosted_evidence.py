@@ -30,6 +30,7 @@ PROTECTED_CONTROL_PATHS = (
     "scripts/periphery_changed_gate.py",
     "scripts/preflight_tcc.swift",
     "scripts/lint_changed_swift.sh",
+    "scripts/live_satisfaction_oracle.py",
     "scripts/release_gate.py",
     "scripts/render_sol_review.py",
     "scripts/require_latest_status.py",

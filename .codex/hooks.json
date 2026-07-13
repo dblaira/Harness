@@ -6,7 +6,7 @@
           {
             "type": "command",
             "command": "/Users/adamblair/.local/bin/harness-stop-gate",
-            "timeout": 30
+            "timeout": 300
           }
         ]
       }

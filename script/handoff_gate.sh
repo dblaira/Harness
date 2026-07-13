@@ -163,12 +163,8 @@ python3 "$CONTROL_DIR/scripts/validate_xcresult.py" \
   --required-bundle HarnessTests \
   --required-test-list "$TEST_INVENTORY"
 
-HARNESS_REQUIRE_LIVE_SATISFACTION=1 \
-HARNESS_SATISFACTION_OUTPUT_DIR="$SATISFACTION_DIR" \
-HARNESS_SATISFACTION_COMMIT="$SHA" \
-swift test \
-  --package-path Packages/OntologyKit \
-  --filter satisfactionGateAdamRealQuestionGetsCompleteAnswer | tee "$OUTPUT_DIR/live-satisfaction.log"
+python3 "$CONTROL_DIR/scripts/live_satisfaction_oracle.py" \
+  --commit "$SHA" --output-dir "$SATISFACTION_DIR" | tee "$OUTPUT_DIR/live-satisfaction.log"
 SATISFACTION_COUNT="$(find "$SATISFACTION_DIR" -type f -name 'gate-*.md' | wc -l | tr -d ' ')"
 [[ "$SATISFACTION_COUNT" == "1" ]] || {
   echo "The required live satisfaction test did not produce exactly one proof artifact." >&2
