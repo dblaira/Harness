@@ -69,10 +69,12 @@
             "-scheme", "Harness",
             "-destination", "platform=macOS",
             "-derivedDataPath", ".regression-derived-data",
+            "CODE_SIGNING_ALLOWED=NO",
+            "ARCHS=arm64",
+            "ONLY_ACTIVE_ARCH=YES",
             "-only-testing:HarnessTests"
           ],
-          "timeout_seconds": 1800,
-          "stressable": true
+          "timeout_seconds": 600
         },
         {
           "id": "live-satisfaction",
@@ -227,16 +229,16 @@
           "stressable": true
         },
         {
-          "id": "project-generation",
-          "name": "SAVY Xcode project generation",
-          "kind": "command",
+          "id": "committed-project",
+          "name": "SAVY committed Xcode project",
+          "kind": "path_glob",
           "profiles": ["full", "stress"],
-          "command": ["xcodegen", "generate"],
-          "timeout_seconds": 300
+          "pattern": "SAVY.xcodeproj/project.pbxproj",
+          "coverage_requirement": "SAVY must commit the Xcode project used by the Mac Studio patrol."
         },
         {
-          "id": "native-ios-tests",
-          "name": "SAVY native iOS unit and visible-flow tests",
+          "id": "native-ios-unit-tests",
+          "name": "SAVY native iOS unit tests",
           "kind": "command",
           "profiles": ["full", "stress"],
           "command": [
@@ -244,10 +246,32 @@
             "-project", "SAVY.xcodeproj",
             "-scheme", "SAVY",
             "-destination", "platform=iOS Simulator,name=iPhone 17",
-            "-derivedDataPath", ".regression-derived-data"
+            "-derivedDataPath", ".regression-derived-data",
+            "PRODUCT_NAME=$(TARGET_NAME)",
+            "ARCHS=arm64",
+            "ONLY_ACTIVE_ARCH=YES",
+            "-only-testing:SAVYTests"
           ],
-          "timeout_seconds": 2400,
+          "timeout_seconds": 1200,
           "stressable": true
+        },
+        {
+          "id": "native-visible-flow-tests",
+          "name": "SAVY native visible-flow tests",
+          "kind": "command",
+          "profiles": ["full", "stress"],
+          "command": [
+            "xcodebuild", "test",
+            "-project", "SAVY.xcodeproj",
+            "-scheme", "SAVY",
+            "-destination", "platform=iOS Simulator,name=iPhone 17",
+            "-derivedDataPath", ".regression-derived-data",
+            "PRODUCT_NAME=$(TARGET_NAME)",
+            "ARCHS=arm64",
+            "ONLY_ACTIVE_ARCH=YES",
+            "-only-testing:SAVYUITests/SAVYReminderActionCalendarUITests"
+          ],
+          "timeout_seconds": 600
         }
       ]
     },
@@ -320,13 +344,12 @@
           "coverage_requirement": "The UI test must tap Delete and prove the card is gone, not only reveal the button."
         },
         {
-          "id": "project-generation",
-          "name": "News Calm Xcode project generation",
-          "kind": "command",
+          "id": "committed-project",
+          "name": "News Calm committed Xcode project",
+          "kind": "path_glob",
           "profiles": ["full", "stress"],
-          "working_directory": "app",
-          "command": ["xcodegen", "generate", "--spec", "project.yml"],
-          "timeout_seconds": 300
+          "pattern": "app/BoringNews.xcodeproj/project.pbxproj",
+          "coverage_requirement": "News Calm must commit the Xcode project used by the Mac Studio patrol."
         },
         {
           "id": "visible-delete-test",
@@ -339,6 +362,9 @@
             "-scheme", "BoringNews",
             "-destination", "platform=iOS Simulator,name=iPhone 17",
             "-derivedDataPath", ".regression-derived-data",
+            "PRODUCT_NAME=$(TARGET_NAME)",
+            "ARCHS=arm64",
+            "ONLY_ACTIVE_ARCH=YES",
             "-only-testing:BoringNewsUITests/DeviceScreenshotTests/testDeleteRemovesRegressionFixture"
           ],
           "timeout_seconds": 1800,

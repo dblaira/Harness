@@ -384,7 +384,8 @@ def main() -> int:
         print(f"FAIL: invalid suite regression manifest: {error}", file=sys.stderr)
         return 1
     selected_ids = set(filter(None, (args.apps or "").split(",")))
-    apps = [app for app in manifest["apps"] if not selected_ids or app["id"] in selected_ids]
+    all_apps = manifest["apps"]
+    apps = [app for app in all_apps if not selected_ids or app["id"] in selected_ids]
     missing_ids = selected_ids - {app["id"] for app in apps}
     if missing_ids:
         print(f"FAIL: unknown app ids: {', '.join(sorted(missing_ids))}", file=sys.stderr)
@@ -423,9 +424,14 @@ def main() -> int:
         # such as SAVY's Understood exporter shape, are literal sibling paths.
         # Keeping every exact worktree present preserves that contract without
         # reading or altering Adam's active repositories.
+        selected_results: dict[str, dict[str, Any]] = {}
         for app in apps:
             app_result: dict[str, Any] = {"id": app["id"], "name": app["name"], "status": "FAIL", "checks": []}
             result["apps"].append(app_result)
+            selected_results[app["id"]] = app_result
+
+        for app in all_apps:
+            app_result = selected_results.get(app["id"])
             app_artifacts = report_dir / app["id"]
             print(f"CHECKOUT_BEGIN: {app['name']}", flush=True)
             try:
@@ -437,11 +443,13 @@ def main() -> int:
                     args.no_fetch,
                 )
                 prepared_worktrees[app["id"]] = worktree
-                app_result["commit"] = sha
+                if app_result is not None:
+                    app_result["commit"] = sha
                 print(f"CHECKOUT_PASS: {app['name']} {sha}", flush=True)
             except Exception as error:
-                app_result["error"] = str(error)
-                app_result["status"] = "FAIL"
+                if app_result is not None:
+                    app_result["error"] = str(error)
+                    app_result["status"] = "FAIL"
                 print(f"CHECKOUT_FAIL: {app['id']}: {error}", flush=True)
 
         for app, app_result in zip(apps, result["apps"]):
