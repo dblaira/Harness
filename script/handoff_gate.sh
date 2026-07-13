@@ -36,17 +36,38 @@ done
 SHA="$(git rev-parse HEAD)"
 OUTPUT_DIR="$HOME/.local/share/harness-release-evidence/Harness/$SHA"
 CANDIDATE_OUTPUT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/harness-candidate-evidence.${SHA}.XXXXXX")"
+PROPOSAL_PARENT="$(mktemp -d "${TMPDIR:-/tmp}/harness-proposal.${SHA}.XXXXXX")"
+PROPOSAL_REPO="$PROPOSAL_PARENT/repo"
+PROPOSAL_HOME="$PROPOSAL_PARENT/home"
+PROPOSAL_TMP="$PROPOSAL_PARENT/tmp"
+ISOLATED_ONTOLOGY_ROOT="$PROPOSAL_PARENT/ontology"
+LIVE_ONTOLOGY_ROOT="$HOME/Library/Mobile Documents/com~apple~CloudDocs/Documents/Main/Ontology"
+PROCESS_REPORTS_DIR="$CANDIDATE_OUTPUT_DIR/process-reports"
+PROPOSAL_PROCESS_REPORT="$CANDIDATE_OUTPUT_DIR/proposal-processes.json"
+UI_STAGING_ROOT="$HOME/.local/share/harness-ui-testing/current"
+READONLY_PROXY_READY="$PROPOSAL_PARENT/readonly-proxy.json"
+READONLY_PROXY_PID=""
+RECORDED_WRAPPER_PID=""
+FINAL_WRAPPER_PID=""
+OPERATOR_HOME="$HOME"
+rm -rf "$UI_STAGING_ROOT"
+mkdir -p "$PROPOSAL_HOME" "$PROPOSAL_TMP" "$ISOLATED_ONTOLOGY_ROOT" "$PROCESS_REPORTS_DIR" "$UI_STAGING_ROOT/tmp"
+git worktree add --detach "$PROPOSAL_REPO" "$SHA" >/dev/null
+for authority_directory in accepted candidates; do
+  if [[ -d "$LIVE_ONTOLOGY_ROOT/$authority_directory" ]]; then
+    /bin/cp -R "$LIVE_ONTOLOGY_ROOT/$authority_directory" "$ISOLATED_ONTOLOGY_ROOT/"
+  else
+    mkdir -p "$ISOLATED_ONTOLOGY_ROOT/$authority_directory"
+  fi
+done
 
 set_artifact_paths() {
   local directory="$1"
-  UNIT_RESULT_BUNDLE="$directory/HarnessUnitTests.xcresult"
-  UI_RESULT_BUNDLE="$directory/HarnessRequirementUI.xcresult"
-  FINAL_UI_RESULT_BUNDLE="$directory/HarnessFinalRelaunchUI.xcresult"
+  UNIT_TEST_TRANSCRIPT="$directory/HarnessUnitTests.log"
   SCREENSHOT="$directory/visible-result.png"
-  FEATURE_SCREENSHOT="$directory/feature-visible-result.png"
   FINAL_SCREENSHOT="$directory/final-relaunch-visible-result.png"
-  FINAL_UI_SCREENSHOT="$directory/final-relaunch-xcuitest-result.png"
-  FINAL_FEATURE_SCREENSHOT="$directory/final-feature-visible-result.png"
+  UI_AUTOMATION_PROOF="$directory/ui-automation.json"
+  FINAL_UI_AUTOMATION_PROOF="$directory/final-ui-automation.json"
   RUNNING_APP_PROOF="$directory/final-running-app.json"
   INITIAL_RUNNING_APP_PROOF="$directory/recorded-running-app.json"
   MEDIA_PROOF="$directory/media-proof.json"
@@ -59,32 +80,141 @@ set_artifact_paths() {
 }
 
 set_artifact_paths "$CANDIDATE_OUTPUT_DIR"
-APP_BUNDLE="$ROOT_DIR/.build/HarnessCandidateDerivedData/Build/Products/Debug/Harness.app"
-CANDIDATE_DERIVED_DATA="$ROOT_DIR/.build/HarnessCandidateDerivedData"
-UNIT_DERIVED_DATA="$ROOT_DIR/.build/HarnessUnitDerivedData"
+CANDIDATE_DERIVED_DATA="$UI_STAGING_ROOT/DerivedData"
+BUILT_APP_BUNDLE="$CANDIDATE_DERIVED_DATA/Build/Products/Debug/Harness.app"
+APP_BUNDLE="$OUTPUT_DIR/Harness.app"
+UNIT_DERIVED_DATA="$PROPOSAL_REPO/.build/HarnessUnitDerivedData"
+PROPOSAL_LIVE_SWIFT_DIR="$PROPOSAL_TMP/live-satisfaction-swift"
 GRAPH_SNAPSHOT="$OUTPUT_DIR/accepted-graph-before.json"
+GRAPH_SNAPSHOT_AFTER="$OUTPUT_DIR/accepted-graph-after.json"
+AUTHORITY_SNAPSHOT_BEFORE="$OUTPUT_DIR/authority-before.json"
+AUTHORITY_SNAPSHOT_AFTER="$OUTPUT_DIR/authority-after.json"
 LIVE_SWIFT_INVENTORY="$OUTPUT_DIR/live-satisfaction-swift-inventory.json"
 LIVE_SERVICE_IDENTITY="$OUTPUT_DIR/live-service-identity.txt"
 mkdir -p "$OUTPUT_DIR" "$CANDIDATE_OUTPUT_DIR"
 rm -rf "$OUTPUT_DIR"
 mkdir -p "$OUTPUT_DIR"
-rm -rf "$UNIT_RESULT_BUNDLE" "$UI_RESULT_BUNDLE" "$FINAL_UI_RESULT_BUNDLE" "$SATISFACTION_DIR"
-rm -f "$SCREENSHOT" "$FEATURE_SCREENSHOT" "$FINAL_SCREENSHOT" "$FINAL_UI_SCREENSHOT" "$FINAL_FEATURE_SCREENSHOT" "$RUNNING_APP_PROOF" "$INITIAL_RUNNING_APP_PROOF" "$MEDIA_PROOF" "$TEST_INVENTORY" "$VIDEO"
+rm -rf "$SATISFACTION_DIR"
+rm -f "$SCREENSHOT" "$FINAL_SCREENSHOT" "$UI_AUTOMATION_PROOF" "$FINAL_UI_AUTOMATION_PROOF" "$RUNNING_APP_PROOF" "$INITIAL_RUNNING_APP_PROOF" "$MEDIA_PROOF" "$TEST_INVENTORY" "$VIDEO"
 mkdir -p "$SATISFACTION_DIR"
 
-PROPOSAL_SANDBOX="(version 1)(allow default)(deny file-write* (subpath \"$CONTROL_DIR\") (subpath \"$OUTPUT_DIR\") (subpath \"$HOME/.local/bin\") (literal \"$HOME/.codex/hooks.json\"))"
+cleanup_handoff() {
+  pkill -x Harness >/dev/null 2>&1 || true
+  for wrapper in "$RECORDED_WRAPPER_PID" "$FINAL_WRAPPER_PID"; do
+    [[ -z "$wrapper" ]] || wait "$wrapper" 2>/dev/null || true
+  done
+  if [[ -n "$READONLY_PROXY_PID" ]] && kill -0 "$READONLY_PROXY_PID" 2>/dev/null; then
+    kill -TERM "$READONLY_PROXY_PID" 2>/dev/null || true
+    wait "$READONLY_PROXY_PID" 2>/dev/null || true
+  fi
+  git -C "$ROOT_DIR" worktree remove --force "$PROPOSAL_REPO" >/dev/null 2>&1 || true
+  rm -rf "$UI_STAGING_ROOT"
+  rm -rf "$PROPOSAL_PARENT" "$CANDIDATE_OUTPUT_DIR"
+}
+trap cleanup_handoff EXIT
+
+python3 "$CONTROL_DIR/scripts/readonly_sparql_proxy.py" \
+  --ready-file "$READONLY_PROXY_READY" >"$PROPOSAL_PARENT/readonly-proxy.log" 2>&1 &
+READONLY_PROXY_PID=$!
+for _ in {1..40}; do
+  [[ -s "$READONLY_PROXY_READY" ]] && break
+  sleep 0.1
+done
+[[ -s "$READONLY_PROXY_READY" ]] || { echo "The protected read-only SPARQL proxy did not start." >&2; exit 1; }
+READONLY_PROXY_PORT="$(jq -r .port "$READONLY_PROXY_READY")"
+[[ "$READONLY_PROXY_PORT" =~ ^[0-9]+$ ]] || { echo "The protected query proxy returned an invalid port." >&2; exit 1; }
+
+PROPOSAL_SANDBOX="(version 1)(allow default)(deny network-outbound)(allow network-outbound (remote ip \"localhost:$READONLY_PROXY_PORT\"))(allow network-outbound (remote ip \"localhost:11434\"))(deny appleevent-send)(deny mach-lookup (global-name \"com.apple.pboard\"))(deny file-read* (subpath \"$HOME\") (subpath \"$LIVE_ONTOLOGY_ROOT\"))(allow file-read* (subpath \"$APP_BUNDLE\"))(deny file-write* (subpath \"$CONTROL_DIR\") (subpath \"$ROOT_DIR\") (subpath \"$OUTPUT_DIR\") (subpath \"$CANDIDATE_OUTPUT_DIR\") (subpath \"$PROCESS_REPORTS_DIR\") (subpath \"$UI_STAGING_ROOT\") (subpath \"$HOME/.local/bin\") (subpath \"$LIVE_ONTOLOGY_ROOT\") (literal \"$HOME/.codex/hooks.json\"))(deny process-exec (literal \"/usr/bin/security\") (literal \"/usr/bin/ssh\") (literal \"/usr/bin/osascript\") (literal \"/usr/bin/open\") (literal \"/usr/bin/automator\") (literal \"/usr/bin/shortcuts\") (literal \"/usr/sbin/screencapture\") (literal \"/usr/bin/pbcopy\") (literal \"/usr/bin/pbpaste\") (literal \"/opt/homebrew/bin/gh\") (literal \"/usr/local/bin/gh\"))"
+
 proposal_exec() {
-  /usr/bin/sandbox-exec -p "$PROPOSAL_SANDBOX" -- "$@"
+  local report label
+  label="${PROPOSAL_LABEL:-foreground}"
+  report="$(mktemp "$PROCESS_REPORTS_DIR/${label}.XXXXXX.json")"
+  (
+    cd "$PROPOSAL_REPO"
+    python3 "$CONTROL_DIR/scripts/run_with_timeout.py" \
+      --seconds "${PROPOSAL_TIMEOUT:-1200}" --label "$label" --process-report "$report" -- \
+      /usr/bin/env -i HOME="$PROPOSAL_HOME" TMPDIR="$PROPOSAL_TMP" \
+      PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+      USER="${USER:-adamblair}" LOGNAME="${LOGNAME:-adamblair}" LANG="en_US.UTF-8" \
+      HARNESS_REPO_ROOT="$PROPOSAL_REPO" HARNESS_ONTOLOGY_ROOT="$ISOLATED_ONTOLOGY_ROOT" \
+      ONTOLOGY_ACCEPTED_DIR="$ISOLATED_ONTOLOGY_ROOT/accepted" \
+      HARNESS_FUSEKI_SPARQL_ENDPOINT="http://localhost:$READONLY_PROXY_PORT/understood/query" \
+      HARNESS_FUSEKI_DATA_ENDPOINT="http://localhost:$READONLY_PROXY_PORT/updates-denied" \
+      HARNESS_EXPECTED_PID="${HARNESS_EXPECTED_PID:-}" \
+      HARNESS_EXPECTED_WINDOW_BOUNDS="${HARNESS_EXPECTED_WINDOW_BOUNDS:-}" \
+      HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER="${HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER:-}" \
+      HARNESS_ATTACH_EXISTING_APP="${HARNESS_ATTACH_EXISTING_APP:-}" \
+      HARNESS_REQUIRE_LIVE_SATISFACTION="${HARNESS_REQUIRE_LIVE_SATISFACTION:-}" \
+      HARNESS_SATISFACTION_COMMIT="${HARNESS_SATISFACTION_COMMIT:-}" \
+      HARNESS_SATISFACTION_OUTPUT_DIR="${HARNESS_SATISFACTION_OUTPUT_DIR:-}" \
+      /usr/bin/sandbox-exec -p "$PROPOSAL_SANDBOX" -- "$@"
+  )
+}
+
+# Xcode cannot run inside an outer sandbox because SwiftPM invokes its own
+# nested sandbox. These commands are limited to compiler/signing orchestration
+# over protected build inputs. Candidate application and unit-test code is only
+# executed by proposal_exec or proposal_start. Signed UI actions are executed by
+# the immutable installed accessibility driver, never by proposal test code.
+trusted_exec() {
+  local report label
+  label="${TRUSTED_LABEL:-trusted-orchestrator}"
+  report="$(mktemp "$PROCESS_REPORTS_DIR/${label}.XXXXXX.json")"
+  (
+    cd "$PROPOSAL_REPO"
+    python3 "$CONTROL_DIR/scripts/run_with_timeout.py" \
+      --seconds "${TRUSTED_TIMEOUT:-1200}" --label "$label" --process-report "$report" -- \
+      /usr/bin/env -i HOME="$OPERATOR_HOME" TMPDIR="$UI_STAGING_ROOT/tmp" \
+      PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+      USER="${USER:-adamblair}" LOGNAME="${LOGNAME:-adamblair}" LANG="en_US.UTF-8" \
+      HARNESS_REPO_ROOT="$PROPOSAL_REPO" HARNESS_ONTOLOGY_ROOT="$ISOLATED_ONTOLOGY_ROOT" \
+      ONTOLOGY_ACCEPTED_DIR="$ISOLATED_ONTOLOGY_ROOT/accepted" \
+      HARNESS_EXPECTED_PID="${HARNESS_EXPECTED_PID:-}" \
+      HARNESS_EXPECTED_WINDOW_BOUNDS="${HARNESS_EXPECTED_WINDOW_BOUNDS:-}" \
+      HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER="${HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER:-}" \
+      HARNESS_ATTACH_EXISTING_APP="${HARNESS_ATTACH_EXISTING_APP:-}" \
+      "$@"
+  )
+}
+
+proposal_start() {
+  local report ready
+  report="$(mktemp "$PROCESS_REPORTS_DIR/background.XXXXXX.json")"
+  ready="$(mktemp "$PROCESS_REPORTS_DIR/background-ready.XXXXXX.json")"
+  (
+    cd "$PROPOSAL_REPO"
+    python3 "$CONTROL_DIR/scripts/run_with_timeout.py" \
+      --seconds 600 --label background-app --termination-ok \
+      --process-report "$report" --ready-file "$ready" -- \
+      /usr/bin/env -i HOME="$PROPOSAL_HOME" TMPDIR="$PROPOSAL_TMP" \
+      PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+      USER="${USER:-adamblair}" LOGNAME="${LOGNAME:-adamblair}" LANG="en_US.UTF-8" \
+      HARNESS_REPO_ROOT="$PROPOSAL_REPO" HARNESS_ONTOLOGY_ROOT="$ISOLATED_ONTOLOGY_ROOT" \
+      ONTOLOGY_ACCEPTED_DIR="$ISOLATED_ONTOLOGY_ROOT/accepted" \
+      HARNESS_FUSEKI_SPARQL_ENDPOINT="http://localhost:$READONLY_PROXY_PORT/understood/query" \
+      HARNESS_FUSEKI_DATA_ENDPOINT="http://localhost:$READONLY_PROXY_PORT/updates-denied" \
+      HARNESS_EXPECTED_PID="${HARNESS_EXPECTED_PID:-}" \
+      HARNESS_EXPECTED_WINDOW_BOUNDS="${HARNESS_EXPECTED_WINDOW_BOUNDS:-}" \
+      HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER="${HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER:-}" \
+      HARNESS_ATTACH_EXISTING_APP="${HARNESS_ATTACH_EXISTING_APP:-}" \
+      /usr/bin/sandbox-exec -p "$PROPOSAL_SANDBOX" -- "$@"
+  )
 }
 
 terminate_proposal_processes() {
   pkill -x Harness >/dev/null 2>&1 || true
   for _ in {1..20}; do
-    [[ -z "$(pgrep -x Harness || true)" ]] && return 0
+    [[ -z "$(pgrep -x Harness || true)" ]] && break
     sleep 0.25
   done
-  echo "A proposal Harness process survived final evidence capture." >&2
-  return 1
+  [[ -z "$(pgrep -x Harness || true)" ]] || {
+    echo "A proposal Harness process survived final evidence capture." >&2
+    return 1
+  }
+  for wrapper in "$RECORDED_WRAPPER_PID" "$FINAL_WRAPPER_PID"; do
+    [[ -z "$wrapper" ]] || wait "$wrapper" 2>/dev/null || true
+  done
 }
 
 REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
@@ -111,35 +241,12 @@ EVIDENCE_BINDING="$(python3 "$CONTROL_DIR/scripts/evidence_binding.py" \
   --repo "$REPO" --pr-number "$PR_NUMBER" --base-sha "$BASE_SHA" --head-sha "$SHA" \
   --contract-digest "$CONTRACT_DIGEST")"
 
-CONTRACT_UI_TEST="$(CONTRACT="$CONTRACT" /usr/bin/python3 - <<'PY'
-import json, os
-from pathlib import Path
-print(json.loads(Path(os.environ["CONTRACT"]).read_text(encoding="utf-8"))["ui_test_identifier"])
-PY
-)"
 FINAL_ACCESSIBILITY_IDENTIFIER="$(CONTRACT="$CONTRACT" /usr/bin/python3 - <<'PY'
 import json, os
 from pathlib import Path
 print(json.loads(Path(os.environ["CONTRACT"]).read_text(encoding="utf-8"))["final_accessibility_identifier"])
 PY
 )"
-UI_TEST="$CONTRACT_UI_TEST"
-BINDING_UI_TEST="HarnessUITests/HarnessCriticalFlowTests/testSignedAppLaunchesItsVisibleDelegationSurface"
-if [[ "$CONTRACT_UI_TEST" == "INFRASTRUCTURE_ONLY" ]]; then
-  UI_TEST="$BINDING_UI_TEST"
-fi
-[[ "$UI_TEST" == HarnessUITests/*/test* ]] || {
-  echo "The handoff test must be one exact HarnessUITests method." >&2
-  exit 1
-}
-UI_TEST_ARGS=("-only-testing:$BINDING_UI_TEST")
-[[ "$CONTRACT_UI_TEST" == "INFRASTRUCTURE_ONLY" || "$UI_TEST" != "$BINDING_UI_TEST" ]] || {
-  echo "A product contract must name its feature XCUITest; the immutable binding test runs beside it." >&2
-  exit 1
-}
-if [[ "$UI_TEST" != "$BINDING_UI_TEST" ]]; then
-  UI_TEST_ARGS+=("-only-testing:$UI_TEST")
-fi
 
 "$CONTROL_DIR/script/hosted_verification_gate.sh"
 HOSTED_URL="$(gh api "repos/$REPO/commits/$SHA/status" | python3 "$CONTROL_DIR/scripts/require_latest_status.py" --context 'Trusted hosted verification' --description-contains "pr:$PR_NUMBER binding:${EVIDENCE_BINDING:0:24}")" || {
@@ -157,6 +264,8 @@ python3 "$CONTROL_DIR/scripts/swift_test_inventory.py" \
   --git-ref "$BASE_SHA" --repo-root "$ROOT_DIR" --output "$TEST_INVENTORY"
 python3 "$CONTROL_DIR/scripts/live_satisfaction_oracle.py" \
   --snapshot-output "$GRAPH_SNAPSHOT"
+python3 "$CONTROL_DIR/scripts/snapshot_authority_state.py" \
+  --ontology-root "$LIVE_ONTOLOGY_ROOT" --output "$AUTHORITY_SNAPSHOT_BEFORE"
 GRAPH_DIGEST="$(jq -r .sha256 "$GRAPH_SNAPSHOT")"
 [[ "$GRAPH_DIGEST" =~ ^[0-9a-f]{64}$ ]] || {
   echo "The protected accepted-graph snapshot is invalid." >&2
@@ -183,19 +292,92 @@ Path(os.environ["LIVE_SWIFT_INVENTORY"]).write_text(
 )
 PY
 
-HARNESS_EXPECTED_PID=0 HARNESS_EXPECTED_WINDOW_BOUNDS=UNSET HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER=UNSET HARNESS_ATTACH_EXISTING_APP=0 proposal_exec xcodegen generate
-proposal_exec xcodebuild build-for-testing \
+if PROPOSAL_LABEL=expected-denial proposal_exec /usr/bin/curl -fsS https://api.github.com >/dev/null 2>&1; then
+  echo "The proposal sandbox unexpectedly reached the public network." >&2
+  exit 1
+fi
+if PROPOSAL_LABEL=expected-denial proposal_exec /opt/homebrew/bin/gh auth status >/dev/null 2>&1; then
+  echo "The proposal sandbox unexpectedly executed GitHub credential tooling." >&2
+  exit 1
+fi
+if PROPOSAL_LABEL=expected-denial proposal_exec /usr/bin/security find-identity -v >/dev/null 2>&1; then
+  echo "The proposal sandbox unexpectedly read the signing keychain." >&2
+  exit 1
+fi
+if PROPOSAL_LABEL=expected-denial proposal_exec /bin/ls "$HOME/Documents" >/dev/null 2>&1; then
+  echo "The proposal sandbox unexpectedly read Adam's operator home." >&2
+  exit 1
+fi
+if PROPOSAL_LABEL=expected-denial proposal_exec /usr/bin/osascript -e 'return 1' >/dev/null 2>&1; then
+  echo "The proposal sandbox unexpectedly acquired Apple Events control." >&2
+  exit 1
+fi
+if PROPOSAL_LABEL=expected-denial proposal_exec /usr/bin/pbpaste >/dev/null 2>&1; then
+  echo "The proposal sandbox unexpectedly read the operator clipboard." >&2
+  exit 1
+fi
+if PROPOSAL_LABEL=expected-denial proposal_exec /usr/bin/curl -fsS \
+  --data-urlencode 'query=ASK { ?s ?p ?o }' http://localhost:3030/understood/query >/dev/null 2>&1; then
+  echo "The proposal sandbox unexpectedly bypassed the read-only query proxy." >&2
+  exit 1
+fi
+if PROPOSAL_LABEL=expected-denial proposal_exec /usr/bin/touch "$LIVE_ONTOLOGY_ROOT/.proposal-write-probe" >/dev/null 2>&1; then
+  rm -f "$LIVE_ONTOLOGY_ROOT/.proposal-write-probe"
+  echo "The proposal sandbox unexpectedly wrote Adam's live ontology." >&2
+  exit 1
+fi
+if PROPOSAL_LABEL=expected-denial proposal_exec /usr/bin/touch "$CONTROL_DIR/.proposal-write-probe" >/dev/null 2>&1; then
+  rm -f "$CONTROL_DIR/.proposal-write-probe"
+  echo "The proposal sandbox unexpectedly wrote an installed verifier path." >&2
+  exit 1
+fi
+proposal_exec /usr/bin/curl -fsS --data-urlencode 'query=ASK { ?s ?p ?o }' \
+  "http://localhost:$READONLY_PROXY_PORT/understood/query" >/dev/null
+if PROPOSAL_LABEL=expected-denial proposal_exec /usr/bin/curl -fsS -X POST \
+  --data-urlencode 'update=DELETE WHERE { ?s ?p ?o }' \
+  "http://localhost:$READONLY_PROXY_PORT/updates-denied" >/dev/null 2>&1; then
+  echo "The proposal sandbox unexpectedly acquired a SPARQL update route." >&2
+  exit 1
+fi
+
+HARNESS_EXPECTED_PID=0 HARNESS_EXPECTED_WINDOW_BOUNDS=UNSET HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER=UNSET HARNESS_ATTACH_EXISTING_APP=0 \
+  TRUSTED_LABEL=trusted-project-generation trusted_exec xcodegen generate
+TRUSTED_LABEL=trusted-app-build trusted_exec xcodebuild build \
   -project Harness.xcodeproj \
-  -scheme HarnessUIVerification \
+  -scheme Harness \
   -configuration Debug \
   -destination 'platform=macOS' \
-  -derivedDataPath "$CANDIDATE_DERIVED_DATA" | tee "$CANDIDATE_OUTPUT_DIR/signed-build.log"
+  -derivedDataPath "$CANDIDATE_DERIVED_DATA"
+TRUSTED_LABEL=trusted-unit-build trusted_exec xcodebuild build-for-testing \
+  -project Harness.xcodeproj \
+  -scheme HarnessUnitVerification \
+  -configuration Debug \
+  -destination 'platform=macOS' \
+  -derivedDataPath "$UNIT_DERIVED_DATA"
 
-[[ -d "$APP_BUNDLE" ]] || { echo "The built Harness.app bundle is missing." >&2; exit 1; }
+[[ -d "$BUILT_APP_BUNDLE" ]] || { echo "The built Harness.app bundle is missing." >&2; exit 1; }
+/bin/cp -R "$BUILT_APP_BUNDLE" "$APP_BUNDLE"
+SIGNING_IDENTITY="$(/usr/bin/security find-identity -v -p codesigning | awk -F '"' '/Apple Development: Adam Blair/{print $2; exit}')"
+[[ -n "$SIGNING_IDENTITY" ]] || { echo "Adam's trusted Apple Development signing identity is unavailable." >&2; exit 1; }
 python3 "$CONTROL_DIR/scripts/verify_app_identity.py" \
   --app "$APP_BUNDLE" --output "$APP_IDENTITY"
 TEAM_IDENTIFIER="$(jq -r .team_identifier "$APP_IDENTITY")"
 CDHASH="$(jq -r .cdhash "$APP_IDENTITY")"
+
+UNIT_HOST_APP="$UNIT_DERIVED_DATA/Build/Products/Debug/Harness.app"
+UNIT_TEST_BUNDLE="$UNIT_HOST_APP/Contents/PlugIns/HarnessTests.xctest"
+UNIT_TEST_BINARY="$UNIT_TEST_BUNDLE/Contents/MacOS/HarnessTests"
+[[ -x "$UNIT_TEST_BINARY" ]] || { echo "The direct Harness unit test executable is missing." >&2; exit 1; }
+UNIT_OTOOL_OUTPUT="$(/usr/bin/otool -l "$UNIT_TEST_BINARY")"
+for unit_rpath in '@loader_path/../../../../MacOS' '@loader_path/../../../../Frameworks'; do
+  if ! grep -Fq "path $unit_rpath " <<<"$UNIT_OTOOL_OUTPUT"; then
+    TRUSTED_LABEL=trusted-unit-linkage trusted_exec /usr/bin/install_name_tool -add_rpath "$unit_rpath" "$UNIT_TEST_BINARY"
+  fi
+done
+TRUSTED_LABEL=trusted-unit-signing trusted_exec /usr/bin/codesign --force --deep \
+  --sign "$SIGNING_IDENTITY" "$UNIT_TEST_BUNDLE"
+TRUSTED_LABEL=trusted-unit-host-signing trusted_exec /usr/bin/codesign --force --deep \
+  --sign "$SIGNING_IDENTITY" --preserve-metadata=entitlements,requirements,flags,runtime "$UNIT_HOST_APP"
 
 pkill -x Harness >/dev/null 2>&1 || true
 for _ in {1..20}; do
@@ -207,20 +389,19 @@ done
   exit 1
 }
 
-proposal_exec xcodebuild test \
-  -project Harness.xcodeproj \
-  -scheme HarnessUnitVerification \
-  -destination 'platform=macOS' \
-  -derivedDataPath "$UNIT_DERIVED_DATA" \
-  -resultBundlePath "$UNIT_RESULT_BUNDLE" \
-  -only-testing:HarnessTests
-python3 "$CONTROL_DIR/scripts/validate_xcresult.py" \
-  --xcresult "$UNIT_RESULT_BUNDLE" \
-  --required-bundle HarnessTests \
-  --required-test-list "$TEST_INVENTORY"
+XCTEST_BINARY="$(xcrun --find xctest)"
+set +e
+PROPOSAL_LABEL=isolated-unit-tests proposal_exec "$XCTEST_BINARY" "$UNIT_TEST_BUNDLE" \
+  2>&1 | tee "$UNIT_TEST_TRANSCRIPT"
+UNIT_TEST_STATUS="${PIPESTATUS[0]}"
+set -e
+[[ "$UNIT_TEST_STATUS" == "0" ]] || { echo "The isolated Harness unit tests failed." >&2; exit 1; }
+python3 "$CONTROL_DIR/scripts/validate_xctest_transcript.py" \
+  --expected "$TEST_INVENTORY" --transcript "$UNIT_TEST_TRANSCRIPT"
 
 pkill -x Harness >/dev/null 2>&1 || true
-proposal_exec "$APP_BUNDLE/Contents/MacOS/Harness" >"$CANDIDATE_OUTPUT_DIR/recorded-app.log" 2>&1 &
+proposal_start "$APP_BUNDLE/Contents/MacOS/Harness" >"$CANDIDATE_OUTPUT_DIR/recorded-app.log" 2>&1 &
+RECORDED_WRAPPER_PID=$!
 RECORDED_PID=""
 for _ in {1..30}; do
   while IFS= read -r CANDIDATE_PID; do
@@ -235,25 +416,26 @@ for _ in {1..30}; do
   sleep 0.2
 done
 [[ -n "$RECORDED_PID" ]] || { echo "Signed Harness app did not launch for window-bound recording." >&2; exit 1; }
-RECORDED_PROOF_PASS=0
-for _ in {1..30}; do
-  if xcrun swift "$CONTROL_DIR/scripts/verify_running_app.swift" \
-    --pid "$RECORDED_PID" \
-    --executable "$APP_BUNDLE/Contents/MacOS/Harness" \
-    --identifier "$FINAL_ACCESSIBILITY_IDENTIFIER" \
-    --output "$INITIAL_RUNNING_APP_PROOF"; then
-    RECORDED_PROOF_PASS=1
-    break
-  fi
-  sleep 0.25
-done
-[[ "$RECORDED_PROOF_PASS" == 1 ]] || { echo "Recorded candidate window never exposed the contracted identifier." >&2; exit 1; }
-RECORDED_WINDOW_ID="$(jq -r .window_id "$INITIAL_RUNNING_APP_PROOF")"
+INITIAL_ACCESSIBILITY_IDENTIFIER="$(jq -r '.ui_automation[0].identifier' "$CONTRACT")"
+[[ -n "$INITIAL_ACCESSIBILITY_IDENTIFIER" && "$INITIAL_ACCESSIBILITY_IDENTIFIER" != null ]] || {
+  echo "The committed UI automation lacks its required initial wait identifier." >&2
+  exit 1
+}
+TRUSTED_TIMEOUT=40 TRUSTED_LABEL=trusted-recorded-ui-prepare trusted_exec xcrun swift "$CONTROL_DIR/scripts/run_accessibility_contract.swift" \
+  --pid "$RECORDED_PID" \
+  --executable "$APP_BUNDLE/Contents/MacOS/Harness" \
+  --bundle-identifier com.adamblair.Harness \
+  --contract "$CONTRACT" \
+  --prepare-only
+PREPARE_RUNNING_APP_PROOF="$PROPOSAL_TMP/recording-window.json"
+TRUSTED_TIMEOUT=40 TRUSTED_LABEL=trusted-recording-window-binding trusted_exec xcrun swift "$CONTROL_DIR/scripts/verify_running_app.swift" \
+  --pid "$RECORDED_PID" \
+  --executable "$APP_BUNDLE/Contents/MacOS/Harness" \
+  --identifier "$INITIAL_ACCESSIBILITY_IDENTIFIER" \
+  --output "$PREPARE_RUNNING_APP_PROOF"
+RECORDED_WINDOW_ID="$(jq -r .window_id "$PREPARE_RUNNING_APP_PROOF")"
 [[ "$RECORDED_WINDOW_ID" =~ ^[0-9]+$ ]] || { echo "Recorded candidate window lacks a CGWindowID." >&2; exit 1; }
-RECORDED_WINDOW_BOUNDS="$(jq -r '[.window_bounds.x,.window_bounds.y,.window_bounds.width,.window_bounds.height] | join(",")' "$INITIAL_RUNNING_APP_PROOF")"
-HARNESS_EXPECTED_PID="$RECORDED_PID" HARNESS_EXPECTED_WINDOW_BOUNDS="$RECORDED_WINDOW_BOUNDS" HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER="$FINAL_ACCESSIBILITY_IDENTIFIER" HARNESS_ATTACH_EXISTING_APP=1 proposal_exec xcodegen generate
-
-/usr/sbin/screencapture -v -V120 -l"$RECORDED_WINDOW_ID" -x -k "$VIDEO" &
+/usr/sbin/screencapture -v -l"$RECORDED_WINDOW_ID" -x -k "$VIDEO" &
 VIDEO_PID=$!
 video_cleanup() {
   if kill -0 "$VIDEO_PID" 2>/dev/null; then
@@ -261,40 +443,39 @@ video_cleanup() {
   fi
   wait "$VIDEO_PID" 2>/dev/null || true
 }
-trap video_cleanup EXIT
-
-python3 "$CONTROL_DIR/scripts/run_with_timeout.py" --seconds 110 -- /usr/bin/sandbox-exec -p "$PROPOSAL_SANDBOX" -- xcodebuild test-without-building \
-  -project Harness.xcodeproj \
-  -scheme HarnessUIVerification \
-  -destination 'platform=macOS' \
-  -derivedDataPath "$CANDIDATE_DERIVED_DATA" \
-  -resultBundlePath "$UI_RESULT_BUNDLE" \
-  "${UI_TEST_ARGS[@]}"
-
-kill -0 "$VIDEO_PID" 2>/dev/null || {
-  echo "The video recording ended before the exact UI test completed." >&2
+trap 'video_cleanup; cleanup_handoff' EXIT
+sleep 0.5
+TRUSTED_TIMEOUT=90 TRUSTED_LABEL=trusted-recorded-ui-actions trusted_exec xcrun swift "$CONTROL_DIR/scripts/run_accessibility_contract.swift" \
+  --pid "$RECORDED_PID" \
+  --executable "$APP_BUNDLE/Contents/MacOS/Harness" \
+  --bundle-identifier com.adamblair.Harness \
+  --contract "$CONTRACT" \
+  --output "$UI_AUTOMATION_PROOF"
+TRUSTED_TIMEOUT=40 TRUSTED_LABEL=trusted-recorded-result-binding trusted_exec xcrun swift "$CONTROL_DIR/scripts/verify_running_app.swift" \
+  --pid "$RECORDED_PID" \
+  --executable "$APP_BUNDLE/Contents/MacOS/Harness" \
+  --identifier "$FINAL_ACCESSIBILITY_IDENTIFIER" \
+  --output "$INITIAL_RUNNING_APP_PROOF"
+[[ "$(jq -r .window_id "$INITIAL_RUNNING_APP_PROOF")" == "$RECORDED_WINDOW_ID" ]] || {
+  echo "The committed UI actions ended outside the exact recorded candidate window." >&2
   exit 1
 }
-wait "$VIDEO_PID"
-trap - EXIT
-if [[ "$UI_TEST" != "$BINDING_UI_TEST" ]]; then
-  python3 "$CONTROL_DIR/scripts/validate_xcresult.py" \
-    --xcresult "$UI_RESULT_BUNDLE" --required-test "$UI_TEST" --max-duration 55 --screenshot-output "$FEATURE_SCREENSHOT"
-fi
-python3 "$CONTROL_DIR/scripts/validate_xcresult.py" \
-  --xcresult "$UI_RESULT_BUNDLE" \
-  --required-test "$BINDING_UI_TEST" \
-  --max-duration 55 \
-  --screenshot-output "$SCREENSHOT"
-if [[ "$UI_TEST" != "$BINDING_UI_TEST" ]]; then
-  cmp -s "$FEATURE_SCREENSHOT" "$SCREENSHOT" || { echo "Feature-test screenshot is not the immutable PID/window-bound evidence surface." >&2; exit 1; }
-fi
+/usr/sbin/screencapture -x -l "$RECORDED_WINDOW_ID" "$SCREENSHOT"
+sleep 1.5
+kill -0 "$VIDEO_PID" 2>/dev/null || {
+  echo "The video recording ended before the committed UI actions completed." >&2
+  exit 1
+}
+kill -INT "$VIDEO_PID" 2>/dev/null || true
+wait "$VIDEO_PID" 2>/dev/null || true
+trap cleanup_handoff EXIT
 [[ -s "$VIDEO" && -s "$SCREENSHOT" ]] || {
   echo "The exact visible requirement did not produce both video and screenshot evidence." >&2
   exit 1
 }
 
 pkill -x Harness >/dev/null 2>&1 || true
+wait "$RECORDED_WRAPPER_PID" 2>/dev/null || true
 for _ in {1..20}; do
   [[ -z "$(pgrep -x Harness || true)" ]] && break
   sleep 0.25
@@ -303,7 +484,8 @@ done
   echo "A stale Harness process survived before the final normal relaunch." >&2
   exit 1
 }
-proposal_exec "$APP_BUNDLE/Contents/MacOS/Harness" >"$CANDIDATE_OUTPUT_DIR/final-app.log" 2>&1 &
+proposal_start "$APP_BUNDLE/Contents/MacOS/Harness" >"$CANDIDATE_OUTPUT_DIR/final-app.log" 2>&1 &
+FINAL_WRAPPER_PID=$!
 for _ in {1..20}; do
   PID=""
   while IFS= read -r CANDIDATE_PID; do
@@ -324,44 +506,30 @@ PROCESS_COMMAND="$(ps -p "$PID" -o command=)"
   exit 1
 }
 
-rm -rf "$FINAL_UI_RESULT_BUNDLE"
-xcrun swift "$CONTROL_DIR/scripts/verify_running_app.swift" \
+TRUSTED_TIMEOUT=40 TRUSTED_LABEL=trusted-final-ui-prepare trusted_exec xcrun swift "$CONTROL_DIR/scripts/run_accessibility_contract.swift" \
+  --pid "$PID" \
+  --executable "$APP_BUNDLE/Contents/MacOS/Harness" \
+  --bundle-identifier com.adamblair.Harness \
+  --contract "$CONTRACT" \
+  --prepare-only
+TRUSTED_TIMEOUT=90 TRUSTED_LABEL=trusted-final-ui-actions trusted_exec xcrun swift "$CONTROL_DIR/scripts/run_accessibility_contract.swift" \
+  --pid "$PID" \
+  --executable "$APP_BUNDLE/Contents/MacOS/Harness" \
+  --bundle-identifier com.adamblair.Harness \
+  --contract "$CONTRACT" \
+  --output "$FINAL_UI_AUTOMATION_PROOF"
+TRUSTED_TIMEOUT=40 TRUSTED_LABEL=trusted-final-result-binding trusted_exec xcrun swift "$CONTROL_DIR/scripts/verify_running_app.swift" \
   --pid "$PID" \
   --executable "$APP_BUNDLE/Contents/MacOS/Harness" \
   --identifier "$FINAL_ACCESSIBILITY_IDENTIFIER" \
   --output "$RUNNING_APP_PROOF"
-FINAL_WINDOW_BOUNDS="$(jq -r '[.window_bounds.x,.window_bounds.y,.window_bounds.width,.window_bounds.height] | join(",")' "$RUNNING_APP_PROOF")"
-HARNESS_EXPECTED_PID="$PID" HARNESS_EXPECTED_WINDOW_BOUNDS="$FINAL_WINDOW_BOUNDS" HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER="$FINAL_ACCESSIBILITY_IDENTIFIER" HARNESS_ATTACH_EXISTING_APP=1 proposal_exec xcodegen generate
-python3 "$CONTROL_DIR/scripts/run_with_timeout.py" --seconds 110 -- /usr/bin/sandbox-exec -p "$PROPOSAL_SANDBOX" -- xcodebuild test-without-building \
-  -project Harness.xcodeproj \
-  -scheme HarnessUIVerification \
-  -destination 'platform=macOS' \
-  -derivedDataPath "$CANDIDATE_DERIVED_DATA" \
-  -resultBundlePath "$FINAL_UI_RESULT_BUNDLE" \
-  "${UI_TEST_ARGS[@]}"
-if [[ "$UI_TEST" != "$BINDING_UI_TEST" ]]; then
-  python3 "$CONTROL_DIR/scripts/validate_xcresult.py" \
-    --xcresult "$FINAL_UI_RESULT_BUNDLE" --required-test "$UI_TEST" --max-duration 55 --screenshot-output "$FINAL_FEATURE_SCREENSHOT"
-fi
-python3 "$CONTROL_DIR/scripts/validate_xcresult.py" \
-  --xcresult "$FINAL_UI_RESULT_BUNDLE" \
-  --required-test "$BINDING_UI_TEST" \
-  --max-duration 55 \
-  --screenshot-output "$FINAL_UI_SCREENSHOT"
-if [[ "$UI_TEST" != "$BINDING_UI_TEST" ]]; then
-  cmp -s "$FINAL_FEATURE_SCREENSHOT" "$FINAL_UI_SCREENSHOT" || { echo "Final feature-test screenshot is not the immutable PID/window-bound evidence surface." >&2; exit 1; }
-fi
-[[ -s "$FINAL_UI_SCREENSHOT" ]] || {
-  echo "The final normal relaunch did not produce visible requirement evidence." >&2
-  exit 1
-}
 kill -0 "$PID" 2>/dev/null || { echo "The normal relaunched Harness PID exited during final verification." >&2; exit 1; }
 PROCESS_COMMAND="$(ps -p "$PID" -o command=)"
 [[ "$PROCESS_COMMAND" == "$APP_BUNDLE/Contents/MacOS/Harness"* ]] || {
   echo "Final verified Harness process is not the signed and UI-tested app bundle." >&2
   exit 1
 }
-xcrun swift "$CONTROL_DIR/scripts/verify_running_app.swift" \
+TRUSTED_TIMEOUT=40 TRUSTED_LABEL=trusted-final-result-recheck trusted_exec xcrun swift "$CONTROL_DIR/scripts/verify_running_app.swift" \
   --pid "$PID" \
   --executable "$APP_BUNDLE/Contents/MacOS/Harness" \
   --identifier "$FINAL_ACCESSIBILITY_IDENTIFIER" \
@@ -378,7 +546,6 @@ WINDOW_ID="$(jq -r .window_id "$RUNNING_APP_PROOF")"
 }
 python3 "$CONTROL_DIR/scripts/validate_media.py" \
   --png "$SCREENSHOT" \
-  --png "$FINAL_UI_SCREENSHOT" \
   --png "$FINAL_SCREENSHOT" \
   --video "$VIDEO" \
   --output "$MEDIA_PROOF"
@@ -386,17 +553,16 @@ python3 "$CONTROL_DIR/scripts/validate_media.py" \
 # The reserved full-pipeline Swift test is the only protected OntologyKit test
 # omitted by hosted CI. It must pass here with live dependencies required.
 LIVE_SWIFT_TEST="OntologyKitTests.satisfactionGateAdamRealQuestionGetsCompleteAnswer"
-rm -rf "$LIVE_SWIFT_DIR"
-mkdir -p "$LIVE_SWIFT_DIR"
+rm -rf "$PROPOSAL_LIVE_SWIFT_DIR"
+mkdir -p "$PROPOSAL_LIVE_SWIFT_DIR"
 set +e
-python3 "$CONTROL_DIR/scripts/run_with_timeout.py" --seconds 600 -- \
-  /usr/bin/sandbox-exec -p "$PROPOSAL_SANDBOX" -- \
-  /usr/bin/env \
-    HARNESS_REQUIRE_LIVE_SATISFACTION=1 \
-    HARNESS_SATISFACTION_COMMIT="$SHA" \
-    HARNESS_SATISFACTION_OUTPUT_DIR="$LIVE_SWIFT_DIR" \
-    /usr/bin/xcrun swift test \
-      --package-path "$ROOT_DIR/Packages/OntologyKit" \
+PROPOSAL_TIMEOUT=600 \
+  HARNESS_REQUIRE_LIVE_SATISFACTION=1 \
+  HARNESS_SATISFACTION_COMMIT="$SHA" \
+  HARNESS_SATISFACTION_OUTPUT_DIR="$PROPOSAL_LIVE_SWIFT_DIR" \
+  proposal_exec /usr/bin/xcrun swift test \
+      --disable-sandbox \
+      --package-path "$PROPOSAL_REPO/Packages/OntologyKit" \
       --filter "${LIVE_SWIFT_TEST#*.}" \
   2>&1 | tee "$LIVE_SWIFT_TRANSCRIPT"
 LIVE_SWIFT_STATUS="${PIPESTATUS[0]}"
@@ -408,7 +574,7 @@ set -e
 python3 "$CONTROL_DIR/scripts/validate_swiftpm_tests.py" \
   --expected "$LIVE_SWIFT_INVENTORY" \
   --transcript "$LIVE_SWIFT_TRANSCRIPT"
-LIVE_SWIFT_COUNT="$(find "$LIVE_SWIFT_DIR" -type f -name 'gate-*.md' | wc -l | tr -d ' ')"
+LIVE_SWIFT_COUNT="$(find "$PROPOSAL_LIVE_SWIFT_DIR" -type f -name 'gate-*.md' | wc -l | tr -d ' ')"
 [[ "$LIVE_SWIFT_COUNT" == "1" ]] || {
   echo "The reserved live satisfaction Swift test did not produce exactly one proof artifact." >&2
   exit 1
@@ -417,6 +583,58 @@ LIVE_SWIFT_COUNT="$(find "$LIVE_SWIFT_DIR" -type f -name 'gate-*.md' | wc -l | t
 # No proposal process may remain alive while protected controls promote and
 # generate the final evidence bundle.
 terminate_proposal_processes
+rm -rf "$LIVE_SWIFT_DIR"
+mkdir -p "$LIVE_SWIFT_DIR"
+/bin/cp -R "$PROPOSAL_LIVE_SWIFT_DIR"/. "$LIVE_SWIFT_DIR"/
+python3 "$CONTROL_DIR/scripts/snapshot_authority_state.py" \
+  --ontology-root "$LIVE_ONTOLOGY_ROOT" --output "$AUTHORITY_SNAPSHOT_AFTER"
+cmp -s "$AUTHORITY_SNAPSHOT_BEFORE" "$AUTHORITY_SNAPSHOT_AFTER" || {
+  echo "Adam's live accepted or candidate authority changed during proposal execution." >&2
+  exit 1
+}
+python3 "$CONTROL_DIR/scripts/live_satisfaction_oracle.py" \
+  --snapshot-output "$GRAPH_SNAPSHOT_AFTER"
+[[ "$(jq -r .sha256 "$GRAPH_SNAPSHOT_AFTER")" == "$GRAPH_DIGEST" ]] || {
+  echo "The live Fuseki accepted graph changed during proposal execution." >&2
+  exit 1
+}
+PROCESS_REPORTS_DIR="$PROCESS_REPORTS_DIR" PROPOSAL_PROCESS_REPORT="$PROPOSAL_PROCESS_REPORT" /usr/bin/python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+directory = Path(os.environ["PROCESS_REPORTS_DIR"])
+reports = []
+errors = []
+for path in sorted(directory.glob("*.json")):
+    if path.name.startswith("background-ready."):
+        continue
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        errors.append(f"unreadable process report {path.name}: {error}")
+        continue
+    reports.append(report)
+    if report.get("retained_pids") != [] or report.get("timed_out") is not False:
+        errors.append(f"process group was not clean: {path.name}")
+    if report.get("label") == "expected-denial":
+        if report.get("returncode") in (None, 0):
+            errors.append(f"adversarial isolation probe unexpectedly passed: {path.name}")
+    elif report.get("status") != "PASS":
+        errors.append(f"proposal process failed or retained descendants: {path.name}")
+payload = {
+    "schema_version": 1,
+    "status": "PASS" if reports and not errors else "FAIL",
+    "commands": reports,
+    "retained_pids": [pid for report in reports for pid in report.get("retained_pids", [])],
+    "errors": errors,
+}
+Path(os.environ["PROPOSAL_PROCESS_REPORT"]).write_text(
+    json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+)
+if errors or not reports:
+    raise SystemExit("; ".join(errors) if errors else "no proposal process reports were produced")
+PY
 LIVE_SERVICE_IDENTITY_AFTER="$OUTPUT_DIR/live-service-identity-after.txt"
 {
   for port in 3030 11434; do
@@ -433,6 +651,7 @@ cmp -s "$LIVE_SERVICE_IDENTITY" "$LIVE_SERVICE_IDENTITY_AFTER" || {
 # denied every proposal process write access to this verifier-owned directory.
 /bin/cp -R "$CANDIDATE_OUTPUT_DIR"/. "$OUTPUT_DIR"/
 set_artifact_paths "$OUTPUT_DIR"
+PROPOSAL_PROCESS_REPORT="$OUTPUT_DIR/proposal-processes.json"
 LIVE_SWIFT_ARTIFACT="$(find "$LIVE_SWIFT_DIR" -type f -name 'gate-*.md' -print -quit)"
 
 # Rebuild protected inventories after promotion, then create the independent
@@ -462,18 +681,21 @@ MID_PR_HEAD="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .head.sha)"
 }
 
 CONTRACT="$CONTRACT" OBSERVED="$OBSERVED" SCREENSHOT="$SCREENSHOT" VIDEO="$VIDEO" \
-VERIFIER="$VERIFIER" SHA="$SHA" OUTPUT_DIR="$OUTPUT_DIR" UNIT_RESULT_BUNDLE="$UNIT_RESULT_BUNDLE" \
-UI_RESULT_BUNDLE="$UI_RESULT_BUNDLE" FINAL_UI_RESULT_BUNDLE="$FINAL_UI_RESULT_BUNDLE" \
+VERIFIER="$VERIFIER" SHA="$SHA" OUTPUT_DIR="$OUTPUT_DIR" UNIT_TEST_TRANSCRIPT="$UNIT_TEST_TRANSCRIPT" \
 FINAL_SCREENSHOT="$FINAL_SCREENSHOT" SATISFACTION_ARTIFACT="$SATISFACTION_ARTIFACT" \
-FINAL_UI_SCREENSHOT="$FINAL_UI_SCREENSHOT" RUNNING_APP_PROOF="$RUNNING_APP_PROOF" \
+UI_AUTOMATION_PROOF="$UI_AUTOMATION_PROOF" FINAL_UI_AUTOMATION_PROOF="$FINAL_UI_AUTOMATION_PROOF" \
+RUNNING_APP_PROOF="$RUNNING_APP_PROOF" \
 INITIAL_RUNNING_APP_PROOF="$INITIAL_RUNNING_APP_PROOF" RECORDED_WINDOW_ID="$RECORDED_WINDOW_ID" \
+RECORDED_PID="$RECORDED_PID" \
 MEDIA_PROOF="$MEDIA_PROOF" \
 TEST_INVENTORY="$TEST_INVENTORY" \
 LIVE_SWIFT_TRANSCRIPT="$LIVE_SWIFT_TRANSCRIPT" LIVE_SWIFT_ARTIFACT="$LIVE_SWIFT_ARTIFACT" \
 LIVE_SWIFT_INVENTORY="$LIVE_SWIFT_INVENTORY" GRAPH_SNAPSHOT="$GRAPH_SNAPSHOT" \
+GRAPH_SNAPSHOT_AFTER="$GRAPH_SNAPSHOT_AFTER" \
+AUTHORITY_SNAPSHOT_BEFORE="$AUTHORITY_SNAPSHOT_BEFORE" AUTHORITY_SNAPSHOT_AFTER="$AUTHORITY_SNAPSHOT_AFTER" \
+PROPOSAL_PROCESS_REPORT="$PROPOSAL_PROCESS_REPORT" \
 LIVE_SERVICE_IDENTITY="$LIVE_SERVICE_IDENTITY" LIVE_SERVICE_IDENTITY_AFTER="$LIVE_SERVICE_IDENTITY_AFTER" \
-APP_BUNDLE="$APP_BUNDLE" PID="$PID" SOL_URL="$SOL_URL" HOSTED_URL="$HOSTED_URL" ACTUAL_UI_TEST="$UI_TEST" \
-BINDING_TEST_IDENTIFIER="$BINDING_UI_TEST" FINAL_ATTACH_TEST="$BINDING_UI_TEST" FINAL_ACCESSIBILITY_IDENTIFIER="$FINAL_ACCESSIBILITY_IDENTIFIER" \
+APP_BUNDLE="$APP_BUNDLE" PID="$PID" SOL_URL="$SOL_URL" HOSTED_URL="$HOSTED_URL" FINAL_ACCESSIBILITY_IDENTIFIER="$FINAL_ACCESSIBILITY_IDENTIFIER" \
 APP_IDENTITY="$APP_IDENTITY" \
 CONTRACT_DIGEST="$CONTRACT_DIGEST" \
 EVIDENCE_BINDING="$EVIDENCE_BINDING" PR_NUMBER="$PR_NUMBER" BASE_SHA="$BASE_SHA" \
@@ -503,11 +725,10 @@ observed = Path(os.environ["OBSERVED"]).read_text(encoding="utf-8").strip()
 artifacts = {
     "screenshot": os.environ["SCREENSHOT"],
     "video": os.environ["VIDEO"],
-    "unit_xcresult": os.environ["UNIT_RESULT_BUNDLE"],
-    "ui_xcresult": os.environ["UI_RESULT_BUNDLE"],
+    "unit_test_transcript": os.environ["UNIT_TEST_TRANSCRIPT"],
+    "ui_automation_proof": os.environ["UI_AUTOMATION_PROOF"],
     "final_screenshot": os.environ["FINAL_SCREENSHOT"],
-    "final_ui_screenshot": os.environ["FINAL_UI_SCREENSHOT"],
-    "final_ui_xcresult": os.environ["FINAL_UI_RESULT_BUNDLE"],
+    "final_ui_automation_proof": os.environ["FINAL_UI_AUTOMATION_PROOF"],
     "running_app_proof": os.environ["RUNNING_APP_PROOF"],
     "recorded_running_app_proof": os.environ["INITIAL_RUNNING_APP_PROOF"],
     "media_proof": os.environ["MEDIA_PROOF"],
@@ -517,6 +738,10 @@ artifacts = {
     "live_swift_artifact": os.environ["LIVE_SWIFT_ARTIFACT"],
     "live_swift_inventory": os.environ["LIVE_SWIFT_INVENTORY"],
     "accepted_graph_snapshot": os.environ["GRAPH_SNAPSHOT"],
+    "accepted_graph_snapshot_after": os.environ["GRAPH_SNAPSHOT_AFTER"],
+    "authority_snapshot_before": os.environ["AUTHORITY_SNAPSHOT_BEFORE"],
+    "authority_snapshot_after": os.environ["AUTHORITY_SNAPSHOT_AFTER"],
+    "proposal_process_report": os.environ["PROPOSAL_PROCESS_REPORT"],
     "live_service_identity": os.environ["LIVE_SERVICE_IDENTITY"],
     "live_service_identity_after": os.environ["LIVE_SERVICE_IDENTITY_AFTER"],
     "app_bundle": os.environ["APP_BUNDLE"],
@@ -536,12 +761,12 @@ manifest = {
     "visible_surface": contract["visible_surface"],
     "expected_visible_result": contract["expected_visible_result"],
     "acceptance_test_identifier": contract["ui_test_identifier"],
-    "ui_test_identifier": os.environ["ACTUAL_UI_TEST"],
-    "binding_ui_test_identifier": os.environ["BINDING_TEST_IDENTIFIER"],
+    "ui_automation": contract["ui_automation"],
     "final_accessibility_identifier": os.environ["FINAL_ACCESSIBILITY_IDENTIFIER"],
     "observed_visible_result": observed,
     "app_bundle": os.environ["APP_BUNDLE"],
     "app_pid": int(os.environ["PID"]),
+    "recorded_app_pid": int(os.environ["RECORDED_PID"]),
     "proposal_processes_terminated": True,
     "recording_window_id": int(os.environ["RECORDED_WINDOW_ID"]),
     "codesign_verified": True,
@@ -551,9 +776,9 @@ manifest = {
     "verifier": os.environ["VERIFIER"],
     "tests": [
         {"name": "macos-unit-tests", "status": "PASS"},
-        {"name": "macos-ui-tests", "status": "PASS", "test_identifier": os.environ["ACTUAL_UI_TEST"]},
-        {"name": "window-bound-ui-evidence", "status": "PASS", "test_identifier": os.environ["BINDING_TEST_IDENTIFIER"]},
-        {"name": "final-relaunch-ui-test", "status": "PASS", "test_identifier": os.environ["FINAL_ATTACH_TEST"]},
+        {"name": "signed-mac-ui-automation", "status": "PASS"},
+        {"name": "window-bound-ui-evidence", "status": "PASS"},
+        {"name": "final-relaunch-ui-automation", "status": "PASS"},
         {"name": "live-satisfaction-swift-test", "status": "PASS"},
         {"name": "live-satisfaction-oracle", "status": "PASS"},
         {"name": "trusted-hosted-verification", "status": "PASS"},
@@ -568,7 +793,7 @@ path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 print(path)
 PY
 
-python3 "$CONTROL_DIR/scripts/release_gate.py" validate --manifest "$OUTPUT_DIR/manifest.json"
+python3 "$CONTROL_DIR/scripts/release_gate.py" validate --pre-publication --manifest "$OUTPUT_DIR/manifest.json"
 
 FINAL_PR_JSON="$(gh api "repos/$REPO/pulls/$PR_NUMBER")"
 FINAL_PR_HEAD="$(printf '%s' "$FINAL_PR_JSON" | jq -r .head.sha)"
@@ -596,4 +821,5 @@ gh api -X POST "repos/$REPO/statuses/$SHA" \
   -f context='Signed Mac handoff' \
   -f description="Signed handoff PASS pr:$PR_NUMBER binding:${EVIDENCE_BINDING:0:24}" \
   -f target_url="$HANDOFF_URL" >/dev/null
+python3 "$CONTROL_DIR/scripts/release_gate.py" validate --manifest "$OUTPUT_DIR/manifest.json"
 echo "Published the Signed Mac handoff status for $SHA."

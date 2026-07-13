@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -16,6 +17,7 @@ REQUIRED_STATUS_CONTEXTS = {
 }
 REQUIRED_CHECK_CONTEXTS: set[str] = set()
 REQUIRED_CONTEXTS = tuple(REQUIRED_STATUS_CONTEXTS) + tuple(sorted(REQUIRED_CHECK_CONTEXTS))
+BINDING_MARKER = re.compile(r"pr:\d+ binding:[0-9a-f]{24}")
 
 
 def latest_statuses(payload: dict) -> dict[str, dict]:
@@ -67,6 +69,7 @@ def validate(
     status_evidence = latest_statuses(statuses)
     check_evidence = latest_checks(checks)
     selected: dict[str, dict] = {}
+    binding_markers: set[str] = set()
     for context, creator in REQUIRED_STATUS_CONTEXTS.items():
         if context in check_evidence:
             errors.append(f"required status context is duplicated by a check run: {context}")
@@ -75,10 +78,13 @@ def validate(
             errors.append(f"verified head lacks a latest successful required status: {context}")
         elif result.get("creator") != creator:
             errors.append(f"required status has an untrusted creator: {context}")
-        elif "pr:" not in str(result.get("description") or "") or "binding:" not in str(result.get("description") or ""):
+        elif not BINDING_MARKER.search(str(result.get("description") or "")):
             errors.append(f"required status lacks PR and contract binding: {context}")
+        elif not str(result.get("url") or "").startswith("https://github.com/dblaira/Harness/"):
+            errors.append(f"required status lacks Harness repository evidence: {context}")
         else:
             selected[context] = result
+            binding_markers.add(BINDING_MARKER.search(str(result.get("description") or "")).group(0))  # type: ignore[union-attr]
     for context in REQUIRED_CHECK_CONTEXTS:
         if context in status_evidence:
             errors.append(f"required check context is duplicated by a commit status: {context}")
@@ -89,6 +95,8 @@ def validate(
             errors.append(f"required check has an untrusted GitHub app: {context}")
         else:
             selected[context] = result
+    if len(binding_markers) != 1:
+        errors.append("required statuses do not share one exact PR and contract binding")
 
     attestation = {
         "schema_version": 1,
@@ -97,6 +105,7 @@ def validate(
         "verified_head": verified_head,
         "git_tree": merge_tree,
         "required_evidence": selected,
+        "evidence_binding_marker": next(iter(binding_markers), None),
     }
     return errors, attestation
 

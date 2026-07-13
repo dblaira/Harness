@@ -27,15 +27,17 @@ GPT-5.6 Sol should be a reviewer, not the release oracle. Current research shows
 
 ## Implementation installed from this research
 
+Security amendment (2026-07-13): XCUITest remains part of clean hosted CI, but proposal-owned UI-test code no longer runs in Adam's signed-in macOS session. The signed handoff uses an immutable installed Accessibility driver that accepts only committed `wait_for`, `press`, `set_value`, and `assert_not_present` actions, binds every target to the exact sandboxed candidate PID, and records only its verified window. Proposal processes are denied Adam's operator home, clipboard, Apple Events, public network, installed controls, live ontology writes, and verifier-owned evidence paths.
+
 Branch `codex/verified-build-gates` installs the recommended system as repository code:
 
 - agent-owned pull requests and a literal acceptance-contract validator;
 - protected-base acceptance validation that proposed PR code cannot weaken;
 - GitHub-hosted macOS tests, SwiftLint, changed-line Periphery, and Swift/Python CodeQL; Periphery scans the complete project for relationships but blocks only findings located on added or changed PR lines, so pre-existing debt in a touched file cannot deadlock unrelated work;
 - an immutable-SHA, read-only `gpt-5.6-sol` review with structured fail-closed output;
-- a signed macOS XCUITest target and a handoff command that records the exact named requirement test;
+- hosted XCUITest coverage plus a signed handoff command that executes only the committed safe Accessibility actions inside the exact candidate app;
 - a fail-closed live Ollama + Fuseki satisfaction proof, excluded by name from deterministic hosted tests and required by the signed local handoff;
-- commit-keyed initial/final screenshots, video, unit/UI/final-relaunch result bundles, signature identity, hashes, and a local manifest;
+- commit-keyed initial/final screenshots, exact-window video, unit results, initial/final Accessibility action proofs, signature identity, hashes, and a local manifest;
 - a `Signed Mac handoff` commit status which can be required before merge;
 - immutable local Sol, handoff, and Stop controls installed from protected `main`, outside proposed branches;
 - a trusted local hosted-evidence aggregator that verifies protected workflow path, event, run, creator, exact SHA, and CodeQL job identity before Adam's local identity issues merge authority;

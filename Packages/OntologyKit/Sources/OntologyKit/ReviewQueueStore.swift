@@ -275,7 +275,7 @@ public struct PythonSHACLConnectionValidator: TurtleParsing {
     }
 
     private static var homeURL: URL {
-        URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+        return URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
     }
 }
 
@@ -298,7 +298,11 @@ public final class ReviewQueueStore: Sendable {
     }
 
     public static func defaultOntologyRoot() -> URL {
-        URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+        if let isolatedRoot = ProcessInfo.processInfo.environment["HARNESS_ONTOLOGY_ROOT"],
+           !isolatedRoot.isEmpty {
+            return URL(fileURLWithPath: isolatedRoot, isDirectory: true)
+        }
+        return URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
             .appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs/Documents/Main/Ontology", isDirectory: true)
     }
 

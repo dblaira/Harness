@@ -25,20 +25,26 @@ install -m 0755 \
   scripts/release_gate.py \
   scripts/evidence_binding.py \
   scripts/live_satisfaction_oracle.py \
+  scripts/readonly_sparql_proxy.py \
   scripts/select_pull_request.py \
   scripts/sanitize_review_bundle.py \
   scripts/swift_test_inventory.py \
   scripts/render_sol_review.py \
   scripts/require_latest_status.py \
   scripts/run_with_timeout.py \
+  scripts/run_accessibility_contract.swift \
+  scripts/snapshot_authority_state.py \
   scripts/validate_acceptance_contract.py \
   scripts/validate_sol_review.py \
+  scripts/validate_xctest_transcript.py \
   scripts/validate_xcresult.py \
   scripts/validate_swiftpm_tests.py \
   scripts/verify_codex_auth.py \
   scripts/verify_codex_runtime.py \
   scripts/verify_control_bundle.py \
   scripts/verify_repository_gate_state.py \
+  scripts/verify_release_tree.py \
+  scripts/verify_release_tree_run.py \
   scripts/verify_hosted_evidence.py \
   scripts/verify_merge_authority.py \
   scripts/verify_app_identity.py \
@@ -48,7 +54,10 @@ install -m 0755 \
   "$DEST/scripts/"
 install -m 0644 scripts/verify_running_app.swift "$DEST/scripts/"
 install -m 0644 scripts/preflight_tcc.swift "$DEST/scripts/"
-install -m 0644 .github/codex/review.schema.json .github/codex/sol-review.md "$DEST/.github/codex/"
+install -m 0644 \
+  .github/codex/review.schema.json \
+  .github/codex/sol-review.md \
+  "$DEST/.github/codex/"
 
 DEST="$DEST" /usr/bin/python3 - <<'PY'
 import hashlib, json, os

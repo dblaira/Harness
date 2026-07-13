@@ -30,3 +30,19 @@ python3 "$CONTROL_DIR/scripts/release_gate.py" validate --manifest "$MANIFEST"
 gh api "repos/$REPO/commits/$SHA/statuses?per_page=100" | \
   python3 "$CONTROL_DIR/scripts/verify_merge_authority.py" --marker "pr:$PR_NUMBER binding:${BINDING:0:24}"
 gh pr merge "$PR_NUMBER" --repo "$REPO" --merge --delete-branch --match-head-commit "$SHA"
+MERGED_PR_JSON="$(gh api "repos/$REPO/pulls/$PR_NUMBER")"
+[[ "$(printf '%s' "$MERGED_PR_JSON" | jq -r .merged)" == true ]] || {
+  echo "GitHub did not report the pull request as merged." >&2
+  exit 1
+}
+MERGE_SHA="$(printf '%s' "$MERGED_PR_JSON" | jq -r .merge_commit_sha)"
+[[ "$MERGE_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+  echo "GitHub did not return the exact merge commit." >&2
+  exit 1
+}
+python3 "$CONTROL_DIR/scripts/verify_release_tree_run.py" \
+  --repo "$REPO" \
+  --merge-sha "$MERGE_SHA" \
+  --verified-head "$SHA" \
+  --output "$HOME/.local/share/harness-release-evidence/Harness/$SHA/release-tree-verification.json"
+echo "Governed merge complete: $MERGE_SHA contains the exact verified tree $SHA."

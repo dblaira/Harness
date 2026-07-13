@@ -17,6 +17,7 @@ REQUIRED_SECTIONS = (
     "Expected visible result",
     "Critical flow",
     "Exact UI test",
+    "Signed Mac UI automation",
     "Final accessibility identifier",
     "Required proof",
     "Risk and authority boundaries",
@@ -36,6 +37,7 @@ CONTRACT_KEYS = frozenset({
     "visible_surface",
     "expected_visible_result",
     "ui_test_identifier",
+    "ui_automation",
     "final_accessibility_identifier",
     *COMMIT_BOUND_LIST_FIELDS,
     *COMMIT_BOUND_TEXT_FIELDS,
@@ -45,10 +47,12 @@ REQUIREMENT_FRESHNESS_FIELDS = (
     "visible_surface",
     "expected_visible_result",
     "ui_test_identifier",
+    "ui_automation",
     "final_accessibility_identifier",
 )
 UI_TEST_PATTERN = re.compile(r"^HarnessUITests/[A-Za-z_][A-Za-z0-9_]*/test[A-Za-z0-9_]+$")
 ACCESSIBILITY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._:/-]{0,127}$")
+UI_AUTOMATION_ACTIONS = frozenset({"wait_for", "press", "set_value", "assert_not_present"})
 BOOTSTRAP_REPO = "dblaira/Harness"
 BOOTSTRAP_PR = 19
 BOOTSTRAP_BASE = "0ce97219a340d9a53f5afb2a773bb2c9eb81b807"
@@ -84,6 +88,9 @@ def validate(body: str) -> list[str]:
     exact_ui_test = section(body, "Exact UI test") or ""
     if exact_ui_test and exact_ui_test != "INFRASTRUCTURE_ONLY" and not UI_TEST_PATTERN.fullmatch(exact_ui_test):
         errors.append("Exact UI test must be INFRASTRUCTURE_ONLY or one HarnessUITests test identifier")
+    signed_ui = section(body, "Signed Mac UI automation") or ""
+    if signed_ui and not re.search(r"(?m)^\s*(?:[-*]|\d+[.)])\s+\S", signed_ui):
+        errors.append("Signed Mac UI automation must contain committed ordered or bulleted actions")
     final_identifier = section(body, "Final accessibility identifier") or ""
     if final_identifier and not ACCESSIBILITY_PATTERN.fullmatch(final_identifier):
         errors.append("Final accessibility identifier must be one literal accessibility identifier")
@@ -169,6 +176,39 @@ def validate_handoff_contract(
     final_identifier = contract.get("final_accessibility_identifier", "")
     if not isinstance(final_identifier, str) or not ACCESSIBILITY_PATTERN.fullmatch(final_identifier):
         errors.append("final_accessibility_identifier must be one literal accessibility identifier")
+    automation = contract.get("ui_automation")
+    if not isinstance(automation, list) or not automation or len(automation) > 40:
+        errors.append("ui_automation must contain 1 to 40 signed Mac actions")
+    else:
+        if not isinstance(automation[0], dict) or automation[0].get("action") != "wait_for":
+            errors.append("ui_automation must begin with wait_for to bind the recorded candidate window")
+        for index, step in enumerate(automation):
+            prefix = f"ui_automation[{index}]"
+            if not isinstance(step, dict):
+                errors.append(f"{prefix} must be an action object")
+                continue
+            action = step.get("action")
+            if action not in UI_AUTOMATION_ACTIONS:
+                errors.append(f"{prefix}.action must be wait_for, press, set_value, or assert_not_present")
+                continue
+            allowed = {"action", "identifier", "timeout_seconds"}
+            if action == "set_value":
+                allowed.add("value")
+            unknown = sorted(set(step) - allowed)
+            if unknown:
+                errors.append(f"{prefix} has unknown field(s): {', '.join(unknown)}")
+            identifier = step.get("identifier")
+            if not isinstance(identifier, str) or not ACCESSIBILITY_PATTERN.fullmatch(identifier):
+                errors.append(f"{prefix}.identifier must be one literal accessibility identifier")
+            timeout = step.get("timeout_seconds", 10)
+            if not isinstance(timeout, int) or isinstance(timeout, bool) or not 1 <= timeout <= 60:
+                errors.append(f"{prefix}.timeout_seconds must be an integer from 1 to 60")
+            if action == "set_value":
+                value = step.get("value")
+                if not isinstance(value, str) or len(value) > 1000:
+                    errors.append(f"{prefix}.value must be a string no longer than 1000 characters")
+            elif "value" in step:
+                errors.append(f"{prefix}.value is allowed only for set_value")
     for key in COMMIT_BOUND_LIST_FIELDS:
         value = contract.get(key)
         if not isinstance(value, list) or not value or not all(

@@ -3,6 +3,13 @@
   "visible_surface": "The signed Harness macOS app on Adam's Mac.",
   "expected_visible_result": "The accepted result is visible in the verified app window.",
   "ui_test_identifier": "HarnessUITests/AcceptedResultTests/testAcceptedResultAppears",
+  "ui_automation": [
+    {
+      "action": "wait_for",
+      "identifier": "AcceptedResult",
+      "timeout_seconds": 20
+    }
+  ],
   "final_accessibility_identifier": "AcceptedResult",
   "critical_flow": [
     "Launch the signed app and execute the exact visible requirement."

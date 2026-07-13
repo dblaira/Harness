@@ -23,18 +23,22 @@ import evidence_binding  # noqa: E402
 import periphery_changed_gate  # noqa: E402
 import resolve_harness_repo  # noqa: E402
 import route_stop_gate  # noqa: E402
+import run_with_timeout  # noqa: E402
 import run_gate_script_tests  # noqa: E402
 import sanitize_review_bundle  # noqa: E402
 import swift_test_inventory  # noqa: E402
 import select_pull_request  # noqa: E402
 import require_latest_status  # noqa: E402
+import readonly_sparql_proxy  # noqa: E402
 import validate_acceptance_contract  # noqa: E402
 import validate_media  # noqa: E402
 import validate_gate_test_report  # noqa: E402
 import validate_sol_review  # noqa: E402
+import validate_xctest_transcript  # noqa: E402
 import validate_xcresult  # noqa: E402
 import validate_swiftpm_tests  # noqa: E402
 import verify_release_tree  # noqa: E402
+import verify_release_tree_run  # noqa: E402
 import verify_codex_auth  # noqa: E402
 import verify_codex_runtime  # noqa: E402
 import verify_app_identity  # noqa: E402
@@ -45,6 +49,9 @@ import verify_repository_gate_state  # noqa: E402
 
 
 COMMIT_BOUND_FIXTURE = {
+    "ui_automation": [
+        {"action": "wait_for", "identifier": "Delegation", "timeout_seconds": 10}
+    ],
     "critical_flow": ["Run the exact flow."],
     "required_proof": ["Capture tests and visible evidence."],
     "risk_and_authority_boundaries": "Signing and accepted authority remain distinct.",
@@ -72,6 +79,8 @@ The answer is visible and no progress state remains.
 2. Submit the request and observe the answer.
 ## Exact UI test
 HarnessUITests/AnswerTests/testVisibleAnswer
+## Signed Mac UI automation
+1. Wait for VisibleAnswer inside the exact candidate app.
 ## Final accessibility identifier
 VisibleAnswer
 ## Required proof
@@ -260,11 +269,19 @@ class ReleaseGateTests(unittest.TestCase):
             )
         )
 
-    def test_hook_allows_only_explicit_blocked_exit_without_evidence(self) -> None:
+    def test_hook_allows_only_structured_external_authority_blocker_without_evidence(self) -> None:
         original = release_gate.guarded_changes
         release_gate.guarded_changes = lambda _root: ["Sources/Harness/Feature.swift"]
         try:
-            result = release_gate.hook(Path("."), {"last_assistant_message": "BLOCKED: missing external authority"})
+            result = release_gate.hook(
+                Path("."),
+                {
+                    "last_assistant_message": (
+                        "BLOCKED: EXTERNAL_AUTHORITY_REQUIRED "
+                        "category=account-owner; reason=Adam must approve the external account action."
+                    )
+                },
+            )
             self.assertEqual(result, {"continue": True})
         finally:
             release_gate.guarded_changes = original
@@ -274,6 +291,9 @@ class ReleaseGateTests(unittest.TestCase):
         release_gate.guarded_changes = lambda _root: ["Sources/Harness/Feature.swift"]
         try:
             for message in (
+                "BLOCKED: missing external authority",
+                "BLOCKED: EXTERNAL_AUTHORITY_REQUIRED category=build-failure; reason=Tests failed.",
+                "BLOCKED: EXTERNAL_AUTHORITY_REQUIRED category=account-owner; reason=Build timed out and tests failed.",
                 "BLOCKED: implemented and verified; handoff evidence is absent",
                 "BLOCKED: tests pass but the manifest is missing",
                 "BLOCKED: the feature is working; release proof is unavailable",
@@ -283,7 +303,12 @@ class ReleaseGateTests(unittest.TestCase):
             self.assertEqual(
                 release_gate.hook(
                     Path("."),
-                    {"last_assistant_message": "BLOCKED: not verified because signing authority is absent"},
+                    {
+                        "last_assistant_message": (
+                            "BLOCKED: EXTERNAL_AUTHORITY_REQUIRED "
+                            "category=physical-device; reason=Adam must perform the physical device gesture."
+                        )
+                    },
                 ),
                 {"continue": True},
             )
@@ -467,15 +492,15 @@ class ReleaseGateTests(unittest.TestCase):
             root = Path(directory)
             directory_png = root / "visible.png"
             directory_png.mkdir()
-            file_xcresult = root / "tests.xcresult"
-            file_xcresult.write_text("not a result bundle", encoding="utf-8")
+            directory_transcript = root / "unit.log"
+            directory_transcript.mkdir()
             self.assertIn(
                 "artifact must be a regular file: screenshot",
                 release_gate.artifact_type_errors("screenshot", directory_png),
             )
             self.assertIn(
-                "artifact must be a directory: unit_xcresult",
-                release_gate.artifact_type_errors("unit_xcresult", file_xcresult),
+                "artifact must be a regular file: unit_test_transcript",
+                release_gate.artifact_type_errors("unit_test_transcript", directory_transcript),
             )
 
     def test_missing_handoff_manifest_is_explicitly_invalid(self) -> None:
@@ -580,6 +605,64 @@ class XCResultGateTests(unittest.TestCase):
         let example = "func inventedTest()"
         '''
         self.assertEqual(swift_test_inventory.identifiers(source), {"multilineTest"})
+
+
+class DirectXCTestGateTests(unittest.TestCase):
+    def test_direct_transcript_requires_exact_protected_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            expected = root / "expected.json"
+            transcript = root / "unit.log"
+            expected.write_text(json.dumps(["firstTest", "secondTest"]), encoding="utf-8")
+            transcript.write_text(
+                "✔ Test firstTest() passed after 0.001 seconds.\n"
+                "✔ Test secondTest() passed after 0.001 seconds.\n"
+                "✔ Test run with 2 tests in 1 suite passed after 0.002 seconds.\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(validate_xctest_transcript.validate(expected, transcript), [])
+
+    def test_direct_transcript_rejects_missing_or_extra_tests(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            expected = root / "expected.json"
+            transcript = root / "unit.log"
+            expected.write_text(json.dumps(["firstTest", "secondTest"]), encoding="utf-8")
+            transcript.write_text(
+                "✔ Test firstTest() passed after 0.001 seconds.\n"
+                "✔ Test inventedTest() passed after 0.001 seconds.\n"
+                "✔ Test run with 2 tests in 1 suite passed after 0.002 seconds.\n",
+                encoding="utf-8",
+            )
+            errors = validate_xctest_transcript.validate(expected, transcript)
+            self.assertTrue(any("secondTest" in error for error in errors))
+            self.assertTrue(any("inventedTest" in error for error in errors))
+
+    def test_signed_ui_proof_rejects_pid_escape(self) -> None:
+        actions = [{"action": "wait_for", "identifier": "Delegation", "timeout_seconds": 10}]
+        proof = {
+            "schema_version": 1,
+            "status": "PASS",
+            "pid": 41,
+            "bundle_identifier": "com.adamblair.Harness",
+            "executable": "/proof/Harness.app/Contents/MacOS/Harness",
+            "final_accessibility_identifier": "Delegation",
+            "contract_actions": actions,
+            "action_results": [
+                {"action": "wait_for", "identifier": "Delegation", "status": "PASS", "target_pid": 99}
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ui.json"
+            path.write_text(json.dumps(proof), encoding="utf-8")
+            errors = release_gate.validate_ui_automation_proof(
+                path,
+                expected_pid=41,
+                expected_executable="/proof/Harness.app/Contents/MacOS/Harness",
+                expected_identifier="Delegation",
+                expected_actions=actions,
+            )
+        self.assertIn("signed Mac UI automation result 0 escaped the exact candidate PID", errors)
 
 
 class SwiftPMInventoryTests(unittest.TestCase):
@@ -1061,6 +1144,33 @@ class HostedAuthorityTests(unittest.TestCase):
         ]
         self.assertTrue(any("wrong creator" in error for error in verify_merge_authority.validate(payload, marker)))
 
+    def test_newer_pending_or_failure_blocks_an_older_local_success(self) -> None:
+        marker = "pr:20 binding:abcdefghijklmnopqrstuvwx"
+        for newest_state in ("pending", "failure"):
+            payload = []
+            for context in verify_merge_authority.REQUIRED:
+                payload.extend([
+                    {
+                        "context": context,
+                        "state": newest_state if context == "Signed Mac handoff" else "success",
+                        "creator": {"login": "dblaira"},
+                        "description": marker,
+                        "target_url": "https://github.com/dblaira/Harness/pull/20",
+                    },
+                    {
+                        "context": context,
+                        "state": "success",
+                        "creator": {"login": "dblaira"},
+                        "description": marker,
+                        "target_url": "https://github.com/dblaira/Harness/pull/20",
+                    },
+                ])
+            errors = verify_merge_authority.validate(payload, marker)
+            self.assertIn(
+                "latest trusted merge status is not successful: Signed Mac handoff",
+                errors,
+            )
+
 
 class RepositoryGateStateTests(unittest.TestCase):
     def test_each_drifted_repository_setting_fails_closed(self) -> None:
@@ -1175,6 +1285,8 @@ class GateStructureTests(unittest.TestCase):
         self.assertGreaterEqual(handoff.count("--jq .head.sha"), 1)
         self.assertIn("FINAL_PR_HEAD=", handoff)
         self.assertLess(handoff.index("preflight_tcc.swift"), handoff.index("xcodegen generate"))
+        preflight = (Path.cwd() / "scripts/preflight_tcc.swift").read_text(encoding="utf-8")
+        self.assertIn("CGSSessionScreenIsLocked", preflight)
 
     def test_installed_stop_hook_has_validation_budget_and_replaces_stale_entry(self) -> None:
         installer = (Path.cwd() / "script/install_local_gate_controls.sh").read_text(encoding="utf-8")
@@ -1201,15 +1313,40 @@ class GateStructureTests(unittest.TestCase):
         self.assertIn('(subpath \\"$HOME/.local/bin\\")', handoff)
         self.assertIn('(literal \\"$HOME/.codex/hooks.json\\")', handoff)
         self.assertIn('(subpath \\"$OUTPUT_DIR\\")', handoff)
+        self.assertIn('(subpath \\"$CANDIDATE_OUTPUT_DIR\\")', handoff)
+        self.assertIn('(subpath \\"$UI_STAGING_ROOT\\")', handoff)
         self.assertIn("CANDIDATE_OUTPUT_DIR=", handoff)
-        self.assertIn("proposal_exec xcodebuild build-for-testing", handoff)
-        self.assertIn("proposal_exec xcodebuild test", handoff)
-        self.assertEqual(handoff.count("proposal_exec xcodegen generate"), 3)
-        self.assertGreaterEqual(handoff.count('/usr/bin/sandbox-exec -p "$PROPOSAL_SANDBOX"'), 3)
+        self.assertIn("trusted_exec xcodebuild build-for-testing", handoff)
+        self.assertIn('proposal_exec "$XCTEST_BINARY" "$UNIT_TEST_BUNDLE"', handoff)
+        self.assertEqual(handoff.count("trusted_exec xcodegen generate"), 1)
+        self.assertNotIn("proposal_exec xcodegen generate", handoff)
+        self.assertNotIn("proposal_exec xcodebuild", handoff)
+        self.assertEqual(handoff.count('/usr/bin/sandbox-exec -p "$PROPOSAL_SANDBOX"'), 2)
+        self.assertIn("git worktree add --detach", handoff)
+        self.assertIn('/usr/bin/env -i HOME="$PROPOSAL_HOME"', handoff)
+        self.assertIn('(deny network-outbound)', handoff)
+        self.assertIn('(subpath \\"$LIVE_ONTOLOGY_ROOT\\")', handoff)
+        self.assertIn('(deny file-read* (subpath \\"$HOME\\")', handoff)
+        self.assertIn('(deny appleevent-send)', handoff)
+        self.assertIn('(global-name \\"com.apple.pboard\\")', handoff)
+        self.assertIn("readonly_sparql_proxy.py", handoff)
+        self.assertIn("snapshot_authority_state.py", handoff)
+        self.assertIn("proposal-processes.json", handoff)
+        self.assertIn("run_accessibility_contract.swift", handoff)
+        self.assertNotIn("test-without-building", handoff)
+        self.assertIn("validate_xctest_transcript.py", handoff)
 
     def test_test_topology_is_part_of_the_protected_control_boundary(self) -> None:
         self.assertIn("project.yml", verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
         self.assertIn("Packages/OntologyKit/Package.swift", verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
+        self.assertIn("scripts/sync-ontology.sh", verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
+        self.assertIn("scripts/readonly_sparql_proxy.py", verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
+        self.assertIn("scripts/snapshot_authority_state.py", verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
+        self.assertIn("scripts/run_accessibility_contract.swift", verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
+        self.assertIn("scripts/validate_xctest_transcript.py", verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
+        self.assertIn(".github/codex", verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
+        store = (Path.cwd() / "Packages/OntologyKit/Sources/OntologyKit/ReviewQueueStore.swift").read_text()
+        self.assertIn('environment["HARNESS_ONTOLOGY_ROOT"]', store)
 
     def test_signed_handoff_runs_and_validates_the_reserved_live_swift_test(self) -> None:
         handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
@@ -1237,21 +1374,16 @@ class GateStructureTests(unittest.TestCase):
         self.assertNotIn("screencapture -v -V120 -m", handoff)
         self.assertIn("recorded_running_app_proof", handoff)
 
-    def test_ui_assertion_and_screenshot_share_expected_process_and_window(self) -> None:
-        ui_test = (Path.cwd() / "Tests/HarnessUITests/HarnessCriticalFlowTests.swift").read_text(encoding="utf-8")
+    def test_signed_ui_actions_are_scoped_to_exact_process_and_window(self) -> None:
+        driver = (Path.cwd() / "scripts/run_accessibility_contract.swift").read_text(encoding="utf-8")
         handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
-        self.assertIn("HARNESS_EXPECTED_PID", ui_test)
-        self.assertIn("HarnessProcess-\\(expectedPID)", ui_test)
-        self.assertIn("HARNESS_EXPECTED_WINDOW_BOUNDS", ui_test)
-        self.assertIn("window.descendants(matching: .any)[requiredIdentifier]", ui_test)
-        self.assertNotIn("app.descendants(matching: .any)[requiredIdentifier]", ui_test)
-        self.assertIn("attachVisibleResult(of: window", ui_test)
-        self.assertGreaterEqual(handoff.count("HARNESS_EXPECTED_WINDOW_BOUNDS="), 3)
-        self.assertIn('UI_TEST_ARGS=("-only-testing:$BINDING_UI_TEST")', handoff)
-        self.assertIn('UI_TEST_ARGS+=("-only-testing:$UI_TEST")', handoff)
-        self.assertIn('--required-test "$UI_TEST" --max-duration 55 --screenshot-output "$FEATURE_SCREENSHOT"', handoff)
-        self.assertIn('cmp -s "$FEATURE_SCREENSHOT" "$SCREENSHOT"', handoff)
-        self.assertIn('--required-test "$BINDING_UI_TEST"', handoff)
+        self.assertIn("AXUIElementCreateApplication(options.pid)", driver)
+        self.assertIn("keyDown.postToPid(pid)", driver)
+        self.assertIn('Set(["wait_for", "press", "set_value", "assert_not_present"])', driver)
+        self.assertNotIn("NSWorkspace.shared", driver)
+        self.assertEqual(handoff.count('run_accessibility_contract.swift"'), 4)
+        self.assertIn('[[ "$(jq -r .window_id "$INITIAL_RUNNING_APP_PROOF")" == "$RECORDED_WINDOW_ID" ]]', handoff)
+        self.assertNotIn("HarnessUITests-Runner", handoff)
 
     def test_live_satisfaction_oracle_change_is_rejected_before_handoff_execution(self) -> None:
         handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
@@ -1273,12 +1405,30 @@ class GateStructureTests(unittest.TestCase):
     def test_signature_identity_precedes_first_app_test_or_launch(self) -> None:
         handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
         identity = handoff.index("verify_app_identity.py")
-        unit_test = handoff.index("xcodebuild test \\")
-        ui_test = handoff.index("xcodebuild test-without-building")
-        normal_launch = handoff.index('proposal_exec "$APP_BUNDLE/Contents/MacOS/Harness"')
+        unit_test = handoff.index('proposal_exec "$XCTEST_BINARY"')
+        ui_test = handoff.index('run_accessibility_contract.swift"')
+        normal_launch = handoff.index('proposal_start "$APP_BUNDLE/Contents/MacOS/Harness"')
         self.assertLess(identity, unit_test)
         self.assertLess(identity, ui_test)
         self.assertLess(identity, normal_launch)
+
+    def test_candidate_cannot_use_operator_signing_authority(self) -> None:
+        handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
+        trusted_build = handoff.index("TRUSTED_LABEL=trusted-app-build trusted_exec xcodebuild build")
+        identity = handoff.index("verify_app_identity.py")
+        self.assertLess(trusted_build, identity)
+        self.assertNotIn("trusted-ui-runner-signing", handoff)
+        self.assertNotIn("proposal_exec /usr/bin/codesign", handoff)
+        self.assertIn('(deny process-exec (literal \\"/usr/bin/security\\")', handoff)
+
+    def test_merge_waits_for_exact_release_tree_artifact(self) -> None:
+        merger = (Path.cwd() / "script/merge_verified_pr.sh").read_text(encoding="utf-8")
+        merge = merger.index('gh pr merge')
+        merge_sha = merger.index('MERGE_SHA=')
+        attestation = merger.index('verify_release_tree_run.py')
+        self.assertLess(merge, merge_sha)
+        self.assertLess(merge_sha, attestation)
+        self.assertIn("release-tree-verification.json", merger)
 
     def test_permanent_installer_has_no_mutable_pr_bootstrap(self) -> None:
         installer = (Path.cwd() / "script/install_local_gate_controls.sh").read_text(encoding="utf-8")
@@ -1383,15 +1533,87 @@ class GateStructureTests(unittest.TestCase):
 
 
 class ReleaseTreeTests(unittest.TestCase):
+    def test_read_only_proxy_rejects_every_update_form(self) -> None:
+        self.assertTrue(readonly_sparql_proxy.is_read_only_query("PREFIX ex: <x> SELECT * WHERE { ?s ?p ?o }"))
+        self.assertTrue(readonly_sparql_proxy.is_read_only_query("ASK { ?s ?p ?o }"))
+        for query in (
+            "INSERT DATA { <a> <b> <c> }",
+            "DELETE WHERE { ?s ?p ?o }",
+            "WITH <g> DELETE { ?s ?p ?o } WHERE { ?s ?p ?o }",
+            "LOAD <https://example.com/data>",
+        ):
+            self.assertFalse(readonly_sparql_proxy.is_read_only_query(query))
+
+    def test_process_group_wrapper_kills_a_child_left_by_successful_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            child_pid_path = root / "child.pid"
+            report_path = root / "report.json"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "run_with_timeout.py"),
+                    "--seconds", "10",
+                    "--process-report", str(report_path),
+                    "--",
+                    "/bin/sh", "-c", f"sleep 30 & echo $! > '{child_pid_path}'",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["retained_pids"], [])
+            self.assertEqual(report["status"], "PASS")
+            child_pid = child_pid_path.read_text(encoding="utf-8").strip()
+            self.assertNotEqual(
+                subprocess.run(["/bin/kill", "-0", child_pid], capture_output=True, check=False).returncode,
+                0,
+            )
+
+    def test_process_group_permission_error_falls_back_to_owned_members(self) -> None:
+        original_killpg = run_with_timeout.os.killpg
+        original_kill = run_with_timeout.os.kill
+        original_members = run_with_timeout.group_members
+        calls: list[tuple[int, int]] = []
+        run_with_timeout.os.killpg = lambda *_args: (_ for _ in ()).throw(PermissionError())
+        run_with_timeout.os.kill = lambda pid, signum: calls.append((pid, int(signum)))
+        run_with_timeout.group_members = lambda _pgid: [
+            {"pid": 101, "uid": os.getuid(), "command": "owned"},
+            {"pid": 202, "uid": os.getuid() + 1, "command": "protected"},
+        ]
+        try:
+            run_with_timeout.signal_group(99, run_with_timeout.signal.SIGTERM)
+        finally:
+            run_with_timeout.os.killpg = original_killpg
+            run_with_timeout.os.kill = original_kill
+            run_with_timeout.group_members = original_members
+        self.assertEqual(calls, [(101, int(run_with_timeout.signal.SIGTERM))])
+
+    def test_release_run_rejects_wrong_workflow_identity(self) -> None:
+        errors = verify_release_tree_run.validate_run(
+            {
+                "path": ".github/workflows/untrusted.yml",
+                "event": "workflow_dispatch",
+                "head_sha": "a" * 40,
+                "conclusion": "success",
+                "repository": {"full_name": "dblaira/Harness"},
+            },
+            "dblaira/Harness",
+            "a" * 40,
+        )
+        self.assertIn("release attestation came from the wrong workflow or event", errors)
+
     def test_merge_commit_attests_exact_verified_tree_and_checks(self) -> None:
         merge, first, head, tree = "m" * 40, "a" * 40, "b" * 40, "t" * 40
         status_contexts = set(verify_release_tree.REQUIRED_STATUS_CONTEXTS)
         statuses = [{
             "context": context,
             "state": "success",
-            "target_url": f"https://example/{context}",
+            "target_url": f"https://github.com/dblaira/Harness/pull/19#{context}",
             "creator": {"login": verify_release_tree.REQUIRED_STATUS_CONTEXTS[context]},
-            "description": "success pr:19 binding:abcdef",
+            "description": f"success pr:19 binding:{'a' * 24}",
         } for context in status_contexts]
         checks = {"check_runs": [
             {

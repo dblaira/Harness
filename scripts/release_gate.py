@@ -43,6 +43,7 @@ GATE_FILES = {
     ".cursor/rules/ios-main-only.mdc",
     ".cursor/rules/stack-ios.mdc",
     "scripts/lint_changed_swift.sh",
+    "scripts/run_accessibility_contract.swift",
     "scripts/release_gate.py",
     "scripts/resolve_harness_repo.py",
     "scripts/verify_app_identity.py",
@@ -64,17 +65,26 @@ NEGATED_COMPLETION = re.compile(
     r"resolved|successful|succeeded|shipped|complete|completed)\b",
     re.IGNORECASE,
 )
-UI_TEST_PATTERN = re.compile(r"^HarnessUITests/[A-Za-z_][A-Za-z0-9_]*/test[A-Za-z0-9_]+$")
 USER_QUESTION = re.compile(
     r"^(?:adam[,:—\s]+)?(?:who|what|when|where|why|how|which|should|could|would|"
     r"can|may|is|are|do|does|did|will)\b.*\?\s*$",
     re.IGNORECASE | re.DOTALL,
 )
+EXTERNAL_AUTHORITY_BLOCKER = re.compile(
+    r"^BLOCKED:\s+EXTERNAL_AUTHORITY_REQUIRED\s+"
+    r"category=(?:physical-device|account-owner|product-judgment);\s+reason=\S.*$",
+    re.IGNORECASE | re.DOTALL,
+)
+OPERATIONAL_BLOCKER = re.compile(
+    r"\b(build|tests?|signing|tcc|ui|hosted|timeouts?|timed out|dependency|manifest|workflow)\b",
+    re.IGNORECASE,
+)
 FILE_ARTIFACTS = {
     "screenshot",
     "video",
     "final_screenshot",
-    "final_ui_screenshot",
+    "ui_automation_proof",
+    "final_ui_automation_proof",
     "satisfaction_artifact",
     "app_identity",
     "running_app_proof",
@@ -87,11 +97,13 @@ FILE_ARTIFACTS = {
     "accepted_graph_snapshot",
     "live_service_identity",
     "live_service_identity_after",
+    "authority_snapshot_before",
+    "authority_snapshot_after",
+    "accepted_graph_snapshot_after",
+    "proposal_process_report",
+    "unit_test_transcript",
 }
 DIRECTORY_ARTIFACTS = {
-    "unit_xcresult",
-    "ui_xcresult",
-    "final_ui_xcresult",
     "app_bundle",
 }
 
@@ -239,7 +251,78 @@ def validate_xcresult(
     return []
 
 
-def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
+def validate_direct_xctest(transcript: Path, inventory: Path) -> list[str]:
+    validator = Path(__file__).with_name("validate_xctest_transcript.py")
+    result = run_command(
+        sys.executable,
+        str(validator),
+        "--expected", str(inventory),
+        "--transcript", str(transcript),
+    )
+    return [] if result.returncode == 0 else [result.stderr.strip() or result.stdout.strip()]
+
+
+def validate_ui_automation_proof(
+    path: Path,
+    *,
+    expected_pid: int,
+    expected_executable: str,
+    expected_identifier: str,
+    expected_actions: object,
+) -> list[str]:
+    try:
+        proof = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        return [f"signed Mac UI automation proof is unreadable: {error}"]
+    errors: list[str] = []
+    expected_keys = {
+        "schema_version", "status", "pid", "bundle_identifier", "executable",
+        "final_accessibility_identifier", "contract_actions", "action_results",
+    }
+    if not isinstance(proof, dict) or set(proof) != expected_keys:
+        return ["signed Mac UI automation proof has an unexpected schema"]
+    if proof.get("schema_version") != 1 or proof.get("status") != "PASS":
+        errors.append("signed Mac UI automation proof did not pass")
+    if proof.get("pid") != expected_pid:
+        errors.append("signed Mac UI automation proof is bound to the wrong candidate PID")
+    if proof.get("bundle_identifier") != "com.adamblair.Harness":
+        errors.append("signed Mac UI automation proof has the wrong bundle identifier")
+    if proof.get("executable") != expected_executable:
+        errors.append("signed Mac UI automation proof has the wrong candidate executable")
+    if proof.get("final_accessibility_identifier") != expected_identifier:
+        errors.append("signed Mac UI automation proof has the wrong final identifier")
+    if proof.get("contract_actions") != expected_actions:
+        errors.append("signed Mac UI automation proof does not match the committed action contract")
+    results = proof.get("action_results")
+    if not isinstance(expected_actions, list) or not isinstance(results, list) or len(results) != len(expected_actions):
+        errors.append("signed Mac UI automation proof has incomplete action results")
+        return errors
+    for index, (step, result) in enumerate(zip(expected_actions, results)):
+        if not isinstance(step, dict) or not isinstance(result, dict):
+            errors.append(f"signed Mac UI automation result {index} is malformed")
+            continue
+        allowed_keys = {"action", "identifier", "status"}
+        if step.get("action") != "assert_not_present":
+            allowed_keys.add("target_pid")
+        if set(result) != allowed_keys:
+            errors.append(f"signed Mac UI automation result {index} has an unexpected schema")
+        if (
+            result.get("action") != step.get("action")
+            or result.get("identifier") != step.get("identifier")
+            or result.get("status") != "PASS"
+        ):
+            errors.append(f"signed Mac UI automation result {index} does not match the committed action")
+        if "target_pid" in allowed_keys and result.get("target_pid") != expected_pid:
+            errors.append(f"signed Mac UI automation result {index} escaped the exact candidate PID")
+    return errors
+
+
+def validate_manifest(
+    root: Path,
+    manifest_path: Path,
+    *,
+    require_signed_status: bool = True,
+) -> list[str]:
     errors: list[str] = []
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -265,8 +348,7 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
         "visible_surface",
         "expected_visible_result",
         "observed_visible_result",
-        "ui_test_identifier",
-        "binding_ui_test_identifier",
+        "acceptance_test_identifier",
         "app_bundle",
         "app_cdhash",
         "app_team_identifier",
@@ -284,6 +366,8 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
         errors.append("manifest git tree does not match HEAD")
     if not isinstance(manifest.get("app_pid"), int) or manifest.get("app_pid", 0) <= 0:
         errors.append("the recorded signed app PID is required")
+    if not isinstance(manifest.get("recorded_app_pid"), int) or manifest.get("recorded_app_pid", 0) <= 0:
+        errors.append("the initial recorded signed app PID is required")
     if manifest.get("proposal_processes_terminated") is not True:
         errors.append("proposal processes were not terminated before final evidence generation")
     if manifest.get("working_tree_clean") is not True:
@@ -296,18 +380,6 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
         errors.append("base_sha is required")
     if not isinstance(manifest.get("evidence_binding"), str) or len(manifest.get("evidence_binding", "")) != 64:
         errors.append("full pull-request evidence binding is required")
-    ui_test_identifier = manifest.get("ui_test_identifier", "")
-    if not isinstance(ui_test_identifier, str) or not UI_TEST_PATTERN.fullmatch(ui_test_identifier):
-        errors.append("manifest does not name an exact HarnessUITests requirement test")
-    binding_ui_test_identifier = manifest.get("binding_ui_test_identifier", "")
-    if not isinstance(binding_ui_test_identifier, str) or not UI_TEST_PATTERN.fullmatch(binding_ui_test_identifier):
-        errors.append("manifest does not name the immutable window-binding UI test")
-    acceptance_test_identifier = manifest.get("acceptance_test_identifier", "")
-    if (
-        acceptance_test_identifier != "INFRASTRUCTURE_ONLY"
-        and acceptance_test_identifier != ui_test_identifier
-    ):
-        errors.append("executed UI test does not match the reviewed acceptance contract")
     contract_path = root / ".github" / "acceptance-contract.json"
     try:
         contract = json.loads(contract_path.read_text(encoding="utf-8"))
@@ -324,6 +396,7 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
         ("visible_surface", "visible_surface"),
         ("expected_visible_result", "expected_visible_result"),
         ("acceptance_test_identifier", "ui_test_identifier"),
+        ("ui_automation", "ui_automation"),
         ("final_accessibility_identifier", "final_accessibility_identifier"),
     ):
         if manifest.get(manifest_key) != contract.get(contract_key):
@@ -335,8 +408,8 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
         tests = []
     required_tests = {
         "macos-unit-tests",
-        "macos-ui-tests",
-        "final-relaunch-ui-test",
+        "signed-mac-ui-automation",
+        "final-relaunch-ui-automation",
         "live-satisfaction-swift-test",
         "live-satisfaction-oracle",
         "trusted-hosted-verification",
@@ -348,26 +421,7 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
         if isinstance(test, dict) and test.get("status") == "PASS"
     }
     if not required_tests.issubset(passed_tests):
-        errors.append("both macOS unit and UI tests must pass without skips")
-    ui_results = [
-        test for test in tests or []
-        if isinstance(test, dict) and test.get("name") == "macos-ui-tests"
-    ]
-    if len(ui_results) != 1 or ui_results[0].get("test_identifier") != ui_test_identifier:
-        errors.append("UI test result is not bound to the manifest requirement test")
-    binding_results = [
-        test for test in tests or []
-        if isinstance(test, dict) and test.get("name") == "window-bound-ui-evidence"
-    ]
-    if len(binding_results) != 1 or binding_results[0].get("test_identifier") != binding_ui_test_identifier:
-        errors.append("UI evidence is not bound by the immutable PID/window test")
-    final_results = [
-        test for test in tests or []
-        if isinstance(test, dict) and test.get("name") == "final-relaunch-ui-test"
-    ]
-    final_attach_test = binding_ui_test_identifier
-    if len(final_results) != 1 or final_results[0].get("test_identifier") != final_attach_test:
-        errors.append("final relaunch did not rerun the exact manifest requirement test")
+        errors.append("macOS unit, signed UI automation, and final relaunch proof must pass")
 
     review = manifest.get("sol_review") or {}
     if not isinstance(review, dict):
@@ -387,11 +441,10 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
     for name in (
         "screenshot",
         "video",
-        "unit_xcresult",
-        "ui_xcresult",
+        "unit_test_transcript",
+        "ui_automation_proof",
         "final_screenshot",
-        "final_ui_screenshot",
-        "final_ui_xcresult",
+        "final_ui_automation_proof",
         "running_app_proof",
         "recorded_running_app_proof",
         "media_proof",
@@ -403,6 +456,10 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
         "accepted_graph_snapshot",
         "live_service_identity",
         "live_service_identity_after",
+        "authority_snapshot_before",
+        "authority_snapshot_after",
+        "accepted_graph_snapshot_after",
+        "proposal_process_report",
         "app_bundle",
         "app_identity",
     ):
@@ -420,11 +477,10 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
 
     screenshot = resolve_artifact(root, artifacts.get("screenshot"))
     final_screenshot = resolve_artifact(root, artifacts.get("final_screenshot"))
-    final_ui_screenshot = resolve_artifact(root, artifacts.get("final_ui_screenshot"))
     video = resolve_artifact(root, artifacts.get("video"))
-    unit_xcresult = resolve_artifact(root, artifacts.get("unit_xcresult"))
-    ui_xcresult = resolve_artifact(root, artifacts.get("ui_xcresult"))
-    final_ui_xcresult = resolve_artifact(root, artifacts.get("final_ui_xcresult"))
+    unit_test_transcript = resolve_artifact(root, artifacts.get("unit_test_transcript"))
+    ui_automation_proof = resolve_artifact(root, artifacts.get("ui_automation_proof"))
+    final_ui_automation_proof = resolve_artifact(root, artifacts.get("final_ui_automation_proof"))
     satisfaction = resolve_artifact(root, artifacts.get("satisfaction_artifact"))
     live_swift_transcript = resolve_artifact(root, artifacts.get("live_swift_transcript"))
     live_swift_artifact = resolve_artifact(root, artifacts.get("live_swift_artifact"))
@@ -432,6 +488,10 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
     accepted_graph_snapshot = resolve_artifact(root, artifacts.get("accepted_graph_snapshot"))
     live_service_identity = resolve_artifact(root, artifacts.get("live_service_identity"))
     live_service_identity_after = resolve_artifact(root, artifacts.get("live_service_identity_after"))
+    authority_snapshot_before = resolve_artifact(root, artifacts.get("authority_snapshot_before"))
+    authority_snapshot_after = resolve_artifact(root, artifacts.get("authority_snapshot_after"))
+    accepted_graph_snapshot_after = resolve_artifact(root, artifacts.get("accepted_graph_snapshot_after"))
+    proposal_process_report = resolve_artifact(root, artifacts.get("proposal_process_report"))
     app_bundle = resolve_artifact(root, artifacts.get("app_bundle"))
     app_identity = resolve_artifact(root, artifacts.get("app_identity"))
     running_app_proof = resolve_artifact(root, artifacts.get("running_app_proof"))
@@ -442,14 +502,11 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
         errors.extend(validate_png(screenshot))
     if final_screenshot and final_screenshot.is_file():
         errors.extend(validate_png(final_screenshot))
-    if final_ui_screenshot and final_ui_screenshot.is_file():
-        errors.extend(validate_png(final_ui_screenshot))
     if video and video.is_file():
         errors.extend(validate_quicktime(video))
     decoded_media = Path(__file__).with_name("validate_media.py")
     if (
         screenshot and screenshot.is_file()
-        and final_ui_screenshot and final_ui_screenshot.is_file()
         and final_screenshot and final_screenshot.is_file()
         and video and video.is_file()
         and media_proof and media_proof.is_file()
@@ -460,7 +517,6 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
                 sys.executable,
                 str(decoded_media),
                 "--png", str(screenshot),
-                "--png", str(final_ui_screenshot),
                 "--png", str(final_screenshot),
                 "--video", str(video),
                 "--output", str(fresh_media_proof),
@@ -469,14 +525,8 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
                 errors.append(media_result.stderr.strip() or media_result.stdout.strip())
             elif sha256_path(fresh_media_proof) != sha256_path(media_proof):
                 errors.append("decoded media proof does not match the current screenshots and recording")
-    if unit_xcresult and unit_xcresult.is_dir() and test_inventory and test_inventory.is_file():
-        errors.extend(validate_xcresult(unit_xcresult, required_bundle="HarnessTests", required_test_list=test_inventory))
-    if ui_xcresult and ui_xcresult.is_dir() and screenshot and screenshot.is_file():
-        errors.extend(validate_xcresult(ui_xcresult, required_test=ui_test_identifier, expected_screenshot=screenshot))
-        errors.extend(validate_xcresult(ui_xcresult, required_test=binding_ui_test_identifier, expected_screenshot=screenshot))
-    if final_ui_xcresult and final_ui_xcresult.is_dir() and final_ui_screenshot and final_ui_screenshot.is_file():
-        errors.extend(validate_xcresult(final_ui_xcresult, required_test=ui_test_identifier, expected_screenshot=final_ui_screenshot))
-        errors.extend(validate_xcresult(final_ui_xcresult, required_test=final_attach_test, expected_screenshot=final_ui_screenshot))
+    if unit_test_transcript and unit_test_transcript.is_file() and test_inventory and test_inventory.is_file():
+        errors.extend(validate_direct_xctest(unit_test_transcript, test_inventory))
     if satisfaction and satisfaction.is_file():
         text = satisfaction.read_text(encoding="utf-8", errors="replace")
         required_markers = (
@@ -544,6 +594,33 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
             or sha256_path(live_service_identity) != sha256_path(live_service_identity_after)
         ):
             errors.append("live Fuseki or Ollama service identity changed during proposal execution")
+    if authority_snapshot_before and authority_snapshot_after:
+        if (
+            not authority_snapshot_before.is_file()
+            or not authority_snapshot_after.is_file()
+            or authority_snapshot_before.read_bytes() != authority_snapshot_after.read_bytes()
+        ):
+            errors.append("live accepted or candidate authority changed during proposal execution")
+    if accepted_graph_snapshot and accepted_graph_snapshot_after:
+        try:
+            graph_before = json.loads(accepted_graph_snapshot.read_text(encoding="utf-8"))
+            graph_after = json.loads(accepted_graph_snapshot_after.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            graph_before, graph_after = {}, {}
+        if graph_before.get("sha256") != graph_after.get("sha256"):
+            errors.append("live Fuseki accepted graph changed during proposal execution")
+    if proposal_process_report and proposal_process_report.is_file():
+        try:
+            process_report = json.loads(proposal_process_report.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            process_report = {}
+        if (
+            process_report.get("status") != "PASS"
+            or process_report.get("retained_pids") != []
+            or not isinstance(process_report.get("commands"), list)
+            or not process_report.get("commands")
+        ):
+            errors.append("proposal process report does not prove zero retained descendants")
     if app_bundle and app_bundle.is_dir():
         verify = run_command("/usr/bin/codesign", "--verify", "--deep", "--strict", str(app_bundle))
         detail = run_command("/usr/bin/codesign", "-dvvv", str(app_bundle))
@@ -574,6 +651,31 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
                 elif sha256_path(fresh_proof) != sha256_path(app_identity):
                     errors.append("app identity proof does not match current signature and entitlements")
     pid = manifest.get("app_pid")
+    recorded_pid = manifest.get("recorded_app_pid")
+    if app_bundle:
+        expected_executable = str(app_bundle / "Contents" / "MacOS" / "Harness")
+        if (
+            ui_automation_proof and ui_automation_proof.is_file()
+            and isinstance(recorded_pid, int) and recorded_pid > 0
+        ):
+            errors.extend(validate_ui_automation_proof(
+                ui_automation_proof,
+                expected_pid=recorded_pid,
+                expected_executable=expected_executable,
+                expected_identifier=str(manifest.get("final_accessibility_identifier") or ""),
+                expected_actions=contract.get("ui_automation"),
+            ))
+        if (
+            final_ui_automation_proof and final_ui_automation_proof.is_file()
+            and isinstance(pid, int) and pid > 0
+        ):
+            errors.extend(validate_ui_automation_proof(
+                final_ui_automation_proof,
+                expected_pid=pid,
+                expected_executable=expected_executable,
+                expected_identifier=str(manifest.get("final_accessibility_identifier") or ""),
+                expected_actions=contract.get("ui_automation"),
+            ))
     if recorded_running_app_proof and recorded_running_app_proof.is_file() and app_bundle:
         try:
             recorded_proof = json.loads(recorded_running_app_proof.read_text(encoding="utf-8"))
@@ -581,6 +683,8 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
             recorded_proof = {}
         if (
             recorded_proof.get("status") != "PASS"
+            or recorded_proof.get("pid") != recorded_pid
+            or recorded_proof.get("accessibility_pid") != recorded_pid
             or recorded_proof.get("bundle_identifier") != "com.adamblair.Harness"
             or recorded_proof.get("executable") != str(app_bundle / "Contents" / "MacOS" / "Harness")
             or recorded_proof.get("accessibility_identifier") != manifest.get("final_accessibility_identifier")
@@ -645,24 +749,50 @@ def validate_manifest(root: Path, manifest_path: Path) -> list[str]:
                 errors.append("manifest base SHA is stale")
             if manifest.get("evidence_binding") != expected_binding:
                 errors.append("manifest evidence binding is stale")
-        status = run_command("gh", "api", f"repos/{repo.stdout.strip()}/commits/{expected_commit}/statuses?per_page=100", cwd=root)
+        repository = repo.stdout.strip()
+        status = run_command("gh", "api", f"repos/{repository}/commits/{expected_commit}/statuses?per_page=100", cwd=root)
         status_payload = json.loads(status.stdout)
-        latest = next(
+        binding_marker = f"pr:{manifest.get('pull_request_number')} binding:{str(manifest.get('evidence_binding', ''))[:24]}"
+        sys.path.insert(0, str(Path(__file__).parent))
+        import verify_merge_authority as merge_authority  # type: ignore
+        authority_errors = merge_authority.validate(status_payload, binding_marker)
+        if not require_signed_status:
+            authority_errors = [
+                error for error in authority_errors
+                if not error.endswith("Signed Mac handoff")
+            ]
+        errors.extend(f"current merge authority: {error}" for error in authority_errors)
+        latest_sol = next(
             (item for item in status_payload if item.get("context") == "GPT-5.6 Sol review"),
             None,
         )
-        binding_marker = f"pr:{manifest.get('pull_request_number')} binding:{str(manifest.get('evidence_binding', ''))[:24]}"
-        if (
-            status.returncode
-            or not latest
-            or latest.get("state") != "success"
-            or (latest.get("creator") or {}).get("login") != "dblaira"
-            or binding_marker not in str(latest.get("description", ""))
-            or latest.get("target_url") != review.get("check_run_url")
-        ):
-            errors.append("current GPT-5.6 Sol status is not successful and bound to this contract")
+        if not latest_sol or latest_sol.get("target_url") != review.get("check_run_url"):
+            errors.append("current GPT-5.6 Sol target does not match the manifest review")
+        repository_state = run_command(
+            sys.executable,
+            str(Path(__file__).with_name("verify_repository_gate_state.py")),
+            "--repo",
+            repository,
+            cwd=root,
+        )
+        if repository_state.returncode:
+            errors.append("current repository protection, Actions policy, or runner state is invalid")
+        with tempfile.TemporaryDirectory(prefix="harness-hosted-recheck-") as directory:
+            hosted_output = Path(directory) / "report.json"
+            hosted = run_command(
+                sys.executable,
+                str(Path(__file__).with_name("verify_hosted_evidence.py")),
+                "--repo", repository,
+                "--repo-root", str(root),
+                "--base-sha", str(manifest.get("base_sha") or ""),
+                "--head-sha", expected_commit,
+                "--output", str(hosted_output),
+                cwd=root,
+            )
+            if hosted.returncode:
+                errors.append("current hosted evidence no longer has trusted workflow identity")
     except (json.JSONDecodeError, StopIteration):
-        errors.append("cannot validate current GPT-5.6 Sol status")
+        errors.append("cannot validate current online merge authority")
     return errors
 
 
@@ -678,6 +808,66 @@ def manifest_path(root: Path) -> Path:
     )
 
 
+def validate_release_tree_completion(root: Path, manifest: Path) -> list[str]:
+    proof_path = manifest.parent / "release-tree-verification.json"
+    try:
+        proof = json.loads(proof_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        return [f"cannot read final merged-tree proof: {error}"]
+    expected_head = current_commit(root)
+    repository_result = run_command(
+        "gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner", cwd=root,
+    )
+    repository = repository_result.stdout.strip()
+    merge_sha = str(proof.get("merge_sha") or "")
+    errors: list[str] = []
+    if proof.get("status") != "PASS" or proof.get("verified_head") != expected_head:
+        errors.append("final merged-tree proof is not bound to the exact reviewed head")
+    if not repository or proof.get("repository") != repository:
+        errors.append("final merged-tree proof belongs to another repository")
+        return errors
+    main_result = run_command("gh", "api", f"repos/{repository}/commits/main", "--jq", ".sha", cwd=root)
+    if main_result.returncode or main_result.stdout.strip() != merge_sha:
+        errors.append("protected main has advanced beyond or does not match the attested merge")
+    merge_result = run_command("gh", "api", f"repos/{repository}/git/commits/{merge_sha}", cwd=root)
+    head_result = run_command("gh", "api", f"repos/{repository}/git/commits/{expected_head}", cwd=root)
+    try:
+        merge_payload = json.loads(merge_result.stdout)
+        head_payload = json.loads(head_result.stdout)
+    except json.JSONDecodeError:
+        merge_payload, head_payload = {}, {}
+    parents = merge_payload.get("parents") or []
+    if (
+        len(parents) != 2
+        or (parents[1] or {}).get("sha") != expected_head
+        or (merge_payload.get("tree") or {}).get("sha") != (head_payload.get("tree") or {}).get("sha")
+    ):
+        errors.append("protected main is not a two-parent merge with the exact verified head tree")
+    with tempfile.TemporaryDirectory(prefix="harness-release-recheck-") as directory:
+        fresh = Path(directory) / "release-tree-verification.json"
+        recheck = run_command(
+            sys.executable,
+            str(Path(__file__).with_name("verify_release_tree_run.py")),
+            "--repo", repository,
+            "--merge-sha", merge_sha,
+            "--verified-head", expected_head,
+            "--output", str(fresh),
+            "--wait-seconds", "0",
+            cwd=root,
+        )
+        if recheck.returncode:
+            errors.append("final merged-tree workflow and artifact no longer validate")
+        else:
+            try:
+                fresh_proof = json.loads(fresh.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                fresh_proof = {}
+            for key in ("merge_sha", "verified_head", "workflow_run_id", "artifact_zip_sha256"):
+                if fresh_proof.get(key) != proof.get(key):
+                    errors.append(f"final merged-tree proof changed: {key}")
+    return errors
+
+
 def completion_claim(message: str) -> bool:
     # Negation applies to the completion phrase it directly modifies, not to
     # every other completion claim in the message. A trailing "unverified"
@@ -688,10 +878,11 @@ def completion_claim(message: str) -> bool:
 
 def explicit_blocked_exit(message: str) -> bool:
     stripped = message.lstrip()
-    if not stripped.upper().startswith("BLOCKED:"):
+    if not EXTERNAL_AUTHORITY_BLOCKER.fullmatch(stripped):
         return False
-    blocker = stripped.split(":", 1)[1]
-    unnegated = NEGATED_COMPLETION.sub("", blocker)
+    if OPERATIONAL_BLOCKER.search(stripped):
+        return False
+    unnegated = NEGATED_COMPLETION.sub("", stripped)
     return not bool(COMPLETION_WORDS.search(unnegated))
 
 
@@ -707,12 +898,18 @@ def hook(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
     try:
         message = str(payload.get("last_assistant_message", ""))
         changes = guarded_changes(root)
-        if not changes:
-            return {"continue": True}
         if explicit_blocked_exit(message) or explicit_user_question(message):
             return {"continue": True}
         path = manifest_path(root)
+        if path.exists() and (path.parent / "release-tree-verification.json").exists():
+            release_errors = validate_release_tree_completion(root, path)
+            if not release_errors:
+                return {"continue": True}
+        if not changes:
+            return {"continue": True}
         errors = validate_manifest(root, path) if path.exists() else ["handoff manifest is absent"]
+        if path.exists():
+            errors.extend(validate_release_tree_completion(root, path))
         if not errors:
             return {"continue": True}
         changed = ", ".join(changes[:6])
@@ -734,6 +931,7 @@ def main() -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
     validate_parser = subparsers.add_parser("validate")
     validate_parser.add_argument("--manifest", type=Path)
+    validate_parser.add_argument("--pre-publication", action="store_true")
     subparsers.add_parser("hook")
     args = parser.parse_args()
     try:
@@ -743,7 +941,7 @@ def main() -> int:
 
     if args.command == "validate":
         path = (args.manifest or manifest_path(root)).resolve()
-        errors = validate_manifest(root, path)
+        errors = validate_manifest(root, path, require_signed_status=not args.pre_publication)
         if errors:
             for error in errors:
                 print(f"- {error}", file=sys.stderr)

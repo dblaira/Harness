@@ -12,4 +12,11 @@ guard CGPreflightScreenCaptureAccess() else {
     exit(1)
 }
 
-print("Accessibility and Screen Recording TCC preflight passed.")
+let session = CGSessionCopyCurrentDictionary() as? [String: Any]
+let screenIsLocked = (session?["CGSSessionScreenIsLocked"] as? NSNumber)?.boolValue ?? false
+guard !screenIsLocked else {
+    FileHandle.standardError.write(Data("The Mac screen is locked; signed visible UI evidence requires Adam's active unlocked session.\n".utf8))
+    exit(1)
+}
+
+print("Accessibility, Screen Recording, and unlocked-session preflight passed.")
