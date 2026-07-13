@@ -143,6 +143,11 @@ jobs:
           persist-credentials: false
       - name: Install gate tools
         run: brew install xcodegen swiftlint periphery
+      - name: Install graph-validation dependency in an isolated environment
+        run: |
+          python3 -m venv "$RUNNER_TEMP/verification-venv"
+          "$RUNNER_TEMP/verification-venv/bin/python" -m pip install pyshacl
+          echo "$RUNNER_TEMP/verification-venv/bin" >> "$GITHUB_PATH"
       - name: Generate project
         working-directory: proposed
         run: xcodegen generate
