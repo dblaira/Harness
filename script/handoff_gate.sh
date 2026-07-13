@@ -58,6 +58,11 @@ rm -rf "$UNIT_RESULT_BUNDLE" "$UI_RESULT_BUNDLE" "$FINAL_UI_RESULT_BUNDLE" "$SAT
 rm -f "$SCREENSHOT" "$FEATURE_SCREENSHOT" "$FINAL_SCREENSHOT" "$FINAL_UI_SCREENSHOT" "$FINAL_FEATURE_SCREENSHOT" "$RUNNING_APP_PROOF" "$INITIAL_RUNNING_APP_PROOF" "$MEDIA_PROOF" "$TEST_INVENTORY" "$VIDEO"
 mkdir -p "$SATISFACTION_DIR"
 
+PROPOSAL_SANDBOX="(version 1)(allow default)(deny file-write* (subpath \"$CONTROL_DIR\") (subpath \"$HOME/.local/bin\") (literal \"$HOME/.codex/hooks.json\"))"
+proposal_exec() {
+  /usr/bin/sandbox-exec -p "$PROPOSAL_SANDBOX" -- "$@"
+}
+
 REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
 PULLS_JSON="$(gh api "repos/$REPO/commits/$SHA/pulls")"
 PR_JSON="$(printf '%s' "$PULLS_JSON" | python3 "$CONTROL_DIR/scripts/select_pull_request.py" --head-sha "$SHA")"
@@ -127,8 +132,8 @@ command -v ffprobe >/dev/null
 python3 "$CONTROL_DIR/scripts/swift_test_inventory.py" \
   --git-ref "$BASE_SHA" --repo-root "$ROOT_DIR" --output "$TEST_INVENTORY"
 
-HARNESS_EXPECTED_PID=0 HARNESS_EXPECTED_WINDOW_BOUNDS=UNSET HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER=UNSET HARNESS_ATTACH_EXISTING_APP=0 xcodegen generate
-xcodebuild build-for-testing \
+HARNESS_EXPECTED_PID=0 HARNESS_EXPECTED_WINDOW_BOUNDS=UNSET HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER=UNSET HARNESS_ATTACH_EXISTING_APP=0 proposal_exec xcodegen generate
+proposal_exec xcodebuild build-for-testing \
   -project Harness.xcodeproj \
   -scheme HarnessUIVerification \
   -configuration Debug \
@@ -151,7 +156,7 @@ done
   exit 1
 }
 
-xcodebuild test \
+proposal_exec xcodebuild test \
   -project Harness.xcodeproj \
   -scheme HarnessUnitVerification \
   -destination 'platform=macOS' \
@@ -173,7 +178,7 @@ SATISFACTION_COUNT="$(find "$SATISFACTION_DIR" -type f -name 'gate-*.md' | wc -l
 SATISFACTION_ARTIFACT="$(find "$SATISFACTION_DIR" -type f -name 'gate-*.md' -print -quit)"
 
 pkill -x Harness >/dev/null 2>&1 || true
-/usr/bin/open -n "$APP_BUNDLE"
+proposal_exec "$APP_BUNDLE/Contents/MacOS/Harness" >"$OUTPUT_DIR/recorded-app.log" 2>&1 &
 RECORDED_PID=""
 for _ in {1..30}; do
   while IFS= read -r CANDIDATE_PID; do
@@ -204,7 +209,7 @@ done
 RECORDED_WINDOW_ID="$(jq -r .window_id "$INITIAL_RUNNING_APP_PROOF")"
 [[ "$RECORDED_WINDOW_ID" =~ ^[0-9]+$ ]] || { echo "Recorded candidate window lacks a CGWindowID." >&2; exit 1; }
 RECORDED_WINDOW_BOUNDS="$(jq -r '[.window_bounds.x,.window_bounds.y,.window_bounds.width,.window_bounds.height] | join(",")' "$INITIAL_RUNNING_APP_PROOF")"
-HARNESS_EXPECTED_PID="$RECORDED_PID" HARNESS_EXPECTED_WINDOW_BOUNDS="$RECORDED_WINDOW_BOUNDS" HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER="$FINAL_ACCESSIBILITY_IDENTIFIER" HARNESS_ATTACH_EXISTING_APP=1 xcodegen generate
+HARNESS_EXPECTED_PID="$RECORDED_PID" HARNESS_EXPECTED_WINDOW_BOUNDS="$RECORDED_WINDOW_BOUNDS" HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER="$FINAL_ACCESSIBILITY_IDENTIFIER" HARNESS_ATTACH_EXISTING_APP=1 proposal_exec xcodegen generate
 
 /usr/sbin/screencapture -v -V120 -l"$RECORDED_WINDOW_ID" -x -k "$VIDEO" &
 VIDEO_PID=$!
@@ -216,7 +221,7 @@ video_cleanup() {
 }
 trap video_cleanup EXIT
 
-python3 "$CONTROL_DIR/scripts/run_with_timeout.py" --seconds 110 -- xcodebuild test-without-building \
+python3 "$CONTROL_DIR/scripts/run_with_timeout.py" --seconds 110 -- /usr/bin/sandbox-exec -p "$PROPOSAL_SANDBOX" -- xcodebuild test-without-building \
   -project Harness.xcodeproj \
   -scheme HarnessUIVerification \
   -destination 'platform=macOS' \
@@ -256,7 +261,7 @@ done
   echo "A stale Harness process survived before the final normal relaunch." >&2
   exit 1
 }
-/usr/bin/open -n "$APP_BUNDLE"
+proposal_exec "$APP_BUNDLE/Contents/MacOS/Harness" >"$OUTPUT_DIR/final-app.log" 2>&1 &
 for _ in {1..20}; do
   PID=""
   while IFS= read -r CANDIDATE_PID; do
@@ -284,8 +289,8 @@ xcrun swift "$CONTROL_DIR/scripts/verify_running_app.swift" \
   --identifier "$FINAL_ACCESSIBILITY_IDENTIFIER" \
   --output "$RUNNING_APP_PROOF"
 FINAL_WINDOW_BOUNDS="$(jq -r '[.window_bounds.x,.window_bounds.y,.window_bounds.width,.window_bounds.height] | join(",")' "$RUNNING_APP_PROOF")"
-HARNESS_EXPECTED_PID="$PID" HARNESS_EXPECTED_WINDOW_BOUNDS="$FINAL_WINDOW_BOUNDS" HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER="$FINAL_ACCESSIBILITY_IDENTIFIER" HARNESS_ATTACH_EXISTING_APP=1 xcodegen generate
-python3 "$CONTROL_DIR/scripts/run_with_timeout.py" --seconds 110 -- xcodebuild test-without-building \
+HARNESS_EXPECTED_PID="$PID" HARNESS_EXPECTED_WINDOW_BOUNDS="$FINAL_WINDOW_BOUNDS" HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER="$FINAL_ACCESSIBILITY_IDENTIFIER" HARNESS_ATTACH_EXISTING_APP=1 proposal_exec xcodegen generate
+python3 "$CONTROL_DIR/scripts/run_with_timeout.py" --seconds 110 -- /usr/bin/sandbox-exec -p "$PROPOSAL_SANDBOX" -- xcodebuild test-without-building \
   -project Harness.xcodeproj \
   -scheme HarnessUIVerification \
   -destination 'platform=macOS' \

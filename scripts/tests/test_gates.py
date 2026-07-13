@@ -436,6 +436,10 @@ class ReleaseGateTests(unittest.TestCase):
                 release_gate.artifact_type_errors("unit_xcresult", file_xcresult),
             )
 
+    def test_missing_handoff_manifest_is_explicitly_invalid(self) -> None:
+        errors = release_gate.validate_manifest(Path.cwd(), Path("/definitely/missing/manifest.json"))
+        self.assertTrue(any("cannot read handoff manifest" in error for error in errors))
+
     def test_every_repository_change_is_guarded(self) -> None:
         original = release_gate.changed_files
         release_gate.changed_files = lambda _root: {
@@ -1092,11 +1096,24 @@ class GateStructureTests(unittest.TestCase):
         rerun = merger.index('if ! "$CONTROL_DIR/script/hosted_verification_gate.sh"')
         failure_exit = merger.index('Fresh hosted evidence verification failed')
         status_read = merger.index('gh api "repos/$REPO/commits/$SHA/statuses?per_page=100"')
+        manifest = merger.index('release_gate.py" validate --manifest')
         merge = merger.index('gh pr merge')
         self.assertLess(rerun, failure_exit)
         self.assertLess(failure_exit, status_read)
         self.assertLess(rerun, status_read)
+        self.assertLess(rerun, manifest)
+        self.assertLess(manifest, status_read)
         self.assertLess(status_read, merge)
+
+    def test_every_proposal_process_is_denied_control_writes(self) -> None:
+        handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
+        self.assertIn('(deny file-write* (subpath \\"$CONTROL_DIR\\")', handoff)
+        self.assertIn('(subpath \\"$HOME/.local/bin\\")', handoff)
+        self.assertIn('(literal \\"$HOME/.codex/hooks.json\\")', handoff)
+        self.assertIn("proposal_exec xcodebuild build-for-testing", handoff)
+        self.assertIn("proposal_exec xcodebuild test", handoff)
+        self.assertEqual(handoff.count("proposal_exec xcodegen generate"), 3)
+        self.assertGreaterEqual(handoff.count('/usr/bin/sandbox-exec -p "$PROPOSAL_SANDBOX"'), 3)
 
     def test_video_is_bound_to_the_verified_candidate_window_not_main_display(self) -> None:
         handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
@@ -1142,7 +1159,7 @@ class GateStructureTests(unittest.TestCase):
         identity = handoff.index("verify_app_identity.py")
         unit_test = handoff.index("xcodebuild test \\")
         ui_test = handoff.index("xcodebuild test-without-building")
-        normal_launch = handoff.index("/usr/bin/open -n")
+        normal_launch = handoff.index('proposal_exec "$APP_BUNDLE/Contents/MacOS/Harness"')
         self.assertLess(identity, unit_test)
         self.assertLess(identity, ui_test)
         self.assertLess(identity, normal_launch)
