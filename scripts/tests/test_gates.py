@@ -1577,6 +1577,7 @@ class GateStructureTests(unittest.TestCase):
         self.assertIn('python3 -m venv "$RUNNER_TEMP/verification-venv"', verification)
         self.assertIn("-m pip install pyshacl", verification)
         self.assertIn('>> "$GITHUB_PATH"', verification)
+        self.assertIn('HARNESS_RDFLIB_PYTHON=$RUNNER_TEMP/verification-venv/bin/python', verification)
         self.assertGreaterEqual(verification.count("--required-test \"$"), 2)
         self.assertIn("fresh-hosted-ui-visible-result.png", verification)
         self.assertIn("cmp \"$RUNNER_TEMP/fresh-hosted-ui-visible-result.png\"", verification)
