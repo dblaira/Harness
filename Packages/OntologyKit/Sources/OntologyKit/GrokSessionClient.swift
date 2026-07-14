@@ -183,6 +183,28 @@ public struct GrokSessionClient: Sendable {
         return text
     }
 
+    /// Small authenticated request used by Harness's explicit Connections
+    /// check. It validates the signed-in Grok session without using the
+    /// user's prompt or Harness context.
+    public func probe(sessionToken: String? = nil) async throws {
+        var request = try makeRequest(sessionToken: sessionToken)
+        request.timeoutInterval = min(requestTimeout, 15)
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "model": model,
+            "messages": [["role": "user", "content": "Reply with OK."]],
+            "stream": false,
+            "max_tokens": 1,
+        ])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let statusCode = (response as? HTTPURLResponse)?.statusCode
+        guard let statusCode, (200..<300).contains(statusCode) else {
+            if let error = Self.firstJSONErrorMessage(from: String(data: data, encoding: .utf8) ?? "") {
+                throw GrokSessionError.badResponse("Grok session \(statusCode.map(String.init) ?? ""): \(error)")
+            }
+            throw GrokSessionError.badResponse("Grok session did not confirm the connection.")
+        }
+    }
+
     /// Native OpenAI-compatible tool calling through the Grok CLI session
     /// proxy. The proxy accepts the same `tools` / `tool_calls` wire shape as
     /// xAI's HTTPS API, but authenticates with the short-lived `grok login`

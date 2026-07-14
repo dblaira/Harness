@@ -49,7 +49,7 @@ import Testing
 }
 
 @Test func grokAuthorizationActionIsNamed() {
-    #expect(BackendReadiness.grokAuthorizationAction == "run grok login")
+    #expect(BackendReadiness.grokAuthorizationAction == "run grok login --oauth")
 }
 
 @Test func cliProbeFailureBecomesFailedWithMessage() {
@@ -75,4 +75,9 @@ import Testing
     #expect(BackendReadiness.live.actionNeeded == nil)
     #expect(BackendReadiness.failed(message: "x").actionNeeded == nil)
     #expect(BackendReadiness.checking.actionNeeded == nil)
+}
+
+@Test func explicitConnectionCheckNamesMissingClaudeCredential() async {
+    let result = await AgentRunner().checkConnection(backend: .claude, apiKey: "")
+    #expect(result == .pending(action: "paste Claude API key"))
 }

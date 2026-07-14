@@ -54,6 +54,28 @@ public struct ClaudeClient {
         return String(data: data, encoding: .utf8) ?? "(empty)"
     }
 
+    /// Small authenticated request used by Harness's explicit Connections
+    /// check. It validates the API path without sending the user's prompt.
+    public func probe() async throws {
+        guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ClaudeError.noKey
+        }
+        var req = Self.makeRequest(apiKey: apiKey)
+        req.httpBody = try JSONSerialization.data(withJSONObject: [
+            "model": model,
+            "max_tokens": 1,
+            "system": "Connection check.",
+            "messages": [["role": "user", "content": "Reply with OK."]]
+        ])
+        let (data, response) = try await URLSession.shared.data(for: req)
+        let statusCode = (response as? HTTPURLResponse)?.statusCode
+        guard let statusCode, (200..<300).contains(statusCode) else {
+            let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+            try Self.throwIfErrorEnvelope(json, statusCode: statusCode)
+            throw ClaudeError.badResponse("Claude API did not confirm the connection.")
+        }
+    }
+
     /// Native Anthropic tool use: sends the tool catalog, replays prior loop
     /// turns as tool_use/tool_result content blocks, and returns any new tool
     /// calls alongside the text. The tools list is the only capability grant.

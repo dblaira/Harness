@@ -24,7 +24,7 @@ public enum BackendReadiness: Equatable, Sendable {
     case failed(message: String)
 
     public static let codexAuthorizationAction = "install codex CLI and run codex login --device-auth"
-    public static let grokAuthorizationAction = "run grok login"
+    public static let grokAuthorizationAction = "run grok login --oauth"
 
     /// The status word, verbatim from SAVY's content status band.
     public var statusWord: String {
@@ -171,6 +171,49 @@ public struct AgentRunner: Sendable {
                 localServerReachable: false
             )
             #endif
+        }
+    }
+
+    /// Confirm the selected backend can actually answer, not merely that a
+    /// key or local session file exists. The probe is intentionally tiny and
+    /// never sends the user's prompt or Harness context.
+    public func checkConnection(backend: Backend, apiKey: String? = nil) async -> BackendReadiness {
+        let key = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        switch backend {
+        case .claude:
+            let client = ClaudeClient(apiKey: key.isEmpty ? nil : key)
+            do {
+                try await client.probe()
+                return .live
+            } catch {
+                if case ClaudeClient.ClaudeError.noKey = error {
+                    return .pending(action: "paste Claude API key")
+                }
+                return .failed(message: "API connection failed: " + error.localizedDescription)
+            }
+        case .grok:
+            if !key.isEmpty {
+                do {
+                    try await XAIClient(apiKey: key).probe()
+                    return .live
+                } catch {
+                    return .failed(message: "API connection failed: " + error.localizedDescription)
+                }
+            }
+            guard let token = GrokSessionClient.loadSessionToken() else {
+                return await preflight(backend: backend, apiKey: nil)
+            }
+            do {
+                try await GrokSessionClient().probe(sessionToken: token)
+                return .live
+            } catch {
+                return .failed(message: "Grok connection failed: " + error.localizedDescription)
+            }
+        case .codex, .hermes:
+            // `codex login status` and the Hermes health endpoint are already
+            // real authorization/transport checks, so do not send a model
+            // completion for these subscription/local backends.
+            return await preflight(backend: backend, apiKey: apiKey)
         }
     }
 

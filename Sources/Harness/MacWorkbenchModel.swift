@@ -42,6 +42,11 @@ final class MacWorkbenchModel: ObservableObject {
     @Published var apiKey = ""
     @Published var hasSavedAPIKey = false
     @Published var backendReadiness: [Backend: BackendReadiness] = [:]
+    /// Human-readable evidence for the explicit Connections surface. This is
+    /// separate from the compact status word so a red dot can never be the
+    /// only explanation of what the user should do next.
+    @Published private(set) var backendConnectionDetails: [Backend: String] = [:]
+    @Published private(set) var backendLastCheckedAt: [Backend: Date] = [:]
     @Published var firecrawlAPIKey = ""
     @Published var hasFirecrawlAPIKey = false
     @Published var isRunning = false
@@ -173,7 +178,7 @@ final class MacWorkbenchModel: ObservableObject {
         }
         self.hasFirecrawlAPIKey = Self.loadFirecrawlAPIKey() != nil
         loadAPIKey(for: backend)
-        refreshReadiness(for: backend)
+        checkAllBackendConnections()
         Task {
             await refreshRuns()
             await restoreMostRecentSession()
@@ -209,6 +214,16 @@ final class MacWorkbenchModel: ObservableObject {
                     self?.refreshSuiteCaptureInbox()
                 }
             }
+        }
+
+        // Re-confirm provider authorization whenever the signed app returns
+        // to the foreground. A stale dot is not a connection contract.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.checkAllBackendConnections() }
         }
     }
 
@@ -1961,26 +1976,53 @@ final class MacWorkbenchModel: ObservableObject {
         hasSavedAPIKey = !apiKey.isEmpty
     }
 
-    /// Probe the backend and publish its readiness — "live", "pending",
-    /// or "failed (message)" — using SAVY's status vocabulary. When
-    /// something is waiting on one action, the status line names it.
+    /// Confirm the backend and publish its readiness — "live", "pending",
+    /// or "failed (message)" — using SAVY's status vocabulary. API-backed
+    /// providers receive a tiny authenticated connection request; Codex and
+    /// Hermes use their authorization/health checks.
     func refreshReadiness(for backend: Backend) {
         backendReadiness[backend] = .checking
+        backendConnectionDetails[backend] = "Checking authorization and connection…"
         let key = Self.usesAPIKey(backend) ? apiKey.trimmingCharacters(in: .whitespacesAndNewlines) : ""
         Task { [weak self] in
-            let readiness = await AgentRunner().preflight(
+            let readiness = await AgentRunner().checkConnection(
                 backend: backend,
                 apiKey: key.isEmpty ? nil : key
             )
             await MainActor.run {
                 guard let self else { return }
                 self.backendReadiness[backend] = readiness
+                self.backendLastCheckedAt[backend] = Date()
+                self.backendConnectionDetails[backend] = Self.connectionDetail(for: readiness)
                 if let action = readiness.actionNeeded {
                     self.status = "\(backend.rawValue): \(action)"
                 } else if case .failed(let message) = readiness {
                     self.status = "\(backend.rawValue) failed: \(message)"
                 }
             }
+        }
+    }
+
+    /// Run the same explicit check for every selectable model when the app
+    /// opens or returns to the foreground. The selected backend is not the
+    /// only one that matters: this makes switching models predictable.
+    func checkAllBackendConnections() {
+        for backend in Backend.allCases {
+            refreshReadiness(for: backend)
+        }
+        status = "Checking model connections…"
+    }
+
+    nonisolated private static func connectionDetail(for readiness: BackendReadiness) -> String {
+        switch readiness {
+        case .checking:
+            return "Checking authorization and connection…"
+        case .live:
+            return "Connection confirmed."
+        case .pending(let action):
+            return "Action needed: " + action + "."
+        case .failed(let message):
+            return message
         }
     }
 
@@ -2110,7 +2152,7 @@ final class MacWorkbenchModel: ObservableObject {
             refreshReadiness(for: .grok)
             return
         }
-        openTerminalLogin(command: "\(Self.shellQuote(grok)) login", backend: .grok)
+        openTerminalLogin(command: "\(Self.shellQuote(grok)) login --oauth", backend: .grok)
         #else
         status = "Grok authorization requires the Grok CLI on macOS."
         #endif

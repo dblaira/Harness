@@ -118,7 +118,7 @@ Security (law-critical):
 Backend readiness (live-auth critical):
 - Grok session auth now checks `~/.grok/auth.json` for missing or expired
   tokens before marking the backend live. Missing or expired subscription auth
-  surfaces `run grok login` and the macOS toolbar exposes a Grok authorize
+  surfaces `run grok login --oauth` and the macOS toolbar exposes a Grok authorize
   action; a CLI binary existing on disk is no longer enough. The same session
   proxy path was smoke-tested with a minimal request and returned HTTP 200.
   Grok account auth now supports OpenAI-style `tools` / `tool_calls`, so the

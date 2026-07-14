@@ -12,6 +12,9 @@ enum Theme {
     // MARK: - SAVY
 
     static let savyDeepNavy = Color(hex: 0x08172D)
+    /// Warm dark brown used around the model-connection cards — a deliberate
+    /// beach-like frame for the navy provider surfaces.
+    static let savyDeepBrown = Color(hex: 0x8B7355)
     static let savyCrimson = Color(hex: 0xE60E44)
     /// SAVY `SavyTheme.green` — live/leverage dot (`RootView.swift:1129`).
     static let savyGreen = Color(hex: 0x2AB860)

@@ -28,6 +28,7 @@ struct MacChatView: View {
     @State private var isDelegationEntryFormPresented = false
     @State private var showingLinkSheet = false
     @State private var showingGitHubSheet = false
+    @State private var showingConnectionsSheet = false
     @State private var linkInput = ""
     @State private var githubRepoInput = ""
 
@@ -86,6 +87,9 @@ struct MacChatView: View {
                 githubRepoInput = ""
                 showingGitHubSheet = false
             }
+        }
+        .sheet(isPresented: $showingConnectionsSheet) {
+            backendConnectionsSheet
         }
         .onChange(of: ontology.connections.count) { _, _ in model.updateOntology(ontology) }
         .onChange(of: model.searchText) { _, _ in Task { await model.searchSessions() } }
@@ -1662,6 +1666,10 @@ struct MacChatView: View {
             killSwitchReadout
             runAgentButton
 
+            chatToolbarIcon("network", help: "Open model connections") {
+                showingConnectionsSheet = true
+            }
+
             if model.backend == .codex {
                 chatToolbarIcon("key.viewfinder", help: "Authorize") {
                     model.authorizeCodexAccount()
@@ -1717,6 +1725,10 @@ struct MacChatView: View {
             // accounts, caps, and Run agent live behind the toggle and
             // on the Chat page -- "I can get to that from the back."
             Spacer()
+
+            toolbarIconButton("network", help: "Open model connections") {
+                showingConnectionsSheet = true
+            }
 
             toolbarIconButton(
                 isInspectorVisible ? "rectangle.rightthird.inset.filled" : "rectangle",
@@ -1836,6 +1848,175 @@ struct MacChatView: View {
         }
         .buttonStyle(.plain)
         .help(help)
+    }
+
+    private var backendConnectionsSheet: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Model connections")
+                        .font(.system(.title2, design: .serif).weight(.semibold))
+                        .foregroundStyle(Color.white)
+                    Text("Harness checks authorization and the provider connection when it opens and when you return to it.")
+                        .font(.caption)
+                        .foregroundStyle(Color.white.opacity(0.78))
+                }
+                Spacer()
+                Button {
+                    model.checkAllBackendConnections()
+                } label: {
+                    Text("Check all")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(Color.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(Theme.macRed, in: RoundedRectangle(cornerRadius: 7))
+                }
+                .buttonStyle(.plain)
+            }
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(Backend.allCases) { backend in
+                        backendConnectionRow(backend)
+                    }
+                }
+            }
+
+            if MacWorkbenchModel.usesAPIKey(model.backend) {
+                apiConnectionEditor
+            }
+
+            Text("A green state means Harness received a real confirmation. A pending or failed state names the next action.")
+                .font(.caption)
+                .foregroundStyle(Color.white.opacity(0.78))
+        }
+        .padding(20)
+        .frame(width: 580, height: 600)
+        .background(Theme.savyDeepBrown)
+    }
+
+    private func backendConnectionRow(_ backend: Backend) -> some View {
+        let readiness = model.backendReadiness[backend] ?? .checking
+        let isSelected = model.backend == backend
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                readinessIndicator(readiness)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(backend.rawValue)
+                            .font(.system(size: 13, weight: .semibold))
+                        if isSelected {
+                            Text("SELECTED")
+                                .font(.system(size: 8, weight: .heavy))
+                                .tracking(0.8)
+                                .foregroundStyle(Theme.macRed)
+                        }
+                    }
+                    .foregroundStyle(Color.white)
+                    Text(model.backendConnectionDetails[backend] ?? readiness.statusWord)
+                        .font(.caption)
+                        .foregroundStyle(statusWordColor(for: readiness))
+                        .lineLimit(2)
+                }
+                Spacer()
+                Button {
+                    model.refreshReadiness(for: backend)
+                } label: {
+                    Text("Check now")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Theme.macRed.opacity(0.22), in: RoundedRectangle(cornerRadius: 7))
+                        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.macRed.opacity(0.9), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+            }
+
+            HStack(spacing: 8) {
+                if backend == .codex || backend == .grok {
+                    Button(backend == .codex ? "Authorize with ChatGPT" : "Authorize with Grok") {
+                        model.backend = backend
+                        if backend == .codex {
+                            model.authorizeCodexAccount()
+                        } else {
+                            model.authorizeGrokAccount()
+                        }
+                    }
+                    .buttonStyle(.link)
+                    .foregroundStyle(Theme.macRed)
+                }
+                if MacWorkbenchModel.usesAPIKey(backend) {
+                    Button("Edit API key") {
+                        model.backend = backend
+                    }
+                    .buttonStyle(.link)
+                    .foregroundStyle(Theme.macRed)
+                }
+                Spacer()
+            }
+        }
+        .padding(12)
+        .background(Theme.savyDeepNavy, in: RoundedRectangle(cornerRadius: 9))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.macRed.opacity(isSelected ? 0.95 : 0.58), lineWidth: isSelected ? 2 : 1))
+    }
+
+    private func readinessIndicator(_ readiness: BackendReadiness) -> some View {
+        Circle()
+            .fill(statusWordColor(for: readiness))
+            .frame(width: 9, height: 9)
+            .overlay {
+                if case .checking = readiness {
+                    Circle().stroke(Theme.macInk.opacity(0.25), lineWidth: 1)
+                }
+            }
+    }
+
+    private var apiConnectionEditor: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Connect " + model.backend.rawValue)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.white)
+            SecureField(macAPIKeyLabel(for: model.backend), text: $model.apiKey)
+                .textFieldStyle(.plain)
+                .foregroundStyle(Color.white)
+                .padding(9)
+                .background(Theme.recallNearBlack, in: RoundedRectangle(cornerRadius: 7))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.white.opacity(0.38), lineWidth: 1))
+            HStack(spacing: 8) {
+                Button {
+                    model.saveAPIKey()
+                } label: {
+                    Text("Save and check")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Color.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Theme.macRed, in: RoundedRectangle(cornerRadius: 7))
+                }
+                .buttonStyle(.plain)
+                Button {
+                    model.deleteAPIKey()
+                } label: {
+                    Text("Remove")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.macRed)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
+                }
+                .buttonStyle(.plain)
+                .disabled(!model.hasSavedAPIKey)
+                Spacer()
+            }
+            Text("The key is stored in Keychain and is used only for " + model.backend.rawValue + ".")
+                .font(.caption2)
+                .foregroundStyle(Color.white.opacity(0.72))
+        }
+        .padding(12)
+        .background(Theme.savyDeepNavy, in: RoundedRectangle(cornerRadius: 9))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.macRed.opacity(0.72), lineWidth: 1))
     }
 
     private var centerViewTitle: String {

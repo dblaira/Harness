@@ -70,6 +70,34 @@ public struct XAIClient: Sendable {
         return String(data: data, encoding: .utf8) ?? "(empty)"
     }
 
+    /// Small authenticated request used by Harness's explicit Connections
+    /// check. It validates the API path without sending the user's prompt.
+    public func probe() async throws {
+        guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw XAIError.noKey
+        }
+        var request = URLRequest(url: URL(string: "https://api.x.ai/v1/chat/completions")!)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 15
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "model": model,
+            "max_tokens": 1,
+            "messages": [["role": "user", "content": "Reply with OK."]]
+        ])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let statusCode = (response as? HTTPURLResponse)?.statusCode
+        guard let statusCode, (200..<300).contains(statusCode) else {
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let error = json["error"] as? [String: Any],
+               let message = error["message"] as? String {
+                throw XAIError.badResponse("xAI API \(statusCode.map(String.init) ?? "")\(statusCode == nil ? "" : ": ")\(message)")
+            }
+            throw XAIError.badResponse("xAI API did not confirm the connection.")
+        }
+    }
+
     /// Native tool calling over xAI's OpenAI-compatible chat completions:
     /// sends the tool catalog as function tools, replays prior loop turns as
     /// assistant tool_calls + role:"tool" results, and returns any new tool
