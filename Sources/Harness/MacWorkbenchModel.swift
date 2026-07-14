@@ -978,6 +978,11 @@ final class MacWorkbenchModel: ObservableObject {
         #if os(macOS)
         var code: SecStaticCode?
         let bundleURL = Bundle.main.bundleURL as CFURL
+        let installedBundleURL = URL(fileURLWithPath: "/Applications/Harness.app")
+            .standardizedFileURL
+        guard (bundleURL as URL).standardizedFileURL == installedBundleURL else {
+            return false
+        }
         guard SecStaticCodeCreateWithPath(bundleURL, SecCSFlags(), &code) == errSecSuccess,
               let code else { return false }
         var signingInformation: CFDictionary?
