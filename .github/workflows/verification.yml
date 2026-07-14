@@ -149,11 +149,18 @@ jobs:
           "$RUNNER_TEMP/verification-venv/bin/python" -m pip install pyshacl
           echo "$RUNNER_TEMP/verification-venv/bin" >> "$GITHUB_PATH"
           echo "HARNESS_RDFLIB_PYTHON=$RUNNER_TEMP/verification-venv/bin/python" >> "$GITHUB_ENV"
+      - name: Replace proposal-owned tests with protected implementations
+        run: >-
+          python3 trusted-base/scripts/prepare_protected_tests.py
+          --trusted-root trusted-base
+          --proposed-root proposed
       - name: Generate project
         working-directory: proposed
         run: xcodegen generate
       - name: Prove accessibility element and window stay bound
-        run: xcrun swift "$RUNNER_TEMP/gate-controls/verify_running_app.swift" --self-test-window-binding
+        run: |
+          xcrun swift "$RUNNER_TEMP/gate-controls/verify_running_app.swift" --self-test-window-binding
+          xcrun swift trusted-base/scripts/run_accessibility_contract.swift --self-test-window-scope
       - name: SwiftLint changed Swift files
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}

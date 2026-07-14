@@ -40,6 +40,8 @@ CANDIDATE_OUTPUT_DIR="$(cd "$CANDIDATE_OUTPUT_DIR" && pwd -P)"
 PROPOSAL_PARENT="$(mktemp -d "${TMPDIR:-/tmp}/harness-proposal.${SHA}.XXXXXX")"
 PROPOSAL_PARENT="$(cd "$PROPOSAL_PARENT" && pwd -P)"
 PROPOSAL_REPO="$PROPOSAL_PARENT/repo"
+PROTECTED_TEST_ROOT="$PROPOSAL_PARENT/protected-tests"
+BUILD_SOURCE_ROOT="$PROPOSAL_PARENT/build-source"
 PROPOSAL_HOME="$PROPOSAL_PARENT/home"
 PROPOSAL_TMP="$PROPOSAL_PARENT/tmp"
 BUILD_PROJECT_ROOT="$PROPOSAL_PARENT/generated-project"
@@ -54,6 +56,8 @@ PROPOSAL_PROCESS_REPORT="$CANDIDATE_OUTPUT_DIR/proposal-processes.json"
 UI_STAGING_ROOT="$HOME/.local/share/harness-ui-testing/current"
 READONLY_PROXY_READY="$PROPOSAL_PARENT/readonly-proxy.json"
 READONLY_PROXY_PID=""
+OLLAMA_PROXY_READY="$PROPOSAL_PARENT/ollama-proxy.json"
+OLLAMA_PROXY_PID=""
 RECORDED_WRAPPER_PID=""
 FINAL_WRAPPER_PID=""
 OPERATOR_HOME="$HOME"
@@ -62,7 +66,6 @@ mkdir -p "$PROPOSAL_HOME" "$PROPOSAL_TMP" "$BUILD_PROJECT_ROOT" "$BUILD_DEPENDEN
   "$BUILD_PROBE_ROOT" "$EMPTY_ACCEPTED_ROOT" "$ISOLATED_ONTOLOGY_ROOT" \
   "$PROCESS_REPORTS_DIR" "$UI_STAGING_ROOT/tmp"
 git worktree add --detach "$PROPOSAL_REPO" "$SHA" >/dev/null
-/bin/cp -R "$PROPOSAL_REPO/Packages/OntologyKit" "$BUILD_PACKAGE_ROOT"
 for authority_directory in accepted candidates; do
   if [[ -d "$LIVE_ONTOLOGY_ROOT/$authority_directory" ]]; then
     /bin/cp -R "$LIVE_ONTOLOGY_ROOT/$authority_directory" "$ISOLATED_ONTOLOGY_ROOT/"
@@ -101,6 +104,13 @@ AUTHORITY_SNAPSHOT_BEFORE="$OUTPUT_DIR/authority-before.json"
 AUTHORITY_SNAPSHOT_AFTER="$OUTPUT_DIR/authority-after.json"
 LIVE_SWIFT_INVENTORY="$OUTPUT_DIR/live-satisfaction-swift-inventory.json"
 LIVE_SERVICE_IDENTITY="$OUTPUT_DIR/live-service-identity.txt"
+ISOLATED_AUTHORITY_BEFORE="$OUTPUT_DIR/isolated-authority-before.json"
+ISOLATED_AUTHORITY_AFTER="$OUTPUT_DIR/isolated-authority-after.json"
+AUTHORITY_BINDINGS="$OUTPUT_DIR/accepted-authority-bindings.json"
+OLLAMA_STATE_BEFORE="$OUTPUT_DIR/ollama-state-before.json"
+OLLAMA_STATE_AFTER="$OUTPUT_DIR/ollama-state-after.json"
+GATE_DEPENDENCIES_BEFORE="$OUTPUT_DIR/gate-dependencies-before.json"
+GATE_DEPENDENCIES_AFTER="$OUTPUT_DIR/gate-dependencies-after.json"
 mkdir -p "$OUTPUT_DIR" "$CANDIDATE_OUTPUT_DIR"
 rm -rf "$OUTPUT_DIR"
 mkdir -p "$OUTPUT_DIR"
@@ -117,7 +127,12 @@ cleanup_handoff() {
     kill -TERM "$READONLY_PROXY_PID" 2>/dev/null || true
     wait "$READONLY_PROXY_PID" 2>/dev/null || true
   fi
+  if [[ -n "$OLLAMA_PROXY_PID" ]] && kill -0 "$OLLAMA_PROXY_PID" 2>/dev/null; then
+    kill -TERM "$OLLAMA_PROXY_PID" 2>/dev/null || true
+    wait "$OLLAMA_PROXY_PID" 2>/dev/null || true
+  fi
   git -C "$ROOT_DIR" worktree remove --force "$PROPOSAL_REPO" >/dev/null 2>&1 || true
+  git -C "$ROOT_DIR" worktree remove --force "$PROTECTED_TEST_ROOT" >/dev/null 2>&1 || true
   rm -rf "$UI_STAGING_ROOT"
   rm -rf "$PROPOSAL_PARENT" "$CANDIDATE_OUTPUT_DIR"
 }
@@ -134,10 +149,21 @@ done
 READONLY_PROXY_PORT="$(jq -r .port "$READONLY_PROXY_READY")"
 [[ "$READONLY_PROXY_PORT" =~ ^[0-9]+$ ]] || { echo "The protected query proxy returned an invalid port." >&2; exit 1; }
 
-PROPOSAL_SANDBOX="(version 1)(allow default)(deny network-outbound)(allow network-outbound (remote ip \"localhost:$READONLY_PROXY_PORT\"))(allow network-outbound (remote ip \"localhost:11434\"))(deny appleevent-send)(deny mach-lookup (global-name \"com.apple.pboard\"))(deny process-fork)(deny signal)(allow signal (target self))(allow signal (target children))(allow signal (target same-sandbox))(deny file-read* (subpath \"$HOME\") (subpath \"$LIVE_ONTOLOGY_ROOT\"))(allow file-read* (subpath \"$APP_BUNDLE\"))(deny file-write* (subpath \"$CONTROL_DIR\") (subpath \"$ROOT_DIR\") (subpath \"$OUTPUT_DIR\") (subpath \"$CANDIDATE_OUTPUT_DIR\") (subpath \"$PROCESS_REPORTS_DIR\") (subpath \"$UI_STAGING_ROOT\") (subpath \"$HOME/.local/bin\") (subpath \"$LIVE_ONTOLOGY_ROOT\") (literal \"$HOME/.codex/hooks.json\"))(deny process-exec (literal \"/bin/launchctl\") (literal \"/usr/bin/launchctl\") (literal \"/usr/bin/security\") (literal \"/usr/bin/ssh\") (literal \"/usr/bin/osascript\") (literal \"/usr/bin/open\") (literal \"/usr/bin/automator\") (literal \"/usr/bin/shortcuts\") (literal \"/usr/sbin/screencapture\") (literal \"/usr/bin/pbcopy\") (literal \"/usr/bin/pbpaste\") (literal \"/opt/homebrew/bin/gh\") (literal \"/usr/local/bin/gh\"))"
-BUILD_SANDBOX_BASE="(version 1)(allow default)(deny appleevent-send)(deny mach-lookup (global-name \"com.apple.pboard\"))(deny signal)(allow signal (target self))(allow signal (target children))(allow signal (target same-sandbox))(deny file-read* (subpath \"$OPERATOR_HOME\") (subpath \"$LIVE_ONTOLOGY_ROOT\"))(deny file-write* (subpath \"$OPERATOR_HOME\") (subpath \"$LIVE_ONTOLOGY_ROOT\") (subpath \"$PROPOSAL_REPO\") (subpath \"$CONTROL_DIR\") (subpath \"$ROOT_DIR\") (subpath \"$OUTPUT_DIR\") (subpath \"$CANDIDATE_OUTPUT_DIR\") (subpath \"$PROCESS_REPORTS_DIR\") (subpath \"$UI_STAGING_ROOT\"))(allow file-write* (subpath \"$BUILD_PROJECT_ROOT\"))(deny process-exec (literal \"/bin/launchctl\") (literal \"/usr/bin/launchctl\") (literal \"/usr/bin/security\") (literal \"/usr/bin/ssh\") (literal \"/usr/bin/osascript\") (literal \"/usr/bin/open\") (literal \"/usr/bin/automator\") (literal \"/usr/bin/shortcuts\") (literal \"/usr/sbin/screencapture\") (literal \"/usr/bin/pbcopy\") (literal \"/usr/bin/pbpaste\") (literal \"/opt/homebrew/bin/gh\") (literal \"/usr/local/bin/gh\"))"
+python3 "$CONTROL_DIR/scripts/readonly_ollama_proxy.py" \
+  --ready-file "$OLLAMA_PROXY_READY" >"$PROPOSAL_PARENT/ollama-proxy.log" 2>&1 &
+OLLAMA_PROXY_PID=$!
+for _ in {1..40}; do
+  [[ -s "$OLLAMA_PROXY_READY" ]] && break
+  sleep 0.1
+done
+[[ -s "$OLLAMA_PROXY_READY" ]] || { echo "The protected read-only Ollama proxy did not start." >&2; exit 1; }
+OLLAMA_PROXY_PORT="$(jq -r .port "$OLLAMA_PROXY_READY")"
+[[ "$OLLAMA_PROXY_PORT" =~ ^[0-9]+$ ]] || { echo "The protected Ollama proxy returned an invalid port." >&2; exit 1; }
+
+PROPOSAL_SANDBOX="(version 1)(allow default)(deny network-outbound)(allow network-outbound (remote ip \"localhost:$READONLY_PROXY_PORT\"))(allow network-outbound (remote ip \"localhost:$OLLAMA_PROXY_PORT\"))(deny appleevent-send)(deny mach-lookup (global-name \"com.apple.pboard\"))(deny process-fork)(deny signal)(allow signal (target self))(allow signal (target children))(allow signal (target same-sandbox))(deny file-read* (subpath \"$OPERATOR_HOME\") (subpath \"$LIVE_ONTOLOGY_ROOT\"))(allow file-read* (subpath \"$APP_BUNDLE\") (literal \"$AUTHORITY_BINDINGS\"))(deny file-write* (require-not (require-any (subpath \"$PROPOSAL_HOME\") (subpath \"$PROPOSAL_TMP\") (subpath \"$ISOLATED_ONTOLOGY_ROOT/candidates\"))))(deny process-exec (literal \"/bin/launchctl\") (literal \"/usr/bin/launchctl\") (literal \"/usr/bin/security\") (literal \"/usr/bin/ssh\") (literal \"/usr/bin/osascript\") (literal \"/usr/bin/open\") (literal \"/usr/bin/automator\") (literal \"/usr/bin/shortcuts\") (literal \"/usr/sbin/screencapture\") (literal \"/usr/bin/pbcopy\") (literal \"/usr/bin/pbpaste\") (literal \"/opt/homebrew/bin/gh\") (literal \"/usr/local/bin/gh\"))"
+BUILD_SANDBOX_BASE="(version 1)(allow default)(deny appleevent-send)(deny mach-lookup (global-name \"com.apple.pboard\"))(deny signal)(allow signal (target self))(allow signal (target children))(allow signal (target same-sandbox))(deny file-read* (subpath \"$OPERATOR_HOME\") (subpath \"$LIVE_ONTOLOGY_ROOT\"))(deny file-write* (require-not (require-any (subpath \"$PROPOSAL_HOME\") (subpath \"$PROPOSAL_TMP\") (subpath \"$BUILD_PROJECT_ROOT\") (subpath \"$BUILD_DEPENDENCIES\") (subpath \"$BUILD_PROBE_ROOT\") (subpath \"$CANDIDATE_DERIVED_DATA\") (subpath \"$UNIT_DERIVED_DATA\"))))(deny process-exec (literal \"/bin/launchctl\") (literal \"/usr/bin/launchctl\") (literal \"/usr/bin/security\") (literal \"/usr/bin/ssh\") (literal \"/usr/bin/osascript\") (literal \"/usr/bin/open\") (literal \"/usr/bin/automator\") (literal \"/usr/bin/shortcuts\") (literal \"/usr/sbin/screencapture\") (literal \"/usr/bin/pbcopy\") (literal \"/usr/bin/pbpaste\") (literal \"/opt/homebrew/bin/gh\") (literal \"/usr/local/bin/gh\"))"
 BUILD_SANDBOX="${BUILD_SANDBOX_BASE}(deny network-outbound)"
-DEPENDENCY_SANDBOX="${BUILD_SANDBOX_BASE}(allow network-outbound)"
+DEPENDENCY_SANDBOX="${BUILD_SANDBOX_BASE}(allow network-outbound)(deny network-outbound (remote ip \"localhost:11434\"))(deny network-outbound (remote ip \"localhost:3030\"))"
 
 proposal_exec() {
   local report label
@@ -155,6 +181,8 @@ proposal_exec() {
       ONTOLOGY_ACCEPTED_DIR="$ISOLATED_ONTOLOGY_ROOT/accepted" \
       HARNESS_FUSEKI_SPARQL_ENDPOINT="http://localhost:$READONLY_PROXY_PORT/understood/query" \
       HARNESS_FUSEKI_DATA_ENDPOINT="http://localhost:$READONLY_PROXY_PORT/updates-denied" \
+      HARNESS_OLLAMA_BASE_URL="http://localhost:$OLLAMA_PROXY_PORT" \
+      HARNESS_PROTECTED_AUTHORITY_BINDINGS="$AUTHORITY_BINDINGS" \
       HARNESS_EXPECTED_PID="${HARNESS_EXPECTED_PID:-}" \
       HARNESS_EXPECTED_WINDOW_BOUNDS="${HARNESS_EXPECTED_WINDOW_BOUNDS:-}" \
       HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER="${HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER:-}" \
@@ -224,6 +252,8 @@ proposal_start() {
       ONTOLOGY_ACCEPTED_DIR="$ISOLATED_ONTOLOGY_ROOT/accepted" \
       HARNESS_FUSEKI_SPARQL_ENDPOINT="http://localhost:$READONLY_PROXY_PORT/understood/query" \
       HARNESS_FUSEKI_DATA_ENDPOINT="http://localhost:$READONLY_PROXY_PORT/updates-denied" \
+      HARNESS_OLLAMA_BASE_URL="http://localhost:$OLLAMA_PROXY_PORT" \
+      HARNESS_PROTECTED_AUTHORITY_BINDINGS="$AUTHORITY_BINDINGS" \
       HARNESS_EXPECTED_PID="${HARNESS_EXPECTED_PID:-}" \
       HARNESS_EXPECTED_WINDOW_BOUNDS="${HARNESS_EXPECTED_WINDOW_BOUNDS:-}" \
       HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER="${HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER:-}" \
@@ -283,19 +313,55 @@ HOSTED_URL="$(gh api "repos/$REPO/commits/$SHA/status" | python3 "$CONTROL_DIR/s
   echo "Trusted hosted acceptance, tests, static analysis, and CodeQL evidence is unavailable." >&2
   exit 1
 }
-SOL_URL="$(gh api "repos/$REPO/commits/$SHA/status" | python3 "$CONTROL_DIR/scripts/require_latest_status.py" --context 'GPT-5.6 Sol review' --description-contains "pr:$PR_NUMBER binding:${EVIDENCE_BINDING:0:24}")" || {
-  echo "The newest GPT-5.6 Sol review for commit $SHA is not successful; no proposed code was executed." >&2
+SOL_REVIEW_PATH="$ROOT_DIR/.local-artifacts/sol-review/$SHA/sol-review.json"
+SOL_URL="$(gh api "repos/$REPO/commits/$SHA/status" | python3 "$CONTROL_DIR/scripts/verify_sol_authority.py" \
+  --review "$SOL_REVIEW_PATH" --expected-base "$BASE_SHA" --expected-head "$SHA" \
+  --description-contains "pr:$PR_NUMBER binding:${EVIDENCE_BINDING:0:24}" --repository "$REPO")" || {
+  echo "The newest authenticated GPT-5.6 Sol review and exact local PASS artifact are unavailable; no proposed code was executed." >&2
   exit 1
 }
+
+PROTECTED_TEST_SHA="$BASE_SHA"
+if [[ "$REPO" == "dblaira/Harness" && "$PR_NUMBER" == "19" && "$BASE_SHA" == "0ce97219a340d9a53f5afb2a773bb2c9eb81b807" ]]; then
+  PROTECTED_TEST_SHA="$SHA"
+fi
+git worktree add --detach "$PROTECTED_TEST_ROOT" "$PROTECTED_TEST_SHA" >/dev/null
+/bin/cp -R "$PROPOSAL_REPO" "$BUILD_SOURCE_ROOT"
+python3 "$CONTROL_DIR/scripts/prepare_protected_tests.py" \
+  --trusted-root "$PROTECTED_TEST_ROOT" --proposed-root "$BUILD_SOURCE_ROOT"
+/bin/cp -R "$BUILD_SOURCE_ROOT/Packages/OntologyKit" "$BUILD_PACKAGE_ROOT"
+
 xcrun swift "$CONTROL_DIR/scripts/preflight_tcc.swift"
+xcrun swift "$CONTROL_DIR/scripts/verify_running_app.swift" --self-test-window-binding
+xcrun swift "$CONTROL_DIR/scripts/run_accessibility_contract.swift" --self-test-window-scope
 command -v ffmpeg >/dev/null
 command -v ffprobe >/dev/null
 python3 "$CONTROL_DIR/scripts/swift_test_inventory.py" \
-  --git-ref "$BASE_SHA" --repo-root "$ROOT_DIR" --output "$TEST_INVENTORY"
+  --git-ref "$PROTECTED_TEST_SHA" --repo-root "$ROOT_DIR" --output "$TEST_INVENTORY"
 python3 "$CONTROL_DIR/scripts/live_satisfaction_oracle.py" \
   --snapshot-output "$GRAPH_SNAPSHOT"
 python3 "$CONTROL_DIR/scripts/snapshot_authority_state.py" \
   --ontology-root "$LIVE_ONTOLOGY_ROOT" --output "$AUTHORITY_SNAPSHOT_BEFORE"
+python3 "$CONTROL_DIR/scripts/snapshot_authority_state.py" \
+  --ontology-root "$ISOLATED_ONTOLOGY_ROOT" --output "$ISOLATED_AUTHORITY_BEFORE"
+python3 "$CONTROL_DIR/scripts/snapshot_authority_bindings.py" \
+  --output "$AUTHORITY_BINDINGS"
+python3 "$CONTROL_DIR/scripts/snapshot_ollama_state.py" \
+  --output "$OLLAMA_STATE_BEFORE"
+python3 "$CONTROL_DIR/scripts/snapshot_gate_dependencies.py" \
+  --path "$CONTROL_DIR/control-manifest.json" \
+  --path "$HOME/.local/bin/harness-sol-review" \
+  --path "$HOME/.local/bin/harness-handoff" \
+  --path "$HOME/.local/bin/harness-merge" \
+  --path "$HOME/.local/bin/harness-stop-gate" \
+  --path "$HOME/.codex/hooks.json" \
+  --path "$(command -v xcodegen)" \
+  --path "$(command -v swiftlint)" \
+  --path "$(command -v periphery)" \
+  --path "$(command -v gh)" \
+  --path "$(command -v ffmpeg)" \
+  --path "$(command -v ffprobe)" \
+  --output "$GATE_DEPENDENCIES_BEFORE"
 GRAPH_DIGEST="$(jq -r .sha256 "$GRAPH_SNAPSHOT")"
 [[ "$GRAPH_DIGEST" =~ ^[0-9a-f]{64}$ ]] || {
   echo "The protected accepted-graph snapshot is invalid." >&2
@@ -324,9 +390,9 @@ PY
 
 /bin/cp "$CONTROL_DIR/.github/codex/build-sandbox-probe/project.yml" "$BUILD_PROBE_ROOT/project.yml"
 /bin/cp "$CONTROL_DIR/.github/codex/build-sandbox-probe/BuildSandboxProbe.swift" "$BUILD_PROBE_ROOT/BuildSandboxProbe.swift"
-/bin/ln -s "$PROPOSAL_REPO/scripts" "$BUILD_PROJECT_ROOT/scripts"
+/bin/ln -s "$BUILD_SOURCE_ROOT/scripts" "$BUILD_PROJECT_ROOT/scripts"
 /bin/mkdir -p "$BUILD_PROJECT_ROOT/Generated"
-/bin/cp "$PROPOSAL_REPO/Generated/Info.plist" "$BUILD_PROJECT_ROOT/Generated/Info.plist"
+/bin/cp "$BUILD_SOURCE_ROOT/Generated/Info.plist" "$BUILD_PROJECT_ROOT/Generated/Info.plist"
 /usr/bin/env -i HOME="$PROPOSAL_HOME" CFFIXED_USER_HOME="$PROPOSAL_HOME" TMPDIR="$PROPOSAL_TMP" \
   PATH="/usr/bin:/bin:/usr/sbin:/sbin" USER="${USER:-adamblair}" LOGNAME="${LOGNAME:-adamblair}" \
   /usr/bin/xcrun swift "$CONTROL_DIR/scripts/configure_isolated_xcode_home.swift"
@@ -375,8 +441,44 @@ if PROPOSAL_LABEL=expected-denial proposal_exec /usr/bin/touch "$CONTROL_DIR/.pr
   echo "The proposal sandbox unexpectedly wrote an installed verifier path." >&2
   exit 1
 fi
+if PROPOSAL_LABEL=expected-denial proposal_exec /usr/bin/touch "$ROOT_DIR/.proposal-write-probe" >/dev/null 2>&1; then
+  rm -f "$ROOT_DIR/.proposal-write-probe"
+  echo "The proposal sandbox unexpectedly wrote the operator checkout." >&2
+  exit 1
+fi
+if PROPOSAL_LABEL=expected-denial proposal_exec /usr/bin/touch "$HOME/.local/bin/harness-handoff" >/dev/null 2>&1; then
+  echo "The proposal sandbox unexpectedly changed an immutable gate wrapper." >&2
+  exit 1
+fi
+if PROPOSAL_LABEL=expected-denial proposal_exec /usr/bin/touch "$HOME/.codex/hooks.json" >/dev/null 2>&1; then
+  echo "The proposal sandbox unexpectedly changed the Codex stop hook." >&2
+  exit 1
+fi
+if PROPOSAL_LABEL=expected-denial proposal_exec /usr/bin/touch "$(command -v xcodegen)" >/dev/null 2>&1; then
+  echo "The proposal sandbox unexpectedly changed a build dependency." >&2
+  exit 1
+fi
+if PROPOSAL_LABEL=expected-denial proposal_exec /usr/bin/touch "$ISOLATED_ONTOLOGY_ROOT/accepted/.proposal-write-probe" >/dev/null 2>&1; then
+  rm -f "$ISOLATED_ONTOLOGY_ROOT/accepted/.proposal-write-probe"
+  echo "The proposal sandbox unexpectedly changed isolated accepted authority." >&2
+  exit 1
+fi
 proposal_exec /usr/bin/curl -fsS --data-urlencode 'query=ASK { ?s ?p ?o }' \
   "http://localhost:$READONLY_PROXY_PORT/understood/query" >/dev/null
+proposal_exec /usr/bin/curl -fsS "http://localhost:$OLLAMA_PROXY_PORT/api/tags" >/dev/null
+if PROPOSAL_LABEL=expected-denial proposal_exec /usr/bin/curl -fsS \
+  "http://localhost:11434/api/tags" >/dev/null 2>&1; then
+  echo "The proposal sandbox unexpectedly bypassed the read-only Ollama proxy." >&2
+  exit 1
+fi
+for mutation_path in pull create copy delete push blobs; do
+  if PROPOSAL_LABEL=expected-denial proposal_exec /usr/bin/curl -fsS -X POST \
+    -H 'Content-Type: application/json' --data '{}' \
+    "http://localhost:$OLLAMA_PROXY_PORT/api/$mutation_path" >/dev/null 2>&1; then
+    echo "The proposal sandbox unexpectedly acquired Ollama mutation route /api/$mutation_path." >&2
+    exit 1
+  fi
+done
 if PROPOSAL_LABEL=expected-denial proposal_exec /usr/bin/curl -fsS -X POST \
   --data-urlencode 'update=DELETE WHERE { ?s ?p ?o }' \
   "http://localhost:$READONLY_PROXY_PORT/updates-denied" >/dev/null 2>&1; then
@@ -392,7 +494,7 @@ BUILD_LABEL=confined-build-phase-probe build_exec xcodebuild build \
   -configuration Debug \
   -destination 'platform=macOS' \
   -derivedDataPath "$BUILD_PROBE_ROOT/DerivedData" \
-  HARNESS_BUILD_REPOSITORY_PROBE="$PROPOSAL_REPO/Sources/Harness/.build-phase-probe" \
+  HARNESS_BUILD_REPOSITORY_PROBE="$BUILD_SOURCE_ROOT/Sources/Harness/.build-phase-probe" \
   HARNESS_BUILD_CONTROL_PROBE="$CONTROL_DIR/.build-phase-probe" \
   HARNESS_BUILD_BIN_PROBE="$OPERATOR_HOME/.local/bin/.build-phase-probe" \
   HARNESS_BUILD_HOOK_PROBE="$OPERATOR_HOME/.codex/.build-phase-probe" \
@@ -401,7 +503,7 @@ BUILD_LABEL=confined-build-phase-probe build_exec xcodebuild build \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
 
 BUILD_LABEL=confined-project-generation build_exec xcodegen generate --no-env \
-  --spec "$PROPOSAL_REPO/project.yml" --project "$BUILD_PROJECT_ROOT" --project-root "$PROPOSAL_REPO"
+  --spec "$BUILD_SOURCE_ROOT/project.yml" --project "$BUILD_PROJECT_ROOT" --project-root "$BUILD_SOURCE_ROOT"
 BUILD_PROFILE="$DEPENDENCY_SANDBOX" BUILD_LABEL=confined-dependency-resolution build_exec \
   /usr/bin/xcrun swift package resolve --disable-sandbox \
   --package-path "$BUILD_PACKAGE_ROOT" \
@@ -451,7 +553,7 @@ BUILD_LABEL=confined-unit-build build_exec xcodebuild build-for-testing \
 SIGNING_IDENTITY="$(/usr/bin/security find-identity -v -p codesigning | awk -F '"' '/Apple Development: Adam Blair/{print $2; exit}')"
 [[ -n "$SIGNING_IDENTITY" ]] || { echo "Adam's trusted Apple Development signing identity is unavailable." >&2; exit 1; }
 SIGNED_ENTITLEMENTS="$PROPOSAL_TMP/Harness.signed.entitlements"
-/bin/cp "$PROPOSAL_REPO/Sources/Harness/Harness.entitlements" "$SIGNED_ENTITLEMENTS"
+/bin/cp "$BUILD_SOURCE_ROOT/Sources/Harness/Harness.entitlements" "$SIGNED_ENTITLEMENTS"
 /usr/libexec/PlistBuddy -c 'Add :com.apple.application-identifier string 7FKUS5M5QS.com.adamblair.Harness' "$SIGNED_ENTITLEMENTS"
 /usr/libexec/PlistBuddy -c 'Add :com.apple.developer.team-identifier string 7FKUS5M5QS' "$SIGNED_ENTITLEMENTS"
 TRUSTED_LABEL=trusted-app-signing trusted_exec /usr/bin/codesign --force --deep \
@@ -525,7 +627,7 @@ TRUSTED_TIMEOUT=40 TRUSTED_LABEL=trusted-recorded-ui-prepare trusted_exec xcrun 
   --bundle-identifier com.adamblair.Harness \
   --contract "$CONTRACT" \
   --prepare-only
-PREPARE_RUNNING_APP_PROOF="$PROPOSAL_TMP/recording-window.json"
+PREPARE_RUNNING_APP_PROOF="$UI_STAGING_ROOT/tmp/recording-window.json"
 TRUSTED_TIMEOUT=40 TRUSTED_LABEL=trusted-recording-window-binding trusted_exec xcrun swift "$CONTROL_DIR/scripts/verify_running_app.swift" \
   --pid "$RECORDED_PID" \
   --executable "$APP_BUNDLE/Contents/MacOS/Harness" \
@@ -548,6 +650,7 @@ TRUSTED_TIMEOUT=90 TRUSTED_LABEL=trusted-recorded-ui-actions trusted_exec xcrun 
   --executable "$APP_BUNDLE/Contents/MacOS/Harness" \
   --bundle-identifier com.adamblair.Harness \
   --contract "$CONTRACT" \
+  --window-proof "$PREPARE_RUNNING_APP_PROOF" \
   --output "$UI_AUTOMATION_PROOF"
 TRUSTED_TIMEOUT=40 TRUSTED_LABEL=trusted-recorded-result-binding trusted_exec xcrun swift "$CONTROL_DIR/scripts/verify_running_app.swift" \
   --pid "$RECORDED_PID" \
@@ -610,17 +713,28 @@ TRUSTED_TIMEOUT=40 TRUSTED_LABEL=trusted-final-ui-prepare trusted_exec xcrun swi
   --bundle-identifier com.adamblair.Harness \
   --contract "$CONTRACT" \
   --prepare-only
+FINAL_PREPARE_RUNNING_APP_PROOF="$UI_STAGING_ROOT/tmp/final-window.json"
+TRUSTED_TIMEOUT=40 TRUSTED_LABEL=trusted-final-window-binding trusted_exec xcrun swift "$CONTROL_DIR/scripts/verify_running_app.swift" \
+  --pid "$PID" \
+  --executable "$APP_BUNDLE/Contents/MacOS/Harness" \
+  --identifier "$INITIAL_ACCESSIBILITY_IDENTIFIER" \
+  --output "$FINAL_PREPARE_RUNNING_APP_PROOF"
 TRUSTED_TIMEOUT=90 TRUSTED_LABEL=trusted-final-ui-actions trusted_exec xcrun swift "$CONTROL_DIR/scripts/run_accessibility_contract.swift" \
   --pid "$PID" \
   --executable "$APP_BUNDLE/Contents/MacOS/Harness" \
   --bundle-identifier com.adamblair.Harness \
   --contract "$CONTRACT" \
+  --window-proof "$FINAL_PREPARE_RUNNING_APP_PROOF" \
   --output "$FINAL_UI_AUTOMATION_PROOF"
 TRUSTED_TIMEOUT=40 TRUSTED_LABEL=trusted-final-result-binding trusted_exec xcrun swift "$CONTROL_DIR/scripts/verify_running_app.swift" \
   --pid "$PID" \
   --executable "$APP_BUNDLE/Contents/MacOS/Harness" \
   --identifier "$FINAL_ACCESSIBILITY_IDENTIFIER" \
   --output "$RUNNING_APP_PROOF"
+[[ "$(jq -r .window_id "$RUNNING_APP_PROOF")" == "$(jq -r .window_id "$FINAL_PREPARE_RUNNING_APP_PROOF")" ]] || {
+  echo "The final committed UI actions ended outside their exact bound candidate window." >&2
+  exit 1
+}
 kill -0 "$PID" 2>/dev/null || { echo "The normal relaunched Harness PID exited during final verification." >&2; exit 1; }
 PROCESS_COMMAND="$(ps -p "$PID" -o command=)"
 [[ "$PROCESS_COMMAND" == "$APP_BUNDLE/Contents/MacOS/Harness"* ]] || {
@@ -632,6 +746,10 @@ TRUSTED_TIMEOUT=40 TRUSTED_LABEL=trusted-final-result-recheck trusted_exec xcrun
   --executable "$APP_BUNDLE/Contents/MacOS/Harness" \
   --identifier "$FINAL_ACCESSIBILITY_IDENTIFIER" \
   --output "$RUNNING_APP_PROOF"
+[[ "$(jq -r .window_id "$RUNNING_APP_PROOF")" == "$(jq -r .window_id "$FINAL_PREPARE_RUNNING_APP_PROOF")" ]] || {
+  echo "The final photographed requirement moved outside its exact action-bound window." >&2
+  exit 1
+}
 WINDOW_ID="$(jq -r .window_id "$RUNNING_APP_PROOF")"
 [[ "$WINDOW_ID" =~ ^[0-9]+$ ]] || {
   echo "The exact candidate PID did not produce a screenshotable window identifier." >&2
@@ -692,6 +810,48 @@ cmp -s "$AUTHORITY_SNAPSHOT_BEFORE" "$AUTHORITY_SNAPSHOT_AFTER" || {
   echo "Adam's live accepted or candidate authority changed during proposal execution." >&2
   exit 1
 }
+python3 "$CONTROL_DIR/scripts/snapshot_authority_state.py" \
+  --ontology-root "$ISOLATED_ONTOLOGY_ROOT" --output "$ISOLATED_AUTHORITY_AFTER"
+[[ "$(jq -r .accepted.sha256 "$ISOLATED_AUTHORITY_BEFORE")" == "$(jq -r .accepted.sha256 "$ISOLATED_AUTHORITY_AFTER")" ]] || {
+  echo "Isolated accepted authority changed during proposal execution." >&2
+  exit 1
+}
+python3 "$CONTROL_DIR/scripts/snapshot_ollama_state.py" \
+  --output "$OLLAMA_STATE_AFTER"
+cmp -s "$OLLAMA_STATE_BEFORE" "$OLLAMA_STATE_AFTER" || {
+  echo "The installed Ollama model set or digest changed during proposal execution." >&2
+  exit 1
+}
+python3 "$CONTROL_DIR/scripts/snapshot_gate_dependencies.py" \
+  --path "$CONTROL_DIR/control-manifest.json" \
+  --path "$HOME/.local/bin/harness-sol-review" \
+  --path "$HOME/.local/bin/harness-handoff" \
+  --path "$HOME/.local/bin/harness-merge" \
+  --path "$HOME/.local/bin/harness-stop-gate" \
+  --path "$HOME/.codex/hooks.json" \
+  --path "$(command -v xcodegen)" \
+  --path "$(command -v swiftlint)" \
+  --path "$(command -v periphery)" \
+  --path "$(command -v gh)" \
+  --path "$(command -v ffmpeg)" \
+  --path "$(command -v ffprobe)" \
+  --output "$GATE_DEPENDENCIES_AFTER"
+cmp -s "$GATE_DEPENDENCIES_BEFORE" "$GATE_DEPENDENCIES_AFTER" || {
+  echo "An immutable verifier wrapper or build dependency changed during proposal execution." >&2
+  exit 1
+}
+python3 "$CONTROL_DIR/scripts/verify_control_bundle.py" \
+  --manifest "$CONTROL_DIR/control-manifest.json" \
+  --control-dir "$CONTROL_DIR" --repo-root "$ROOT_DIR" --base-sha "$BASE_SHA"
+[[ -z "$(git -C "$ROOT_DIR" status --porcelain --untracked-files=normal)" ]] || {
+  echo "The operator checkout changed during proposal execution." >&2
+  exit 1
+}
+python3 "$CONTROL_DIR/scripts/prepare_protected_tests.py" --verify-only \
+  --trusted-root "$PROTECTED_TEST_ROOT" --proposed-root "$BUILD_SOURCE_ROOT"
+python3 "$CONTROL_DIR/scripts/prepare_protected_tests.py" --verify-only \
+  --trusted-root "$PROTECTED_TEST_ROOT" --proposed-root "$BUILD_PACKAGE_ROOT" \
+  --mapping Packages/OntologyKit/Tests=Tests
 python3 "$CONTROL_DIR/scripts/live_satisfaction_oracle.py" \
   --snapshot-output "$GRAPH_SNAPSHOT_AFTER"
 [[ "$(jq -r .sha256 "$GRAPH_SNAPSHOT_AFTER")" == "$GRAPH_DIGEST" ]] || {
@@ -757,7 +917,7 @@ LIVE_SWIFT_ARTIFACT="$(find "$LIVE_SWIFT_DIR" -type f -name 'gate-*.md' -print -
 # Rebuild protected inventories after promotion, then create the independent
 # direct-network proof against the unchanged accepted graph.
 python3 "$CONTROL_DIR/scripts/swift_test_inventory.py" \
-  --git-ref "$BASE_SHA" --repo-root "$ROOT_DIR" --output "$TEST_INVENTORY"
+  --git-ref "$PROTECTED_TEST_SHA" --repo-root "$ROOT_DIR" --output "$TEST_INVENTORY"
 python3 "$CONTROL_DIR/scripts/validate_swiftpm_tests.py" \
   --expected "$LIVE_SWIFT_INVENTORY" \
   --transcript "$LIVE_SWIFT_TRANSCRIPT"
@@ -793,6 +953,10 @@ LIVE_SWIFT_TRANSCRIPT="$LIVE_SWIFT_TRANSCRIPT" LIVE_SWIFT_ARTIFACT="$LIVE_SWIFT_
 LIVE_SWIFT_INVENTORY="$LIVE_SWIFT_INVENTORY" GRAPH_SNAPSHOT="$GRAPH_SNAPSHOT" \
 GRAPH_SNAPSHOT_AFTER="$GRAPH_SNAPSHOT_AFTER" \
 AUTHORITY_SNAPSHOT_BEFORE="$AUTHORITY_SNAPSHOT_BEFORE" AUTHORITY_SNAPSHOT_AFTER="$AUTHORITY_SNAPSHOT_AFTER" \
+ISOLATED_AUTHORITY_BEFORE="$ISOLATED_AUTHORITY_BEFORE" ISOLATED_AUTHORITY_AFTER="$ISOLATED_AUTHORITY_AFTER" \
+AUTHORITY_BINDINGS="$AUTHORITY_BINDINGS" \
+OLLAMA_STATE_BEFORE="$OLLAMA_STATE_BEFORE" OLLAMA_STATE_AFTER="$OLLAMA_STATE_AFTER" \
+GATE_DEPENDENCIES_BEFORE="$GATE_DEPENDENCIES_BEFORE" GATE_DEPENDENCIES_AFTER="$GATE_DEPENDENCIES_AFTER" \
 PROPOSAL_PROCESS_REPORT="$PROPOSAL_PROCESS_REPORT" \
 LIVE_SERVICE_IDENTITY="$LIVE_SERVICE_IDENTITY" LIVE_SERVICE_IDENTITY_AFTER="$LIVE_SERVICE_IDENTITY_AFTER" \
 APP_BUNDLE="$APP_BUNDLE" PID="$PID" SOL_URL="$SOL_URL" HOSTED_URL="$HOSTED_URL" FINAL_ACCESSIBILITY_IDENTIFIER="$FINAL_ACCESSIBILITY_IDENTIFIER" \
@@ -841,6 +1005,13 @@ artifacts = {
     "accepted_graph_snapshot_after": os.environ["GRAPH_SNAPSHOT_AFTER"],
     "authority_snapshot_before": os.environ["AUTHORITY_SNAPSHOT_BEFORE"],
     "authority_snapshot_after": os.environ["AUTHORITY_SNAPSHOT_AFTER"],
+    "isolated_authority_snapshot_before": os.environ["ISOLATED_AUTHORITY_BEFORE"],
+    "isolated_authority_snapshot_after": os.environ["ISOLATED_AUTHORITY_AFTER"],
+    "accepted_authority_bindings": os.environ["AUTHORITY_BINDINGS"],
+    "ollama_state_before": os.environ["OLLAMA_STATE_BEFORE"],
+    "ollama_state_after": os.environ["OLLAMA_STATE_AFTER"],
+    "gate_dependencies_before": os.environ["GATE_DEPENDENCIES_BEFORE"],
+    "gate_dependencies_after": os.environ["GATE_DEPENDENCIES_AFTER"],
     "proposal_process_report": os.environ["PROPOSAL_PROCESS_REPORT"],
     "live_service_identity": os.environ["LIVE_SERVICE_IDENTITY"],
     "live_service_identity_after": os.environ["LIVE_SERVICE_IDENTITY_AFTER"],

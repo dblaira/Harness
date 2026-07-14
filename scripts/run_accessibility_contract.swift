@@ -9,7 +9,26 @@ struct Options {
     let bundleIdentifier: String
     let contract: String
     let output: String?
+    let windowProof: String?
     let prepareOnly: Bool
+}
+
+struct WindowBounds: Decodable {
+    let x: Double
+    let y: Double
+    let width: Double
+    let height: Double
+
+    var rect: CGRect { CGRect(x: x, y: y, width: width, height: height) }
+    var dictionary: [String: Double] { ["x": x, "y": y, "width": width, "height": height] }
+}
+
+struct RunningWindowProof: Decodable {
+    let status: String
+    let pid: Int
+    let executable: String
+    let window_id: Int
+    let window_bounds: WindowBounds
 }
 
 struct Contract: Decodable {
@@ -44,12 +63,16 @@ func parseOptions() -> Options {
         let bundleIdentifier = value(after: "--bundle-identifier"),
         let contract = value(after: "--contract")
     else {
-        fail("usage: run_accessibility_contract.swift --pid PID --executable PATH --bundle-identifier ID --contract FILE [--output FILE | --prepare-only]", code: 2)
+        fail("usage: run_accessibility_contract.swift --pid PID --executable PATH --bundle-identifier ID --contract FILE [--output FILE --window-proof FILE | --prepare-only]", code: 2)
     }
     let prepareOnly = arguments.contains("--prepare-only")
     let output = value(after: "--output")
+    let windowProof = value(after: "--window-proof")
     if prepareOnly == (output != nil) {
         fail("choose exactly one of --prepare-only or --output FILE", code: 2)
+    }
+    if prepareOnly == (windowProof != nil) {
+        fail("--window-proof is required exactly when --output is used", code: 2)
     }
     return Options(
         pid: pid,
@@ -57,6 +80,7 @@ func parseOptions() -> Options {
         bundleIdentifier: bundleIdentifier,
         contract: contract,
         output: output,
+        windowProof: windowProof,
         prepareOnly: prepareOnly
     )
 }
@@ -79,51 +103,129 @@ func children(of element: AXUIElement) -> [AXUIElement] {
     return value as? [AXUIElement] ?? []
 }
 
-func findElement(
+func findElements(
     in root: AXUIElement,
     identifier: String,
     remaining: inout Int,
-    depth: Int = 0
-) -> AXUIElement? {
-    guard remaining > 0, depth < 30 else { return nil }
+    depth: Int = 0,
+    matches: inout [AXUIElement]
+) {
+    guard remaining > 0, depth < 30 else { return }
     remaining -= 1
     if stringAttribute(root, kAXIdentifierAttribute as CFString) == identifier {
-        return root
+        matches.append(root)
     }
     for child in children(of: root) {
-        if let match = findElement(in: child, identifier: identifier, remaining: &remaining, depth: depth + 1) {
-            return match
-        }
+        findElements(
+            in: child,
+            identifier: identifier,
+            remaining: &remaining,
+            depth: depth + 1,
+            matches: &matches
+        )
     }
-    return nil
 }
 
-func element(in application: AXUIElement, identifier: String) -> AXUIElement? {
+func elements(in window: AXUIElement, identifier: String) -> [AXUIElement] {
     var budget = 10_000
-    return findElement(in: application, identifier: identifier, remaining: &budget)
+    var matches: [AXUIElement] = []
+    findElements(in: window, identifier: identifier, remaining: &budget, matches: &matches)
+    return matches
+}
+
+func identifierMatchCountIsUnambiguous(_ count: Int) -> Bool {
+    count <= 1
 }
 
 func waitForElement(
-    in application: AXUIElement,
+    in window: AXUIElement,
     identifier: String,
     timeout: TimeInterval,
 ) -> AXUIElement? {
     let deadline = Date().addingTimeInterval(timeout)
     repeat {
-        let match = element(in: application, identifier: identifier)
-        if let match { return match }
+        let matches = elements(in: window, identifier: identifier)
+        if !identifierMatchCountIsUnambiguous(matches.count) {
+            fail("accessibility identifier is ambiguous inside the bound window: \(identifier)")
+        }
+        if let match = matches.first { return match }
         pause(0.1)
     } while Date() < deadline
     return nil
 }
 
-func waitUntilAbsent(in application: AXUIElement, identifier: String, timeout: TimeInterval) -> Bool {
+func waitUntilAbsent(in window: AXUIElement, identifier: String, timeout: TimeInterval) -> Bool {
     let deadline = Date().addingTimeInterval(timeout)
     repeat {
-        if element(in: application, identifier: identifier) == nil { return true }
+        if elements(in: window, identifier: identifier).isEmpty { return true }
         pause(0.1)
     } while Date() < deadline
     return false
+}
+
+func pointAttribute(_ element: AXUIElement, _ attribute: CFString) -> CGPoint? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
+          let value,
+          CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+    let axValue = unsafeBitCast(value, to: AXValue.self)
+    guard AXValueGetType(axValue) == .cgPoint else { return nil }
+    var point = CGPoint.zero
+    return AXValueGetValue(axValue, .cgPoint, &point) ? point : nil
+}
+
+func sizeAttribute(_ element: AXUIElement, _ attribute: CFString) -> CGSize? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
+          let value,
+          CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+    let axValue = unsafeBitCast(value, to: AXValue.self)
+    guard AXValueGetType(axValue) == .cgSize else { return nil }
+    var size = CGSize.zero
+    return AXValueGetValue(axValue, .cgSize, &size) ? size : nil
+}
+
+func approximatelyEqual(_ lhs: CGRect, _ rhs: CGRect, tolerance: CGFloat = 4) -> Bool {
+    abs(lhs.minX - rhs.minX) <= tolerance
+        && abs(lhs.minY - rhs.minY) <= tolerance
+        && abs(lhs.width - rhs.width) <= tolerance
+        && abs(lhs.height - rhs.height) <= tolerance
+}
+
+func boundWindow(application: AXUIElement, proof: RunningWindowProof, options: Options) -> AXUIElement {
+    guard proof.status == "PASS", proof.pid == Int(options.pid) else {
+        fail("window proof is not bound to the exact candidate PID")
+    }
+    let expectedExecutable = URL(fileURLWithPath: options.executable).standardizedFileURL.path
+    guard URL(fileURLWithPath: proof.executable).standardizedFileURL.path == expectedExecutable else {
+        fail("window proof is bound to a different executable")
+    }
+    guard let visible = CGWindowListCopyWindowInfo(
+        [.optionOnScreenOnly, .excludeDesktopElements],
+        CGWindowID(proof.window_id)
+    ) as? [[String: Any]], visible.contains(where: { item in
+        (item[kCGWindowNumber as String] as? NSNumber)?.intValue == proof.window_id
+            && (item[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == options.pid
+            && (item[kCGWindowBounds as String] as? NSDictionary)
+                .flatMap(CGRect.init(dictionaryRepresentation:))
+                .map { approximatelyEqual($0, proof.window_bounds.rect) } == true
+    }) else {
+        fail("window proof no longer identifies the exact visible candidate window")
+    }
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &value) == .success,
+          let windows = value as? [AXUIElement] else {
+        fail("candidate PID does not expose Accessibility windows")
+    }
+    let matches = windows.filter { window in
+        guard let position = pointAttribute(window, kAXPositionAttribute as CFString),
+              let size = sizeAttribute(window, kAXSizeAttribute as CFString) else { return false }
+        return approximatelyEqual(CGRect(origin: position, size: size), proof.window_bounds.rect)
+    }
+    guard matches.count == 1 else {
+        fail("window proof does not map to exactly one Accessibility window")
+    }
+    return matches[0]
 }
 
 func visibleWindowCount(for pid: pid_t) -> Int {
@@ -214,15 +316,27 @@ func validate(_ contract: Contract) {
     }
 }
 
-func execute(_ step: AutomationStep, application: AXUIElement) -> [String: Any] {
+func execute(
+    _ step: AutomationStep,
+    window: AXUIElement,
+    options: Options,
+    proof: RunningWindowProof
+) -> [String: Any] {
     let timeout = TimeInterval(step.timeout_seconds ?? 10)
     if step.action == "assert_not_present" {
-        guard waitUntilAbsent(in: application, identifier: step.identifier, timeout: timeout) else {
+        guard waitUntilAbsent(in: window, identifier: step.identifier, timeout: timeout) else {
             fail("accessibility identifier remained present: \(step.identifier)")
         }
-        return ["action": step.action, "identifier": step.identifier, "status": "PASS"]
+        return [
+            "action": step.action,
+            "identifier": step.identifier,
+            "status": "PASS",
+            "target_pid": Int(options.pid),
+            "target_window_id": proof.window_id,
+            "target_window_bounds": proof.window_bounds.dictionary,
+        ]
     }
-    guard let target = waitForElement(in: application, identifier: step.identifier, timeout: timeout) else {
+    guard let target = waitForElement(in: window, identifier: step.identifier, timeout: timeout) else {
         fail("accessibility identifier did not appear: \(step.identifier)")
     }
     var targetPID: pid_t = 0
@@ -234,6 +348,8 @@ func execute(_ step: AutomationStep, application: AXUIElement) -> [String: Any] 
         "identifier": step.identifier,
         "status": "PASS",
         "target_pid": Int(targetPID),
+        "target_window_id": proof.window_id,
+        "target_window_bounds": proof.window_bounds.dictionary,
     ]
     switch step.action {
     case "wait_for":
@@ -254,6 +370,15 @@ func execute(_ step: AutomationStep, application: AXUIElement) -> [String: Any] 
 }
 
 do {
+    if CommandLine.arguments.contains("--self-test-window-scope") {
+        guard identifierMatchCountIsUnambiguous(0),
+              identifierMatchCountIsUnambiguous(1),
+              !identifierMatchCountIsUnambiguous(2) else {
+            fail("duplicate accessibility identifier regression failed", code: 99)
+        }
+        print("Exact-window duplicate identifier self-test passed.")
+        exit(0)
+    }
     let options = parseOptions()
     let data = try Data(contentsOf: URL(fileURLWithPath: options.contract))
     let contract = try JSONDecoder().decode(Contract.self, from: data)
@@ -273,25 +398,32 @@ do {
         exit(0)
     }
 
+    let windowProofData = try Data(contentsOf: URL(fileURLWithPath: options.windowProof!))
+    let windowProof = try JSONDecoder().decode(RunningWindowProof.self, from: windowProofData)
+    let window = boundWindow(application: application, proof: windowProof, options: options)
+
     var actionResults: [[String: Any]] = []
     for step in contract.ui_automation {
-        let result = execute(step, application: application)
+        let result = execute(step, window: window, options: options, proof: windowProof)
         guard result["target_pid"] == nil || result["target_pid"] as? Int == Int(options.pid) else {
             fail("a committed UI action escaped the exact candidate PID")
         }
         actionResults.append(result)
     }
-    guard element(in: application, identifier: contract.final_accessibility_identifier) != nil else {
+    let finalMatches = elements(in: window, identifier: contract.final_accessibility_identifier)
+    guard finalMatches.count == 1 else {
         fail("the final contracted accessibility identifier is not present")
     }
     let encodedSteps = try JSONEncoder().encode(contract.ui_automation)
     let contractActions = try JSONSerialization.jsonObject(with: encodedSteps)
     let proof: [String: Any] = [
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "PASS",
         "pid": Int(options.pid),
         "bundle_identifier": running.bundleIdentifier ?? "",
         "executable": running.executableURL?.standardizedFileURL.path ?? "",
+        "window_id": windowProof.window_id,
+        "window_bounds": windowProof.window_bounds.dictionary,
         "final_accessibility_identifier": contract.final_accessibility_identifier,
         "contract_actions": contractActions,
         "action_results": actionResults,

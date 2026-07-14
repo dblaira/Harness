@@ -26,6 +26,8 @@ install -m 0755 \
   scripts/configure_isolated_xcode_home.swift \
   scripts/evidence_binding.py \
   scripts/live_satisfaction_oracle.py \
+  scripts/prepare_protected_tests.py \
+  scripts/readonly_ollama_proxy.py \
   scripts/readonly_sparql_proxy.py \
   scripts/select_pull_request.py \
   scripts/sanitize_review_bundle.py \
@@ -34,7 +36,10 @@ install -m 0755 \
   scripts/require_latest_status.py \
   scripts/run_with_timeout.py \
   scripts/run_accessibility_contract.swift \
+  scripts/snapshot_authority_bindings.py \
   scripts/snapshot_authority_state.py \
+  scripts/snapshot_gate_dependencies.py \
+  scripts/snapshot_ollama_state.py \
   scripts/validate_acceptance_contract.py \
   scripts/validate_sol_review.py \
   scripts/validate_xctest_transcript.py \
@@ -44,6 +49,7 @@ install -m 0755 \
   scripts/verify_codex_runtime.py \
   scripts/verify_control_bundle.py \
   scripts/verify_repository_gate_state.py \
+  scripts/verify_sol_authority.py \
   scripts/verify_release_tree.py \
   scripts/verify_release_tree_run.py \
   scripts/verify_hosted_evidence.py \

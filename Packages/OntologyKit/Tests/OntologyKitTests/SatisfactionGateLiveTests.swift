@@ -19,6 +19,60 @@ private func liveEndpointUp(_ urlString: String) async -> Bool {
     return (200..<300).contains(status)
 }
 
+private struct ProtectedAuthoritySnapshot: Decodable {
+    struct Triple: Decodable, Hashable {
+        let subject: String
+        let predicate: String
+        let object: String
+        let sha256: String
+    }
+
+    let schema_version: Int
+    let accepted_graph: String
+    let sha256: String
+    let triples: [Triple]
+}
+
+private func protectedAuthorityBindingErrors(
+    authorityHits: [GraphAuthorityHit],
+    snapshot: ProtectedAuthoritySnapshot
+) -> [String] {
+    func normalized(_ value: String) -> String {
+        if value.hasPrefix("understood:") {
+            return value.replacingOccurrences(
+                of: "understood:",
+                with: "https://understood.app/ontology#",
+                options: [.anchored]
+            )
+        }
+        return value
+    }
+    let accepted = Set(snapshot.triples.map {
+        "\(normalized($0.subject))\u{001f}\(normalized($0.predicate))\u{001f}\(normalized($0.object))"
+    })
+    return authorityHits.compactMap { hit in
+        let key = "\(normalized(hit.subject))\u{001f}\(normalized(hit.predicate))\u{001f}\(normalized(hit.object))"
+        guard hit.authorityLevel == .accepted, accepted.contains(key) else {
+            return "authority hit is not an exact pre-execution accepted binding: \(hit.subject)"
+        }
+        return nil
+    }
+}
+
+private func loadProtectedAuthoritySnapshot(environment: [String: String]) throws -> ProtectedAuthoritySnapshot {
+    guard let path = environment["HARNESS_PROTECTED_AUTHORITY_BINDINGS"] else {
+        struct MissingProtectedAuthoritySnapshot: Error {}
+        throw MissingProtectedAuthoritySnapshot()
+    }
+    let data = try Data(contentsOf: URL(fileURLWithPath: path))
+    let snapshot = try JSONDecoder().decode(ProtectedAuthoritySnapshot.self, from: data)
+    guard snapshot.schema_version == 1, !snapshot.triples.isEmpty else {
+        struct InvalidProtectedAuthoritySnapshot: Error {}
+        throw InvalidProtectedAuthoritySnapshot()
+    }
+    return snapshot
+}
+
 private func requiredLiveEvidenceErrors(
     health: GraphHealthReport,
     authorityHits: [GraphAuthorityHit]
@@ -107,10 +161,32 @@ private actor RecordingGraphHealthChecker: GraphHealthChecking {
     #expect(!requiredLiveEvidenceErrors(health: healthyButFallbackOnly, authorityHits: [fallback]).isEmpty)
 }
 
+@Test func protectedAuthoritySnapshotRejectsFabricatedAcceptedHit() {
+    let snapshot = ProtectedAuthoritySnapshot(
+        schema_version: 1,
+        accepted_graph: "https://understood.app/graph/accepted",
+        sha256: "fixture",
+        triples: [
+            .init(subject: "allowed", predicate: "predicate", object: "object", sha256: "fixture")
+        ]
+    )
+    let allowed = GraphAuthorityHit(
+        subject: "allowed", predicate: "predicate", object: "object", source: "fixture", queryTrace: "fixture"
+    )
+    let fabricated = GraphAuthorityHit(
+        subject: "fabricated", predicate: "predicate", object: "object", source: "fixture", queryTrace: "fixture"
+    )
+    #expect(protectedAuthorityBindingErrors(authorityHits: [allowed], snapshot: snapshot).isEmpty)
+    #expect(!protectedAuthorityBindingErrors(authorityHits: [allowed, fabricated], snapshot: snapshot).isEmpty)
+}
+
 @Test func satisfactionGateAdamRealQuestionGetsCompleteAnswer() async throws {
     let environment = ProcessInfo.processInfo.environment
     let requireLiveProof = environment["HARNESS_REQUIRE_LIVE_SATISFACTION"] == "1"
-    let ollamaAvailable = await liveEndpointUp("http://127.0.0.1:11434/api/tags")
+    let ollamaBaseURL = environment["HARNESS_OLLAMA_BASE_URL"] ?? "http://127.0.0.1:11434"
+    let ollamaAvailable = await liveEndpointUp(
+        ollamaBaseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/api/tags"
+    )
     guard ollamaAvailable else {
         if requireLiveProof {
             struct MissingLiveDependency: Error {}
@@ -118,6 +194,14 @@ private actor RecordingGraphHealthChecker: GraphHealthChecking {
         }
         return
     }
+    guard environment["HARNESS_PROTECTED_AUTHORITY_BINDINGS"] != nil else {
+        if requireLiveProof {
+            struct MissingProtectedAuthoritySnapshot: Error {}
+            throw MissingProtectedAuthoritySnapshot()
+        }
+        return
+    }
+    let protectedAuthoritySnapshot = try loadProtectedAuthoritySnapshot(environment: environment)
 
     let ledger = try RunLedgerStore.inMemory()
     let graphHealthChecker = RecordingGraphHealthChecker(wrapped: FusekiGraphHealthChecker())
@@ -148,6 +232,11 @@ private actor RecordingGraphHealthChecker: GraphHealthChecking {
         authorityHits: acceptedDetail.authorityHits
     )
     try #require(acceptedEvidenceErrors.isEmpty, Comment(rawValue: acceptedEvidenceErrors.joined(separator: "; ")))
+    let acceptedBindingErrors = protectedAuthorityBindingErrors(
+        authorityHits: acceptedDetail.authorityHits,
+        snapshot: protectedAuthoritySnapshot
+    )
+    try #require(acceptedBindingErrors.isEmpty, Comment(rawValue: acceptedBindingErrors.joined(separator: "; ")))
     #expect(acceptedDetail.memoryHits.isEmpty)
     #expect(acceptedDetail.run.success)
     #expect(authoritySeparationPassed(acceptedDetail))
@@ -162,6 +251,11 @@ private actor RecordingGraphHealthChecker: GraphHealthChecking {
         authorityHits: directFusekiHits
     )
     try #require(directFusekiErrors.isEmpty, Comment(rawValue: directFusekiErrors.joined(separator: "; ")))
+    let directBindingErrors = protectedAuthorityBindingErrors(
+        authorityHits: directFusekiHits,
+        snapshot: protectedAuthoritySnapshot
+    )
+    try #require(directBindingErrors.isEmpty, Comment(rawValue: directBindingErrors.joined(separator: "; ")))
 
     let synthesisPrompt = "Synthesize accepted information and supporting memory about capturing value while keeping every trust layer separate."
     let started = Date()
@@ -180,6 +274,11 @@ private actor RecordingGraphHealthChecker: GraphHealthChecking {
         authorityHits: synthesisDetail.authorityHits
     )
     try #require(liveEvidenceErrors.isEmpty, Comment(rawValue: liveEvidenceErrors.joined(separator: "; ")))
+    let synthesisBindingErrors = protectedAuthorityBindingErrors(
+        authorityHits: synthesisDetail.authorityHits,
+        snapshot: protectedAuthoritySnapshot
+    )
+    try #require(synthesisBindingErrors.isEmpty, Comment(rawValue: synthesisBindingErrors.joined(separator: "; ")))
 
     let acceptedAnswer = acceptedDetail.messages.last(where: { $0.role == .assistant })?.text
         ?? acceptedDetail.run.finalAnswer
@@ -215,6 +314,7 @@ private actor RecordingGraphHealthChecker: GraphHealthChecking {
     - Commit: \(environment["HARNESS_SATISFACTION_COMMIT"] ?? "UNBOUND")
     - Fuseki graph health: \(graphHealth.status.rawValue)
     - Fuseki authority hits: \(directFusekiHits.filter { $0.source == "Fuseki /accepted named graph" }.count)
+    - Protected accepted binding snapshot SHA-256: \(protectedAuthoritySnapshot.sha256)
 
     ## Accepted-only answer as produced
 

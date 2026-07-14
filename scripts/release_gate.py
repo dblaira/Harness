@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import hashlib
 import json
 import os
@@ -99,6 +100,13 @@ FILE_ARTIFACTS = {
     "live_service_identity_after",
     "authority_snapshot_before",
     "authority_snapshot_after",
+    "isolated_authority_snapshot_before",
+    "isolated_authority_snapshot_after",
+    "accepted_authority_bindings",
+    "ollama_state_before",
+    "ollama_state_after",
+    "gate_dependencies_before",
+    "gate_dependencies_after",
     "accepted_graph_snapshot_after",
     "proposal_process_report",
     "unit_test_transcript",
@@ -106,10 +114,31 @@ FILE_ARTIFACTS = {
 DIRECTORY_ARTIFACTS = {
     "app_bundle",
 }
+MAX_MANIFEST_AGE = datetime.timedelta(hours=2)
+MAX_MANIFEST_FUTURE_SKEW = datetime.timedelta(minutes=5)
 
 
 class GitInspectionError(RuntimeError):
     """Raised when release evidence cannot safely inspect repository state."""
+
+
+def created_at_errors(value: object, *, now: datetime.datetime | None = None) -> list[str]:
+    if not isinstance(value, str) or not value.strip():
+        return ["created_at must be a timezone-aware ISO-8601 timestamp"]
+    try:
+        parsed = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return ["created_at must be a timezone-aware ISO-8601 timestamp"]
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return ["created_at must be a timezone-aware ISO-8601 timestamp"]
+    current = now or datetime.datetime.now(datetime.timezone.utc)
+    parsed = parsed.astimezone(datetime.timezone.utc)
+    current = current.astimezone(datetime.timezone.utc)
+    if parsed > current + MAX_MANIFEST_FUTURE_SKEW:
+        return ["signed handoff manifest was created too far in the future"]
+    if current - parsed > MAX_MANIFEST_AGE:
+        return ["signed handoff manifest is stale"]
+    return []
 
 
 def run_git(root: Path, *args: str) -> str:
@@ -282,11 +311,12 @@ def validate_ui_automation_proof(
     errors: list[str] = []
     expected_keys = {
         "schema_version", "status", "pid", "bundle_identifier", "executable",
-        "final_accessibility_identifier", "contract_actions", "action_results",
+        "window_id", "window_bounds", "final_accessibility_identifier",
+        "contract_actions", "action_results",
     }
     if not isinstance(proof, dict) or set(proof) != expected_keys:
         return ["signed Mac UI automation proof has an unexpected schema"]
-    if proof.get("schema_version") != 1 or proof.get("status") != "PASS":
+    if proof.get("schema_version") != 2 or proof.get("status") != "PASS":
         errors.append("signed Mac UI automation proof did not pass")
     if proof.get("pid") != expected_pid:
         errors.append("signed Mac UI automation proof is bound to the wrong candidate PID")
@@ -298,6 +328,16 @@ def validate_ui_automation_proof(
         errors.append("signed Mac UI automation proof has the wrong final identifier")
     if proof.get("contract_actions") != expected_actions:
         errors.append("signed Mac UI automation proof does not match the committed action contract")
+    window_id = proof.get("window_id")
+    window_bounds = proof.get("window_bounds")
+    if not isinstance(window_id, int) or window_id <= 0:
+        errors.append("signed Mac UI automation proof lacks an exact window identifier")
+    if (
+        not isinstance(window_bounds, dict)
+        or set(window_bounds) != {"x", "y", "width", "height"}
+        or not all(isinstance(value, (int, float)) for value in window_bounds.values())
+    ):
+        errors.append("signed Mac UI automation proof lacks exact window bounds")
     results = proof.get("action_results")
     if not isinstance(expected_actions, list) or not isinstance(results, list) or len(results) != len(expected_actions):
         errors.append("signed Mac UI automation proof has incomplete action results")
@@ -306,9 +346,10 @@ def validate_ui_automation_proof(
         if not isinstance(step, dict) or not isinstance(result, dict):
             errors.append(f"signed Mac UI automation result {index} is malformed")
             continue
-        allowed_keys = {"action", "identifier", "status"}
-        if step.get("action") != "assert_not_present":
-            allowed_keys.add("target_pid")
+        allowed_keys = {
+            "action", "identifier", "status", "target_pid",
+            "target_window_id", "target_window_bounds",
+        }
         if set(result) != allowed_keys:
             errors.append(f"signed Mac UI automation result {index} has an unexpected schema")
         if (
@@ -317,8 +358,10 @@ def validate_ui_automation_proof(
             or result.get("status") != "PASS"
         ):
             errors.append(f"signed Mac UI automation result {index} does not match the committed action")
-        if "target_pid" in allowed_keys and result.get("target_pid") != expected_pid:
+        if result.get("target_pid") != expected_pid:
             errors.append(f"signed Mac UI automation result {index} escaped the exact candidate PID")
+        if result.get("target_window_id") != window_id or result.get("target_window_bounds") != window_bounds:
+            errors.append(f"signed Mac UI automation result {index} escaped the exact candidate window")
     return errors
 
 
@@ -363,6 +406,7 @@ def validate_manifest(
     ):
         if not isinstance(manifest.get(key), str) or not manifest[key].strip():
             errors.append(f"{key} is required")
+    errors.extend(created_at_errors(manifest.get("created_at")))
     if manifest.get("codesign_verified") is not True:
         errors.append("signed app verification did not pass")
     if manifest.get("app_team_identifier") != "7FKUS5M5QS":
@@ -463,6 +507,13 @@ def validate_manifest(
         "live_service_identity_after",
         "authority_snapshot_before",
         "authority_snapshot_after",
+        "isolated_authority_snapshot_before",
+        "isolated_authority_snapshot_after",
+        "accepted_authority_bindings",
+        "ollama_state_before",
+        "ollama_state_after",
+        "gate_dependencies_before",
+        "gate_dependencies_after",
         "accepted_graph_snapshot_after",
         "proposal_process_report",
         "app_bundle",
@@ -495,6 +546,13 @@ def validate_manifest(
     live_service_identity_after = resolve_artifact(root, artifacts.get("live_service_identity_after"))
     authority_snapshot_before = resolve_artifact(root, artifacts.get("authority_snapshot_before"))
     authority_snapshot_after = resolve_artifact(root, artifacts.get("authority_snapshot_after"))
+    isolated_authority_before = resolve_artifact(root, artifacts.get("isolated_authority_snapshot_before"))
+    isolated_authority_after = resolve_artifact(root, artifacts.get("isolated_authority_snapshot_after"))
+    accepted_authority_bindings = resolve_artifact(root, artifacts.get("accepted_authority_bindings"))
+    ollama_state_before = resolve_artifact(root, artifacts.get("ollama_state_before"))
+    ollama_state_after = resolve_artifact(root, artifacts.get("ollama_state_after"))
+    gate_dependencies_before = resolve_artifact(root, artifacts.get("gate_dependencies_before"))
+    gate_dependencies_after = resolve_artifact(root, artifacts.get("gate_dependencies_after"))
     accepted_graph_snapshot_after = resolve_artifact(root, artifacts.get("accepted_graph_snapshot_after"))
     proposal_process_report = resolve_artifact(root, artifacts.get("proposal_process_report"))
     app_bundle = resolve_artifact(root, artifacts.get("app_bundle"))
@@ -584,6 +642,7 @@ def validate_manifest(
             "- Run success: true",
             "- Fuseki graph health: healthy",
             "- Fuseki authority hits:",
+            "- Protected accepted binding snapshot SHA-256:",
             "## Accepted-only answer as produced",
             "## Answer as produced",
         )
@@ -592,6 +651,15 @@ def validate_manifest(
         match = re.search(r"- Fuseki authority hits: (\d+)", text)
         if not match or int(match.group(1)) < 1:
             errors.append("full-pipeline live Swift artifact has no Fuseki authority hit")
+        if accepted_authority_bindings and accepted_authority_bindings.is_file():
+            try:
+                binding_digest = json.loads(
+                    accepted_authority_bindings.read_text(encoding="utf-8")
+                ).get("sha256")
+            except (OSError, json.JSONDecodeError):
+                binding_digest = None
+            if not binding_digest or f"- Protected accepted binding snapshot SHA-256: {binding_digest}" not in text:
+                errors.append("full-pipeline live Swift artifact is not bound to the protected authority snapshot")
     if live_service_identity and live_service_identity_after:
         if (
             not live_service_identity.is_file()
@@ -606,6 +674,45 @@ def validate_manifest(
             or authority_snapshot_before.read_bytes() != authority_snapshot_after.read_bytes()
         ):
             errors.append("live accepted or candidate authority changed during proposal execution")
+    if (
+        isolated_authority_before and isolated_authority_before.is_file()
+        and isolated_authority_after and isolated_authority_after.is_file()
+    ):
+        try:
+            isolated_before = json.loads(isolated_authority_before.read_text(encoding="utf-8"))
+            isolated_after = json.loads(isolated_authority_after.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            isolated_before, isolated_after = {}, {}
+        if (
+            not isinstance(isolated_before.get("accepted"), dict)
+            or isolated_before.get("accepted", {}).get("sha256")
+            != isolated_after.get("accepted", {}).get("sha256")
+        ):
+            errors.append("isolated accepted authority changed during proposal execution")
+    if accepted_authority_bindings and accepted_authority_bindings.is_file():
+        try:
+            bindings = json.loads(accepted_authority_bindings.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            bindings = {}
+        if (
+            bindings.get("schema_version") != 1
+            or not isinstance(bindings.get("triples"), list)
+            or not bindings.get("triples")
+            or not re.fullmatch(r"[0-9a-f]{64}", str(bindings.get("sha256") or ""))
+        ):
+            errors.append("protected accepted authority binding snapshot is invalid")
+    if (
+        ollama_state_before and ollama_state_before.is_file()
+        and ollama_state_after and ollama_state_after.is_file()
+    ):
+        if ollama_state_before.read_bytes() != ollama_state_after.read_bytes():
+            errors.append("Ollama model state changed during proposal execution")
+    if (
+        gate_dependencies_before and gate_dependencies_before.is_file()
+        and gate_dependencies_after and gate_dependencies_after.is_file()
+    ):
+        if gate_dependencies_before.read_bytes() != gate_dependencies_after.read_bytes():
+            errors.append("immutable verifier wrappers or build dependencies changed during proposal execution")
     if accepted_graph_snapshot and accepted_graph_snapshot_after:
         try:
             graph_before = json.loads(accepted_graph_snapshot.read_text(encoding="utf-8"))
@@ -697,6 +804,16 @@ def validate_manifest(
             or not isinstance(recorded_proof.get("window_bounds"), dict)
         ):
             errors.append("recording is not bound to the exact candidate window containing the requirement identifier")
+        if ui_automation_proof and ui_automation_proof.is_file():
+            try:
+                automation = json.loads(ui_automation_proof.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                automation = {}
+            if (
+                automation.get("window_id") != recorded_proof.get("window_id")
+                or automation.get("window_bounds") != recorded_proof.get("window_bounds")
+            ):
+                errors.append("recorded UI actions do not match the exact photographed candidate window")
     if isinstance(pid, int) and pid > 0 and app_bundle:
         process = run_command("/bin/ps", "-p", str(pid), "-o", "command=")
         expected_command = str(app_bundle / "Contents" / "MacOS" / "Harness")
@@ -716,6 +833,16 @@ def validate_manifest(
                 or proof.get("accessibility_identifier") != manifest.get("final_accessibility_identifier")
             ):
                 errors.append("final Accessibility proof is not bound to the exact candidate PID and requirement")
+            if final_ui_automation_proof and final_ui_automation_proof.is_file():
+                try:
+                    automation = json.loads(final_ui_automation_proof.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    automation = {}
+                if (
+                    automation.get("window_id") != proof.get("window_id")
+                    or automation.get("window_bounds") != proof.get("window_bounds")
+                ):
+                    errors.append("final UI actions do not match the exact photographed candidate window")
 
     try:
         repo = run_command("gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner", cwd=root)

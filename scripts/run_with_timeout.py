@@ -22,6 +22,10 @@ IDENTITY_ENV = "HARNESS_PROCESS_IDENTITY"
 _IDENTITY_CACHE: dict[str, tuple[float, list[dict[str, object]]]] = {}
 
 
+class CoalitionQueryError(RuntimeError):
+    """Raised when macOS cannot prove a launchd coalition's membership."""
+
+
 def launchd_child_mode() -> int | None:
     """Run one command while keeping its launchd service alive for cleanup."""
     if len(sys.argv) < 4 or sys.argv[1] != "--launchd-child":
@@ -315,6 +319,8 @@ def launchd_coalition_id(target: str) -> int | None:
 
 
 def coalition_pids(coalition_id: int) -> set[int]:
+    if os.environ.get("HARNESS_TEST_FORCE_COALITION_QUERY_FAILURE") == "1":
+        raise CoalitionQueryError("forced coalition membership query failure")
     libc = ctypes.CDLL(None, use_errno=True)
     function = libc.coalition_info_pid_list
     function.argtypes = [
@@ -326,9 +332,22 @@ def coalition_pids(coalition_id: int) -> set[int]:
     pids = (ctypes.c_int * 65536)()
     size = ctypes.c_size_t(ctypes.sizeof(pids))
     if function(coalition_id, pids, ctypes.byref(size)) != 0:
-        return set()
+        error_number = ctypes.get_errno()
+        raise CoalitionQueryError(
+            f"coalition_info_pid_list failed for coalition {coalition_id}: errno={error_number}"
+        )
     count = min(size.value // ctypes.sizeof(ctypes.c_int), len(pids))
     return {int(pid) for pid in pids[:count] if int(pid) > 0}
+
+
+def collect_coalition_pids(coalition_id: int, errors: list[str]) -> set[int]:
+    try:
+        return coalition_pids(coalition_id)
+    except CoalitionQueryError as error:
+        message = str(error)
+        if message not in errors:
+            errors.append(message)
+        return set()
 
 
 def remove_launchd_service(
@@ -337,28 +356,28 @@ def remove_launchd_service(
     coalition_id: int,
 ) -> tuple[bool, list[str], set[int]]:
     errors: list[str] = []
-    observed = coalition_pids(coalition_id)
+    observed = collect_coalition_pids(coalition_id, errors)
     signal_pids(observed, signal.SIGTERM)
     launchctl("kill", "SIGTERM", target)
     for _ in range(20):
-        members = coalition_pids(coalition_id)
+        members = collect_coalition_pids(coalition_id, errors)
         observed.update(members)
         if not members:
             break
         time.sleep(0.025)
-    members = coalition_pids(coalition_id)
+    members = collect_coalition_pids(coalition_id, errors)
     observed.update(members)
     if members:
         signal_pids(members, signal.SIGKILL)
         launchctl("kill", "SIGKILL", target)
     launchctl("remove", label)
     for _ in range(40):
-        members = coalition_pids(coalition_id)
+        if launchctl("print", target).returncode != 0:
+            return not errors, errors, observed
+        members = collect_coalition_pids(coalition_id, errors)
         observed.update(members)
-        if launchctl("print", target).returncode != 0 and not members:
-            return True, errors, observed
         time.sleep(0.025)
-    members = coalition_pids(coalition_id)
+    members = collect_coalition_pids(coalition_id, errors)
     observed.update(members)
     errors.append(
         f"launchd service coalition survived removal: {target}; members={sorted(members)}"
@@ -455,7 +474,7 @@ def run_launchd_job(args: argparse.Namespace, command: list[str]) -> int:
                 tracking_errors.append(f"invalid launchd process readiness proof: {error}")
         while root_pid and not result_path.exists() and not timed_out and not interrupted_signal:
             observed_pids = observe_job(root_pid, pgid, identity_token, observed_pids)
-            observed_pids.update(coalition_pids(coalition_id))
+            observed_pids.update(collect_coalition_pids(coalition_id, tracking_errors))
             stdout_offset = pump_log(stdout_path, sys.stdout, stdout_offset)
             stderr_offset = pump_log(stderr_path, sys.stderr, stderr_offset)
             if time.monotonic() >= deadline:
@@ -473,7 +492,7 @@ def run_launchd_job(args: argparse.Namespace, command: list[str]) -> int:
             observed_pids = observe_job(
                 root_pid, pgid, identity_token, observed_pids, force_identity=True
             )
-        observed_pids.update(coalition_pids(coalition_id))
+        observed_pids.update(collect_coalition_pids(coalition_id, tracking_errors))
         observed = process_details(observed_pids)
         removed, removal_errors, coalition_observed = remove_launchd_service(
             label, target, coalition_id
@@ -487,7 +506,9 @@ def run_launchd_job(args: argparse.Namespace, command: list[str]) -> int:
             observed_pids = observe_job(
                 root_pid, pgid, identity_token, observed_pids, force_identity=True
             )
-        retained_ids = coalition_pids(coalition_id)
+        retained_ids = (
+            set() if removed else collect_coalition_pids(coalition_id, tracking_errors)
+        )
         retained_ids.update(
             int(member["pid"])
             for member in process_details(observed_pids)

@@ -19,6 +19,7 @@ STATUS_WORKFLOWS = {
 CHECK_WORKFLOW = ".github/workflows/codeql.yml"
 CHECK_NAMES = {"CodeQL (swift)", "CodeQL (python)"}
 PROTECTED_CONTROL_PATHS = (
+    "AGENTS.md",
     "project.yml",
     "Sources/Harness/Harness.entitlements",
     "Packages/OntologyKit/Package.swift",
@@ -34,6 +35,8 @@ PROTECTED_CONTROL_PATHS = (
     "scripts/preflight_tcc.swift",
     "scripts/lint_changed_swift.sh",
     "scripts/live_satisfaction_oracle.py",
+    "scripts/prepare_protected_tests.py",
+    "scripts/readonly_ollama_proxy.py",
     "scripts/readonly_sparql_proxy.py",
     "scripts/release_gate.py",
     "scripts/configure_isolated_xcode_home.swift",
@@ -44,7 +47,10 @@ PROTECTED_CONTROL_PATHS = (
     "scripts/run_gate_script_tests.py",
     "scripts/run_accessibility_contract.swift",
     "scripts/run_with_timeout.py",
+    "scripts/snapshot_authority_bindings.py",
     "scripts/snapshot_authority_state.py",
+    "scripts/snapshot_gate_dependencies.py",
+    "scripts/snapshot_ollama_state.py",
     "scripts/sync-ontology.sh",
     "scripts/sanitize_review_bundle.py",
     "scripts/select_pull_request.py",
@@ -68,6 +74,7 @@ PROTECTED_CONTROL_PATHS = (
     "scripts/verify_release_tree.py",
     "scripts/verify_release_tree_run.py",
     "scripts/verify_running_app.swift",
+    "scripts/verify_sol_authority.py",
     "Tests/HarnessUITests/HarnessCriticalFlowTests.swift",
     "Tests/HarnessUITests/HarnessHostedSmokeTests.swift",
     "Tests/HarnessUITests/HarnessRequirementEvidence.swift",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import contextlib
+import datetime
 import io
 import json
 import os
@@ -11,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -20,6 +22,7 @@ sys.path.insert(0, str(SCRIPTS))
 import release_gate  # noqa: E402
 import live_satisfaction_oracle  # noqa: E402
 import evidence_binding  # noqa: E402
+import prepare_protected_tests  # noqa: E402
 import periphery_changed_gate  # noqa: E402
 import resolve_harness_repo  # noqa: E402
 import route_stop_gate  # noqa: E402
@@ -29,7 +32,11 @@ import sanitize_review_bundle  # noqa: E402
 import swift_test_inventory  # noqa: E402
 import select_pull_request  # noqa: E402
 import require_latest_status  # noqa: E402
+import readonly_ollama_proxy  # noqa: E402
 import readonly_sparql_proxy  # noqa: E402
+import snapshot_authority_bindings  # noqa: E402
+import snapshot_gate_dependencies  # noqa: E402
+import snapshot_ollama_state  # noqa: E402
 import validate_acceptance_contract  # noqa: E402
 import validate_media  # noqa: E402
 import validate_gate_test_report  # noqa: E402
@@ -46,6 +53,7 @@ import verify_control_bundle  # noqa: E402
 import verify_hosted_evidence  # noqa: E402
 import verify_merge_authority  # noqa: E402
 import verify_repository_gate_state  # noqa: E402
+import verify_sol_authority  # noqa: E402
 
 
 COMMIT_BOUND_FIXTURE = {
@@ -259,7 +267,152 @@ class SolReviewTests(unittest.TestCase):
         self.assertTrue(validate_sol_review.validate(review, sha_a, sha_b))
 
 
+class IntegrityBoundaryTests(unittest.TestCase):
+    @staticmethod
+    def passing_review(base: str, head: str) -> dict:
+        return {
+            "reviewed_base": base,
+            "reviewed_head": head,
+            "verdict": "PASS",
+            "acceptance_contract_complete": True,
+            "read_only_review": True,
+            "findings": [],
+        }
+
+    def test_sol_authority_rejects_spoofed_success_creator(self) -> None:
+        base, head = "a" * 40, "b" * 40
+        payload = {
+            "statuses": [
+                {
+                    "context": "GPT-5.6 Sol review",
+                    "state": "success",
+                    "creator": {"login": "github-actions[bot]"},
+                    "description": "PASS pr:19 binding:bound-marker",
+                    "target_url": "https://github.com/dblaira/Harness/pull/19#review",
+                }
+            ]
+        }
+        errors, _ = verify_sol_authority.verify(
+            payload,
+            self.passing_review(base, head),
+            base,
+            head,
+            "pr:19 binding:bound-marker",
+            "dblaira/Harness",
+        )
+        self.assertIn("newest GPT-5.6 Sol review status was not created by dblaira", errors)
+
+    def test_sol_authority_accepts_exact_local_review_and_operator_status(self) -> None:
+        base, head = "a" * 40, "b" * 40
+        payload = {
+            "statuses": [
+                {
+                    "context": "GPT-5.6 Sol review",
+                    "state": "success",
+                    "creator": {"login": "dblaira"},
+                    "description": "PASS pr:19 binding:bound-marker",
+                    "target_url": "https://github.com/dblaira/Harness/pull/19#review",
+                }
+            ]
+        }
+        errors, target = verify_sol_authority.verify(
+            payload,
+            self.passing_review(base, head),
+            base,
+            head,
+            "pr:19 binding:bound-marker",
+            "dblaira/Harness",
+        )
+        self.assertEqual(errors, [])
+        self.assertTrue(target.startswith("https://github.com/dblaira/Harness/"))
+
+    def test_protected_test_overlay_replaces_proposal_no_op_body(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            trusted, proposed = root / "trusted", root / "proposed"
+            source = trusted / "Tests/HarnessTests"
+            target = proposed / "Tests/HarnessTests"
+            source.mkdir(parents=True)
+            target.mkdir(parents=True)
+            (source / "CriticalTests.swift").write_text("#expect(realBehavior)\n")
+            (target / "CriticalTests.swift").write_text("#expect(true)\n")
+            (target / "NewFeatureTests.swift").write_text("#expect(newBehavior)\n")
+            errors = prepare_protected_tests.copy_protected_tests(
+                trusted,
+                proposed,
+                (("Tests/HarnessTests", "Tests/HarnessTests"),),
+            )
+            self.assertEqual(errors, [])
+            self.assertEqual((target / "CriticalTests.swift").read_text(), "#expect(realBehavior)\n")
+            self.assertEqual((target / "NewFeatureTests.swift").read_text(), "#expect(newBehavior)\n")
+            self.assertEqual(
+                prepare_protected_tests.verify_protected_tests(
+                    trusted,
+                    proposed,
+                    (("Tests/HarnessTests", "Tests/HarnessTests"),),
+                ),
+                [],
+            )
+
+    def test_ollama_proxy_allows_only_fixed_non_streaming_model(self) -> None:
+        self.assertEqual(readonly_ollama_proxy.route_kind("GET", "/api/tags"), "tags")
+        self.assertEqual(readonly_ollama_proxy.route_kind("POST", "/api/generate"), "generate")
+        for mutation in ("pull", "create", "copy", "delete", "push", "blobs"):
+            self.assertIsNone(readonly_ollama_proxy.route_kind("POST", f"/api/{mutation}"))
+        self.assertEqual(
+            readonly_ollama_proxy.generation_errors(
+                {"model": "hermes3:8b", "stream": False, "prompt": "hello"},
+                "hermes3:8b",
+            ),
+            [],
+        )
+        self.assertTrue(
+            readonly_ollama_proxy.generation_errors(
+                {"model": "attacker", "stream": False}, "hermes3:8b"
+            )
+        )
+        self.assertTrue(
+            readonly_ollama_proxy.generation_errors(
+                {"model": "hermes3:8b", "stream": True}, "hermes3:8b"
+            )
+        )
+
+    def test_authority_binding_key_distinguishes_exact_triple(self) -> None:
+        first = snapshot_authority_bindings.binding_key("s", "p", "o")
+        second = snapshot_authority_bindings.binding_key("s", "p", "different")
+        self.assertNotEqual(first, second)
+
+    def test_dependency_snapshot_changes_when_protected_tool_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tool = Path(directory) / "tool"
+            tool.write_text("first")
+            errors, first = snapshot_gate_dependencies.snapshot([tool])
+            self.assertEqual(errors, [])
+            tool.write_text("second")
+            errors, second = snapshot_gate_dependencies.snapshot([tool])
+            self.assertEqual(errors, [])
+            self.assertNotEqual(first["sha256"], second["sha256"])
+
+    def test_coalition_membership_query_failure_is_not_an_empty_coalition(self) -> None:
+        with mock.patch.dict(os.environ, {"HARNESS_TEST_FORCE_COALITION_QUERY_FAILURE": "1"}):
+            with self.assertRaises(run_with_timeout.CoalitionQueryError):
+                run_with_timeout.coalition_pids(123)
+
+
 class ReleaseGateTests(unittest.TestCase):
+    def test_manifest_created_at_rejects_stale_malformed_and_future_values(self) -> None:
+        now = datetime.datetime(2026, 7, 13, 12, 0, tzinfo=datetime.timezone.utc)
+        self.assertEqual(
+            release_gate.created_at_errors("2026-07-13T11:00:00+00:00", now=now), []
+        )
+        self.assertIn(
+            "signed handoff manifest is stale",
+            release_gate.created_at_errors("2026-07-13T09:59:59+00:00", now=now),
+        )
+        self.assertTrue(release_gate.created_at_errors("not-a-date", now=now))
+        self.assertTrue(release_gate.created_at_errors("2026-07-13T12:06:00+00:00", now=now))
+        self.assertTrue(release_gate.created_at_errors("2026-07-13T11:00:00", now=now))
+
     def test_completion_language(self) -> None:
         self.assertTrue(release_gate.completion_claim("Implemented and verified."))
         self.assertFalse(release_gate.completion_claim("Blocked; this is not verified."))
@@ -695,16 +848,26 @@ class DirectXCTestGateTests(unittest.TestCase):
 
     def test_signed_ui_proof_rejects_pid_escape(self) -> None:
         actions = [{"action": "wait_for", "identifier": "Delegation", "timeout_seconds": 10}]
+        bounds = {"x": 1.0, "y": 2.0, "width": 800.0, "height": 600.0}
         proof = {
-            "schema_version": 1,
+            "schema_version": 2,
             "status": "PASS",
             "pid": 41,
             "bundle_identifier": "com.adamblair.Harness",
             "executable": "/proof/Harness.app/Contents/MacOS/Harness",
+            "window_id": 71,
+            "window_bounds": bounds,
             "final_accessibility_identifier": "Delegation",
             "contract_actions": actions,
             "action_results": [
-                {"action": "wait_for", "identifier": "Delegation", "status": "PASS", "target_pid": 99}
+                {
+                    "action": "wait_for",
+                    "identifier": "Delegation",
+                    "status": "PASS",
+                    "target_pid": 99,
+                    "target_window_id": 71,
+                    "target_window_bounds": bounds,
+                }
             ],
         }
         with tempfile.TemporaryDirectory() as directory:
@@ -1142,6 +1305,7 @@ class ProtectedVerifierTests(unittest.TestCase):
 class HostedAuthorityTests(unittest.TestCase):
     def test_every_gate_authority_input_requires_the_bootstrap_path(self) -> None:
         protected = (
+            "AGENTS.md",
             "scripts/tests/test_gates.py",
             ".swiftlint.yml",
             ".periphery.yml",
@@ -1433,12 +1597,11 @@ class GateStructureTests(unittest.TestCase):
 
     def test_every_proposal_process_is_denied_control_writes(self) -> None:
         handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
-        self.assertIn('(deny file-write* (subpath \\"$CONTROL_DIR\\")', handoff)
-        self.assertIn('(subpath \\"$HOME/.local/bin\\")', handoff)
-        self.assertIn('(literal \\"$HOME/.codex/hooks.json\\")', handoff)
-        self.assertIn('(subpath \\"$OUTPUT_DIR\\")', handoff)
-        self.assertIn('(subpath \\"$CANDIDATE_OUTPUT_DIR\\")', handoff)
-        self.assertIn('(subpath \\"$UI_STAGING_ROOT\\")', handoff)
+        self.assertGreaterEqual(handoff.count("(deny file-write* (require-not (require-any"), 2)
+        self.assertIn('/usr/bin/touch "$CONTROL_DIR/.proposal-write-probe"', handoff)
+        self.assertIn('/usr/bin/touch "$HOME/.local/bin/harness-handoff"', handoff)
+        self.assertIn('/usr/bin/touch "$HOME/.codex/hooks.json"', handoff)
+        self.assertIn('/usr/bin/touch "$ROOT_DIR/.proposal-write-probe"', handoff)
         self.assertIn("CANDIDATE_OUTPUT_DIR=", handoff)
         self.assertIn("BUILD_LABEL=confined-unit-build build_exec xcodebuild build-for-testing", handoff)
         self.assertIn('proposal_exec "$XCTEST_BINARY" "$UNIT_TEST_BUNDLE"', handoff)
@@ -1466,7 +1629,7 @@ class GateStructureTests(unittest.TestCase):
         self.assertIn('/usr/bin/env -i HOME="$PROPOSAL_HOME"', handoff)
         self.assertIn('(deny network-outbound)', handoff)
         self.assertIn('(subpath \\"$LIVE_ONTOLOGY_ROOT\\")', handoff)
-        self.assertIn('(deny file-read* (subpath \\"$HOME\\")', handoff)
+        self.assertIn('(deny file-read* (subpath \\"$OPERATOR_HOME\\")', handoff)
         self.assertIn('(deny appleevent-send)', handoff)
         self.assertIn('(global-name \\"com.apple.pboard\\")', handoff)
         self.assertIn("readonly_sparql_proxy.py", handoff)
@@ -1526,7 +1689,8 @@ class GateStructureTests(unittest.TestCase):
         self.assertIn("keyDown.postToPid(pid)", driver)
         self.assertIn('Set(["wait_for", "press", "set_value", "assert_not_present"])', driver)
         self.assertNotIn("NSWorkspace.shared", driver)
-        self.assertEqual(handoff.count('run_accessibility_contract.swift"'), 4)
+        self.assertEqual(handoff.count('run_accessibility_contract.swift"'), 5)
+        self.assertIn("--self-test-window-scope", handoff)
         self.assertIn('[[ "$(jq -r .window_id "$INITIAL_RUNNING_APP_PROOF")" == "$RECORDED_WINDOW_ID" ]]', handoff)
         self.assertNotIn("HarnessUITests-Runner", handoff)
 
@@ -1538,6 +1702,42 @@ class GateStructureTests(unittest.TestCase):
         oracle = (Path.cwd() / "scripts/live_satisfaction_oracle.py").read_text(encoding="utf-8")
         for proposal_type in ("FusekiGraphHealthChecker", "HarnessRunService", "AgentRunnerBackendAdapter"):
             self.assertNotIn(proposal_type, oracle)
+
+    def test_sol_authority_is_authenticated_before_first_proposal_execution(self) -> None:
+        handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
+        authority = handoff.index("verify_sol_authority.py")
+        first_proposal_execution = handoff.index("PROPOSAL_LABEL=expected-denial proposal_exec")
+        self.assertLess(authority, first_proposal_execution)
+        self.assertIn("$ROOT_DIR/.local-artifacts/sol-review/$SHA/sol-review.json", handoff)
+
+    def test_protected_test_bodies_replace_proposal_implementations(self) -> None:
+        handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
+        workflow = (Path.cwd() / ".github/workflows/verification.yml").read_text(encoding="utf-8")
+        for source in (handoff, workflow):
+            self.assertIn("prepare_protected_tests.py", source)
+        self.assertIn('--project-root "$BUILD_SOURCE_ROOT"', handoff)
+        self.assertIn('--package-path "$BUILD_PACKAGE_ROOT"', handoff)
+
+    def test_governance_instructions_are_part_of_protected_control_boundary(self) -> None:
+        self.assertIn("AGENTS.md", verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
+
+    def test_proposal_writes_are_default_denied_and_model_access_is_mediated(self) -> None:
+        handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
+        self.assertGreaterEqual(handoff.count("(deny file-write* (require-not (require-any"), 2)
+        self.assertIn("readonly_ollama_proxy.py", handoff)
+        self.assertIn('HARNESS_OLLAMA_BASE_URL="http://localhost:$OLLAMA_PROXY_PORT"', handoff)
+        self.assertNotIn('(allow network-outbound (remote ip \\"localhost:11434\\"))', handoff)
+        self.assertIn('(deny network-outbound (remote ip \\"localhost:11434\\"))', handoff)
+        self.assertIn("snapshot_gate_dependencies.py", handoff)
+
+    def test_ui_actions_require_exact_window_binding_proof(self) -> None:
+        handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
+        self.assertEqual(handoff.count('--window-proof "$PREPARE_RUNNING_APP_PROOF"'), 1)
+        self.assertEqual(handoff.count('--window-proof "$FINAL_PREPARE_RUNNING_APP_PROOF"'), 1)
+        driver = (Path.cwd() / "scripts/run_accessibility_contract.swift").read_text(encoding="utf-8")
+        self.assertIn("window proof does not map to exactly one Accessibility window", driver)
+        self.assertIn("accessibility identifier is ambiguous inside the bound window", driver)
+        self.assertIn("--self-test-window-scope", driver)
 
     def test_protected_test_inventory_is_rebuilt_after_proposal_execution(self) -> None:
         handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
@@ -1551,7 +1751,7 @@ class GateStructureTests(unittest.TestCase):
         handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
         identity = handoff.index("verify_app_identity.py")
         unit_test = handoff.index('proposal_exec "$XCTEST_BINARY"')
-        ui_test = handoff.index('run_accessibility_contract.swift"')
+        ui_test = handoff.index("TRUSTED_LABEL=trusted-recorded-ui-prepare")
         normal_launch = handoff.index('proposal_start "$APP_BUNDLE/Contents/MacOS/Harness"')
         self.assertLess(identity, unit_test)
         self.assertLess(identity, ui_test)
@@ -1786,6 +1986,33 @@ class ReleaseTreeTests(unittest.TestCase):
                 0,
             )
 
+    @unittest.skipUnless(sys.platform == "darwin", "launchd coalitions are macOS-only")
+    def test_coalition_query_failure_fails_closed_after_removing_service(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            report_path = Path(directory) / "coalition-query-failure.json"
+            environment = dict(os.environ)
+            environment["HARNESS_TEST_FORCE_COALITION_QUERY_FAILURE"] = "1"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "run_with_timeout.py"),
+                    "--seconds", "10",
+                    "--process-report", str(report_path),
+                    "--launchd-coalition",
+                    "--",
+                    "/bin/sh", "-c", "sleep 30 & exit 0",
+                ],
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 125, result.stderr)
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "FAIL")
+            self.assertFalse(report["job_boundary"]["removed"])
+            self.assertTrue(any("coalition" in item for item in report["tracking_errors"]))
+
     @unittest.skipUnless(sys.platform == "darwin", "sandbox-exec is macOS-only")
     def test_proposal_sandbox_rejects_fork_before_a_child_can_detach(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1817,6 +2044,33 @@ class ReleaseTreeTests(unittest.TestCase):
             report = json.loads(report_path.read_text(encoding="utf-8"))
             self.assertEqual(report["retained_pids"], [])
             self.assertEqual(report["status"], "FAIL")
+
+    @unittest.skipUnless(sys.platform == "darwin", "sandbox-exec is macOS-only")
+    def test_write_allow_list_denies_every_path_outside_scratch_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            scratch = root / "scratch"
+            scratch.mkdir()
+            allowed = scratch / "allowed"
+            denied = root / "denied"
+            profile = (
+                "(version 1)(allow default)"
+                f'(deny file-write* (require-not (require-any (subpath "{scratch}"))))'
+            )
+            allowed_result = subprocess.run(
+                ["/usr/bin/sandbox-exec", "-p", profile, "/usr/bin/touch", str(allowed)],
+                capture_output=True,
+                check=False,
+            )
+            denied_result = subprocess.run(
+                ["/usr/bin/sandbox-exec", "-p", profile, "/usr/bin/touch", str(denied)],
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(allowed_result.returncode, 0)
+            self.assertTrue(allowed.is_file())
+            self.assertNotEqual(denied_result.returncode, 0)
+            self.assertFalse(denied.exists())
 
     @unittest.skipUnless(sys.platform == "darwin", "launchd coalitions are macOS-only")
     def test_launchd_coalition_preserves_the_outer_sandbox(self) -> None:
