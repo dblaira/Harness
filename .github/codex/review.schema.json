@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "reviewed_base",
+    "reviewed_head",
+    "verdict",
+    "acceptance_contract_complete",
+    "read_only_review",
+    "summary",
+    "findings"
+  ],
+  "properties": {
+    "reviewed_base": { "type": "string", "minLength": 40, "maxLength": 40 },
+    "reviewed_head": { "type": "string", "minLength": 40, "maxLength": 40 },
+    "verdict": { "enum": ["PASS", "FAIL"] },
+    "acceptance_contract_complete": { "type": "boolean" },
+    "read_only_review": { "type": "boolean" },
+    "summary": { "type": "string", "minLength": 1 },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "title", "body", "file", "line", "required_proof"],
+        "properties": {
+          "severity": { "enum": ["P0", "P1", "P2", "P3"] },
+          "title": { "type": "string", "minLength": 1 },
+          "body": { "type": "string", "minLength": 1 },
+          "file": { "type": "string" },
+          "line": { "type": ["integer", "null"], "minimum": 1 },
+          "required_proof": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

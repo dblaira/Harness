@@ -1,0 +1,37 @@
+name: HarnessBuildSandboxProbe
+options:
+  deploymentTarget:
+    macOS: "14.0"
+targets:
+  HarnessBuildSandboxProbe:
+    type: tool
+    platform: macOS
+    sources:
+      - BuildSandboxProbe.swift
+    preBuildScripts:
+      - name: Prove build phase confinement
+        basedOnDependencyAnalysis: false
+        script: |
+          set -u
+          for target in \
+            "$HARNESS_BUILD_REPOSITORY_PROBE" \
+            "$HARNESS_BUILD_CONTROL_PROBE" \
+            "$HARNESS_BUILD_BIN_PROBE" \
+            "$HARNESS_BUILD_HOOK_PROBE" \
+            "$HARNESS_BUILD_OPERATOR_PROBE" \
+            "$HARNESS_BUILD_ONTOLOGY_PROBE"
+          do
+            if /usr/bin/touch "$target" 2>/dev/null; then
+              echo "Candidate build phase escaped to $target" >&2
+              exit 91
+            fi
+          done
+          if /usr/bin/curl -fsS https://api.github.com >/dev/null 2>&1; then
+            echo "Candidate build phase reached the public network" >&2
+            exit 92
+          fi
+          if /bin/launchctl submit -l "com.adamblair.harness.build-probe.$$" -- /usr/bin/true >/dev/null 2>&1; then
+            echo "Candidate build phase submitted a detached launchd job" >&2
+            exit 93
+          fi
+          echo "Candidate build phase remained confined."

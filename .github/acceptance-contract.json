@@ -1,0 +1,38 @@
+{
+  "requirement_verbatim": "Install two mandatory gates before another feature handoff. The merge gate should require an agent-owned PR, protected main, clean macOS tests, SwiftLint, Periphery, CodeQL, and an independent read-only GPT-5.6 Sol review. The handoff gate should launch the signed app on Adam's Mac, execute the exact visible requirement, capture screenshots/video and test results bound to the commit, and prevent the agent from ending its task without that evidence. Keep the public repository off Adam's Mac as a GitHub self-hosted runner.",
+  "visible_surface": "The Harness GitHub pull request checks and protection state, followed by the signed Harness macOS app on Adam's Mac for every product change.",
+  "expected_visible_result": "No product pull request can merge without the hosted checks, independent Sol verdict, and signed Mac handoff status; no agent can end a product-change task without a valid commit-bound evidence manifest; the final main commit visibly attests that its tree exactly matches the verified pull-request head.",
+  "ui_test_identifier": "INFRASTRUCTURE_ONLY",
+  "ui_automation": [
+    {
+      "action": "wait_for",
+      "identifier": "Delegation",
+      "timeout_seconds": 20
+    }
+  ],
+  "final_accessibility_identifier": "Delegation",
+  "critical_flow": [
+    "Open an agent-owned pull request whose exact commit contains Adam's literal acceptance contract.",
+    "Run hosted macOS tests, SwiftLint, changed-line Periphery, and Swift/Python CodeQL; require every test in the protected-base Swift inventory and revalidate raw evidence in fresh protected-base jobs.",
+    "Require every protected-base OntologyKit test to emit an explicit pass, reject every unexpected omission or skip, and reserve only the named live satisfaction test for signed handoff.",
+    "Run GPT-5.6 Sol through Adam's ChatGPT/Codex subscription against an inert read-only base/head bundle.",
+    "Use Adam's trusted local identity to verify exact hosted workflow paths, events, runs, creators, and CodeQL jobs before aggregating hosted evidence.",
+    "Reject ordinary product pull requests that modify protected gate tests, linter configurations, TCC preflight, generic UI evidence helpers, workflows, validators, or installed control inputs; those changes require the separately reviewed infrastructure bootstrap path.",
+    "Execute live Fuseki and Ollama observations through an immutable installed network oracle that imports no proposal production code and writes commit-bound evidence before signed handoff.",
+    "Run every proposal build, test, and app process inside a macOS sandbox that denies writes to installed controls, wrappers, and the Stop hook.",
+    "Build and verify the signed app, bind the contracted accessibility identifier to one unambiguous candidate window, execute only the committed safe accessibility actions against that exact candidate PID while recording only that window, and require the protected direct accepted-graph and Ollama proof.",
+    "Keep proposal-owned XCUITests in clean hosted CI; on Adam's signed-in Mac, use only an immutable installed accessibility driver that cannot select another application and rerun the exact committed actions after normal launch.",
+    "Require protected main and the installed harness-merge command to rerun hosted evidence and directly revalidate the complete current handoff manifest and artifact hashes before authority evaluation; reject missing, spoofed, cached-only, stale, or failed evidence; permit merge commits only and attest the final tree.",
+    "Require the Stop hook to reject task completion when any repository change lacks current handoff evidence, including BLOCKED-prefixed success claims, dependency timeouts, and operational validation failures."
+  ],
+  "required_proof": [
+    "Adversarial gate tests with a protected-base inventory proving every expected Swift test executed, fresh-job macOS evidence validation, deterministic Swift tests, SwiftLint, changed-line Periphery, and CodeQL.",
+    "Strict acceptance-contract schema rejecting unknown fields and nonce-only freshness changes; protected-path downgrade probes for every workflow, validator, test, configuration, and installed authority input.",
+    "NUL-delimited changed-Swift path discovery proving Unicode and escaped filenames cannot bypass Periphery, plus Stop routing that fails closed for every marker-bearing Harness clone or worktree even when Git metadata is unreadable.",
+    "A structured independent GPT-5.6 Sol review bound to the exact commit.",
+    "Signed app identity, committed accessibility-action proofs, initial and final screenshots, decoded nonblank exact-window video, TCC preflight, process-specific PID plus Accessibility-to-CGWindow bounds binding with ambiguity rejection, and live Fuseki/Ollama evidence.",
+    "Read-back of protected-main, Actions, merge-mode, and control-bundle state; trusted-workflow identity proofs; merge rejection probes; exact release-tree attestation; and zero self-hosted runners."
+  ],
+  "risk_and_authority_boundaries": "This committed JSON is the sole authoritative acceptance contract; pull-request prose is a display copy and edits cannot change release authority. Status names alone are never authority: Adam's trusted local aggregator verifies protected workflow identity and exact evidence before his local identity issues merge authority, and only the installed harness-merge command may merge. The Sol reviewer is read-only and is not the release oracle. Adam blocks model API keys and uses his ChatGPT/Codex subscription. Adam's authenticated macOS session and dblaira GitHub administrator identity are trusted operator boundaries; the gates prevent accidental, careless, stale, unreviewed, and proposal-controlled handoffs but do not claim resistance to a malicious actor already controlling that identity. Signing, screen capture, app state, provider state, and accepted-graph authority remain distinct. Adam's Mac is never a self-hosted runner for this public repository.",
+  "threat_model": "Adam's authenticated macOS session and dblaira GitHub administrator identity are trusted. The gates prevent accidental, careless, stale, and unreviewed handoffs; they do not claim cryptographic resistance to a malicious actor already controlling Adam's administrator credential, and they do not require Touch ID."
+}

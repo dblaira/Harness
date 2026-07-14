@@ -157,7 +157,7 @@ private struct CooperativeStalledBackend: ModelBackendAdapter {
 @Test func responseDeadlineReturnsAcceptedEvidenceWhenProviderStalls() async throws {
     let monitor = ToolLoopMonitor(terminatesSubprocesses: false)
     let clock = ContinuousClock()
-    let deadline = clock.now.advanced(by: .milliseconds(40))
+    let deadline = clock.now.advanced(by: .seconds(30))
     let started = clock.now
 
     let run = Task {
@@ -170,7 +170,13 @@ private struct CooperativeStalledBackend: ModelBackendAdapter {
         )
     }
 
-    try await Task.sleep(for: .milliseconds(60))
+    for _ in 0..<1_000 {
+        if monitor.progressSnapshot().phase == .callingModel {
+            break
+        }
+        try await Task.sleep(for: .milliseconds(1))
+    }
+    #expect(monitor.progressSnapshot().phase == .callingModel)
     monitor.exceedDeadline()
     let detail = try await run.value
     let elapsed = started.duration(to: clock.now)

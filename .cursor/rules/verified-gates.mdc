@@ -1,0 +1,12 @@
+---
+description: Mandatory verified merge and handoff path
+alwaysApply: true
+---
+
+# Verified gate invariants
+
+- Never merge Harness with `gh pr merge`, the GitHub merge button, or a direct push. Use the installed `harness-merge PR_NUMBER` command.
+- A status name is not authority. Trusted local aggregation must verify workflow path, event, run, exact SHA, creator, and acceptance binding before it can issue merge authority.
+- Every Harness pull request changes the committed acceptance contract. Reusing the protected base contract is stale proof.
+- Required parsers fail closed on unknown schemas, malformed locations, missing test inventory, unreadable Git state, symlinks, and protection drift.
+- Proposed code never shares the final validation process or writable control directory with the protected verifier.

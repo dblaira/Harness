@@ -32,3 +32,10 @@ import Testing
     #expect(options["seed"] as? Int == 7_102_026)
     #expect(options["num_predict"] as? Int == 800)
 }
+
+@Test func hermesUsesProtectedOllamaBaseURLWhenProvided() {
+    let url = AgentRunner.hermesBaseURL(
+        environment: ["HARNESS_OLLAMA_BASE_URL": "http://127.0.0.1:54321/"]
+    )
+    #expect(url?.absoluteString == "http://127.0.0.1:54321")
+}

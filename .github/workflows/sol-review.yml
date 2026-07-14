@@ -1,0 +1,32 @@
+name: Require independent Sol review
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: sol-review-required-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  require-fresh-local-review:
+    name: Await local GPT-5.6 Sol review
+    runs-on: ubuntu-latest
+    steps:
+      - name: Invalidate older Sol evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          for CONTEXT in 'GPT-5.6 Sol review' 'Signed Mac handoff'; do
+            gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" \
+              -f state=pending \
+              -f context="$CONTEXT" \
+              -f description="PR changed; fresh trusted local evidence is required" \
+              -f target_url="$PR_URL"
+          done

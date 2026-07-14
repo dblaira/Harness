@@ -1,32 +1,36 @@
 ---
-description: Boring News iOS — main only, no git homework, no extra workflow
+description: Agent-owned pull requests, protected main, and proof before handoff
 alwaysApply: true
 ---
 
-# iOS: main only, no bullshit
+# Agent-owned delivery — no git homework for Adam
 
-Adam works on **`main`**. His Xcode project is the app. Do not invent workflow around him.
+Adam reviews a finished, visibly proven result. Agents own the branch, pull request, checks, fixes, merge, signed local launch, and evidence.
 
 ## Git
 
-- **Commit and push directly to `main`.** No feature branches, no draft PRs, no "use this branch," no merge requests — unless Adam explicitly asks for a branch or PR.
+- **Never push directly to `main`.** Work on an agent-owned `codex/*` branch and open a pull request.
+- **Do not merge until every required GitHub check is green**, including independent GPT-5.6 Sol review and the signed Mac handoff status.
+- Run `harness-sol-review` from the immutable controls installed from protected `main`. It uses Adam's existing ChatGPT/Codex authorization locally; never add or request an `OPENAI_API_KEY` as a substitute.
 - **Never tell Adam to pull, push, fetch, sync, or open GitHub Desktop** to test or pick up your work.
 - **Never tell Adam to run `xcodegen`, Terminal commands, or "Open in Xcode" links** for routine app changes.
 
 ## Verification
 
-- **Do not suggest TestFlight, Xcode Cloud, deploy scripts, or CI** as the way to verify or show app changes unless Adam explicitly asks to ship.
-- **Cloud agents run Linux — there is no iOS Simulator and no Xcode here.** Do not claim you ran the app in Simulator unless you actually did on a Mac with proof (screenshot/recording).
-- Verify what you can without Adam: read Swift, match `project.yml`, check types/logic. If UI proof is impossible from this environment, say that once — do not follow with a homework list.
+- A build or unit-test result is not proof that a visible requirement works.
+- Before a feature handoff, launch the signed app on Adam's Mac and execute Adam's exact visible requirement.
+- Bind the tested app's signature, the exact named UI test, initial and final-relaunch window screenshots, the test-time video, all Xcode result bundles, the fail-closed live satisfaction artifact, and the independent review result to the exact commit with the immutable `harness-handoff` command.
+- Never claim done, fixed, ready, verified, or working while the required handoff certificate is absent or invalid.
+- Do not use Adam's Mac as a GitHub self-hosted runner for this public repository.
 
-## After iOS changes
+## After app changes
 
-Tell Adam what changed in plain language. Stop. No sync checklist, no optional next steps, no "if you want I can set up…"
+Tell Adam what changed in plain language and provide the visible proof. No sync checklist or homework.
 
 ## Wrong vs right
 
-**Wrong:** "Pull origin on main, then double-click the xcodeproj, or merge PR #8, or wait for TestFlight."
+**Wrong:** "Pull origin on main, merge PR #8, then test it and tell me what breaks."
 
 **Wrong:** "Rebuild in Xcode to verify" / "Open GitHub Desktop and switch branches."
 
-**Right:** Push the fix to `main`. "Thumbs up/down toggles off when tapped again — `FeedbackStore.swift`."
+**Right:** "The exact flow passed in the signed app at commit `…`; here are the screenshot, recording, test bundle, and green PR checks."

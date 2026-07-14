@@ -1,0 +1,2210 @@
+from __future__ import annotations
+
+import copy
+import contextlib
+import datetime
+import io
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest import mock
+from pathlib import Path
+
+
+SCRIPTS = Path(os.environ.get("HARNESS_SCRIPTS_UNDER_TEST", Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(SCRIPTS))
+
+import release_gate  # noqa: E402
+import live_satisfaction_oracle  # noqa: E402
+import evidence_binding  # noqa: E402
+import prepare_protected_tests  # noqa: E402
+import periphery_changed_gate  # noqa: E402
+import resolve_harness_repo  # noqa: E402
+import route_stop_gate  # noqa: E402
+import run_with_timeout  # noqa: E402
+import run_gate_script_tests  # noqa: E402
+import sanitize_review_bundle  # noqa: E402
+import swift_test_inventory  # noqa: E402
+import select_pull_request  # noqa: E402
+import require_latest_status  # noqa: E402
+import readonly_ollama_proxy  # noqa: E402
+import readonly_sparql_proxy  # noqa: E402
+import snapshot_authority_bindings  # noqa: E402
+import snapshot_gate_dependencies  # noqa: E402
+import snapshot_ollama_state  # noqa: E402
+import validate_acceptance_contract  # noqa: E402
+import validate_media  # noqa: E402
+import validate_gate_test_report  # noqa: E402
+import validate_sol_review  # noqa: E402
+import validate_xctest_transcript  # noqa: E402
+import validate_xcresult  # noqa: E402
+import validate_swiftpm_tests  # noqa: E402
+import verify_release_tree  # noqa: E402
+import verify_release_tree_run  # noqa: E402
+import verify_codex_auth  # noqa: E402
+import verify_codex_runtime  # noqa: E402
+import verify_app_identity  # noqa: E402
+import verify_control_bundle  # noqa: E402
+import verify_hosted_evidence  # noqa: E402
+import verify_merge_authority  # noqa: E402
+import verify_repository_gate_state  # noqa: E402
+import verify_sol_authority  # noqa: E402
+
+
+COMMIT_BOUND_FIXTURE = {
+    "ui_automation": [
+        {"action": "wait_for", "identifier": "Delegation", "timeout_seconds": 10}
+    ],
+    "critical_flow": ["Run the exact flow."],
+    "required_proof": ["Capture tests and visible evidence."],
+    "risk_and_authority_boundaries": "Signing and accepted authority remain distinct.",
+    "threat_model": "The authenticated operator is trusted.",
+}
+
+
+class AcceptanceContractTests(unittest.TestCase):
+    def test_documented_product_contract_example_is_schema_valid(self) -> None:
+        example = json.loads((Path.cwd() / "Docs/verification/acceptance-contract.example.json").read_text())
+        self.assertEqual(validate_acceptance_contract.validate_handoff_contract(example), [])
+    def test_placeholders_fail_closed(self) -> None:
+        body = "\n".join(f"## {name}\n\nREPLACE_WITH_VALUE" for name in validate_acceptance_contract.REQUIRED_SECTIONS)
+        self.assertTrue(validate_acceptance_contract.validate(body))
+
+    def test_complete_contract_passes(self) -> None:
+        body = """## Requirement verbatim
+The visible answer must appear in the same window.
+## Visible surface
+Harness answer window on Adam's Mac.
+## Expected visible result
+The answer is visible and no progress state remains.
+## Critical flow
+1. Open Harness.
+2. Submit the request and observe the answer.
+## Exact UI test
+HarnessUITests/AnswerTests/testVisibleAnswer
+## Signed Mac UI automation
+1. Wait for VisibleAnswer inside the exact candidate app.
+## Final accessibility identifier
+VisibleAnswer
+## Required proof
+- Unit and UI tests, screenshot, and video.
+## Risk and authority boundaries
+Signed app, provider authentication, and accepted graph remain distinct.
+"""
+        self.assertEqual(validate_acceptance_contract.validate(body), [])
+
+    def test_handoff_examples_and_non_ui_test_fail(self) -> None:
+        contract = dict(validate_acceptance_contract.HANDOFF_EXAMPLES)
+        contract["ui_test_identifier"] = "HarnessTests/FeatureTests/testFeature"
+        errors = validate_acceptance_contract.validate_handoff_contract(contract)
+        self.assertIn("placeholder remains in requirement_verbatim", errors)
+        self.assertIn(
+            "ui_test_identifier must be INFRASTRUCTURE_ONLY or name one exact HarnessUITests test method",
+            errors,
+        )
+
+    def test_infrastructure_only_contract_is_consistent(self) -> None:
+        contract = {
+            **COMMIT_BOUND_FIXTURE,
+            "requirement_verbatim": "Install protected verification infrastructure.",
+            "visible_surface": "GitHub pull request checks.",
+            "expected_visible_result": "Every required gate is visible.",
+            "ui_test_identifier": "INFRASTRUCTURE_ONLY",
+            "final_accessibility_identifier": "Delegation",
+        }
+        self.assertEqual(
+            validate_acceptance_contract.validate_handoff_contract(
+                contract,
+                repo=validate_acceptance_contract.BOOTSTRAP_REPO,
+                pr_number=validate_acceptance_contract.BOOTSTRAP_PR,
+                base_sha=validate_acceptance_contract.BOOTSTRAP_BASE,
+            ),
+            [],
+        )
+
+    def test_infrastructure_only_is_rejected_outside_bootstrap(self) -> None:
+        contract = {
+            **COMMIT_BOUND_FIXTURE,
+            "requirement_verbatim": "Change a product feature.",
+            "visible_surface": "Harness window",
+            "expected_visible_result": "Feature appears",
+            "ui_test_identifier": "INFRASTRUCTURE_ONLY",
+            "final_accessibility_identifier": "Feature",
+        }
+        errors = validate_acceptance_contract.validate_handoff_contract(
+            contract,
+            repo="dblaira/Harness",
+            pr_number=20,
+            base_sha="a" * 40,
+        )
+        self.assertIn(
+            "INFRASTRUCTURE_ONLY is restricted to the one reviewed bootstrap pull request",
+            errors,
+        )
+
+    def test_unchanged_prior_contract_is_rejected(self) -> None:
+        contract = {
+            **COMMIT_BOUND_FIXTURE,
+            "requirement_verbatim": "Exact requirement",
+            "visible_surface": "Harness window",
+            "expected_visible_result": "Exact visible result",
+            "ui_test_identifier": "HarnessUITests/AnswerTests/testVisibleAnswer",
+            "final_accessibility_identifier": "VisibleAnswer",
+        }
+        errors = validate_acceptance_contract.freshness_errors(
+            contract,
+            dict(contract),
+            {".github/acceptance-contract.json", "Sources/Harness/Feature.swift"},
+            is_bootstrap=False,
+        )
+        self.assertIn("acceptance contract is stale and unchanged from the protected base", errors)
+
+    def test_nonce_only_contract_change_is_unknown_and_stale(self) -> None:
+        base = {
+            **COMMIT_BOUND_FIXTURE,
+            "requirement_verbatim": "Exact requirement",
+            "visible_surface": "Harness window",
+            "expected_visible_result": "Exact visible result",
+            "ui_test_identifier": "HarnessUITests/AnswerTests/testVisibleAnswer",
+            "final_accessibility_identifier": "VisibleAnswer",
+        }
+        proposed = {**base, "nonce": "changed"}
+        self.assertIn(
+            "unknown acceptance contract field(s): nonce",
+            validate_acceptance_contract.validate_handoff_contract(proposed),
+        )
+        self.assertIn(
+            "acceptance contract is stale and unchanged from the protected base",
+            validate_acceptance_contract.freshness_errors(
+                proposed,
+                base,
+                {".github/acceptance-contract.json"},
+                is_bootstrap=False,
+            ),
+        )
+
+    def test_literal_requirement_change_is_fresh(self) -> None:
+        base = {
+            **COMMIT_BOUND_FIXTURE,
+            "requirement_verbatim": "Old literal requirement",
+            "visible_surface": "Harness window",
+            "expected_visible_result": "Old visible result",
+            "ui_test_identifier": "HarnessUITests/AnswerTests/testVisibleAnswer",
+            "final_accessibility_identifier": "VisibleAnswer",
+        }
+        proposed = {**base, "requirement_verbatim": "New literal requirement"}
+        self.assertEqual(
+            validate_acceptance_contract.freshness_errors(
+                proposed,
+                base,
+                {".github/acceptance-contract.json"},
+                is_bootstrap=False,
+            ),
+            [],
+        )
+
+    def test_governance_or_proof_only_change_remains_stale(self) -> None:
+        base = {
+            **COMMIT_BOUND_FIXTURE,
+            "requirement_verbatim": "Exact requirement",
+            "visible_surface": "Harness window",
+            "expected_visible_result": "Exact result",
+            "ui_test_identifier": "HarnessUITests/AnswerTests/testVisibleAnswer",
+            "final_accessibility_identifier": "VisibleAnswer",
+        }
+        for field, value in (
+            ("risk_and_authority_boundaries", "Different but sufficiently long risk prose."),
+            ("threat_model", "Different but sufficiently long threat prose."),
+            ("required_proof", ["Different screenshot and test proof."]),
+            ("critical_flow", ["Different execution flow statement."]),
+        ):
+            proposed = {**base, field: value}
+            self.assertIn(
+                "acceptance contract is stale and unchanged from the protected base",
+                validate_acceptance_contract.freshness_errors(
+                    proposed, base, {".github/acceptance-contract.json"}, is_bootstrap=False
+                ),
+            )
+
+    def test_placeholders_in_every_commit_bound_field_are_rejected(self) -> None:
+        for field, value in (
+            ("critical_flow", ["TODO replace this critical flow"]),
+            ("required_proof", ["TBD screenshot and test proof"]),
+            ("risk_and_authority_boundaries", "TODO explain the authority boundary"),
+            ("threat_model", "TBD explain the complete threat model"),
+        ):
+            contract = {
+                **COMMIT_BOUND_FIXTURE,
+                "requirement_verbatim": "Exact requirement",
+                "visible_surface": "Harness window",
+                "expected_visible_result": "Exact visible result",
+                "ui_test_identifier": "HarnessUITests/AnswerTests/testVisibleAnswer",
+                "final_accessibility_identifier": "VisibleAnswer",
+                field: value,
+            }
+            self.assertIn(
+                "placeholder remains in committed acceptance contract",
+                validate_acceptance_contract.validate_handoff_contract(contract),
+            )
+
+
+class SolReviewTests(unittest.TestCase):
+    def test_blocking_finding_fails(self) -> None:
+        sha_a, sha_b = "a" * 40, "b" * 40
+        review = {
+            "reviewed_base": sha_a,
+            "reviewed_head": sha_b,
+            "verdict": "PASS",
+            "acceptance_contract_complete": True,
+            "read_only_review": True,
+            "findings": [{"severity": "P1"}],
+        }
+        self.assertTrue(validate_sol_review.validate(review, sha_a, sha_b))
+
+
+class IntegrityBoundaryTests(unittest.TestCase):
+    @staticmethod
+    def passing_review(base: str, head: str) -> dict:
+        return {
+            "reviewed_base": base,
+            "reviewed_head": head,
+            "verdict": "PASS",
+            "acceptance_contract_complete": True,
+            "read_only_review": True,
+            "findings": [],
+        }
+
+    def test_sol_authority_rejects_spoofed_success_creator(self) -> None:
+        base, head = "a" * 40, "b" * 40
+        payload = {
+            "statuses": [
+                {
+                    "context": "GPT-5.6 Sol review",
+                    "state": "success",
+                    "creator": {"login": "github-actions[bot]"},
+                    "description": "PASS pr:19 binding:bound-marker",
+                    "target_url": "https://github.com/dblaira/Harness/pull/19#review",
+                }
+            ]
+        }
+        errors, _ = verify_sol_authority.verify(
+            payload,
+            self.passing_review(base, head),
+            base,
+            head,
+            "pr:19 binding:bound-marker",
+            "dblaira/Harness",
+        )
+        self.assertIn("newest GPT-5.6 Sol review status was not created by dblaira", errors)
+
+    def test_sol_authority_accepts_exact_local_review_and_operator_status(self) -> None:
+        base, head = "a" * 40, "b" * 40
+        payload = {
+            "statuses": [
+                {
+                    "context": "GPT-5.6 Sol review",
+                    "state": "success",
+                    "creator": {"login": "dblaira"},
+                    "description": "PASS pr:19 binding:bound-marker",
+                    "target_url": "https://github.com/dblaira/Harness/pull/19#review",
+                }
+            ]
+        }
+        errors, target = verify_sol_authority.verify(
+            payload,
+            self.passing_review(base, head),
+            base,
+            head,
+            "pr:19 binding:bound-marker",
+            "dblaira/Harness",
+        )
+        self.assertEqual(errors, [])
+        self.assertTrue(target.startswith("https://github.com/dblaira/Harness/"))
+
+    def test_protected_test_overlay_replaces_proposal_no_op_body(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            trusted, proposed = root / "trusted", root / "proposed"
+            source = trusted / "Tests/HarnessTests"
+            target = proposed / "Tests/HarnessTests"
+            source.mkdir(parents=True)
+            target.mkdir(parents=True)
+            (source / "CriticalTests.swift").write_text("#expect(realBehavior)\n")
+            (target / "CriticalTests.swift").write_text("#expect(true)\n")
+            (target / "NewFeatureTests.swift").write_text("#expect(newBehavior)\n")
+            errors = prepare_protected_tests.copy_protected_tests(
+                trusted,
+                proposed,
+                (("Tests/HarnessTests", "Tests/HarnessTests"),),
+            )
+            self.assertEqual(errors, [])
+            self.assertEqual((target / "CriticalTests.swift").read_text(), "#expect(realBehavior)\n")
+            self.assertEqual((target / "NewFeatureTests.swift").read_text(), "#expect(newBehavior)\n")
+            self.assertEqual(
+                prepare_protected_tests.verify_protected_tests(
+                    trusted,
+                    proposed,
+                    (("Tests/HarnessTests", "Tests/HarnessTests"),),
+                ),
+                [],
+            )
+
+    def test_ollama_proxy_allows_only_fixed_non_streaming_model(self) -> None:
+        self.assertEqual(readonly_ollama_proxy.route_kind("GET", "/api/tags"), "tags")
+        self.assertEqual(readonly_ollama_proxy.route_kind("POST", "/api/generate"), "generate")
+        for mutation in ("pull", "create", "copy", "delete", "push", "blobs"):
+            self.assertIsNone(readonly_ollama_proxy.route_kind("POST", f"/api/{mutation}"))
+        self.assertEqual(
+            readonly_ollama_proxy.generation_errors(
+                {"model": "hermes3:8b", "stream": False, "prompt": "hello"},
+                "hermes3:8b",
+            ),
+            [],
+        )
+        self.assertTrue(
+            readonly_ollama_proxy.generation_errors(
+                {"model": "attacker", "stream": False}, "hermes3:8b"
+            )
+        )
+        self.assertTrue(
+            readonly_ollama_proxy.generation_errors(
+                {"model": "hermes3:8b", "stream": True}, "hermes3:8b"
+            )
+        )
+
+    def test_authority_binding_key_distinguishes_exact_triple(self) -> None:
+        first = snapshot_authority_bindings.binding_key("s", "p", "o")
+        second = snapshot_authority_bindings.binding_key("s", "p", "different")
+        self.assertNotEqual(first, second)
+
+    def test_dependency_snapshot_changes_when_protected_tool_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tool = Path(directory) / "tool"
+            tool.write_text("first")
+            errors, first = snapshot_gate_dependencies.snapshot([tool])
+            self.assertEqual(errors, [])
+            tool.write_text("second")
+            errors, second = snapshot_gate_dependencies.snapshot([tool])
+            self.assertEqual(errors, [])
+            self.assertNotEqual(first["sha256"], second["sha256"])
+
+    def test_coalition_membership_query_failure_is_not_an_empty_coalition(self) -> None:
+        with mock.patch.dict(os.environ, {"HARNESS_TEST_FORCE_COALITION_QUERY_FAILURE": "1"}):
+            with self.assertRaises(run_with_timeout.CoalitionQueryError):
+                run_with_timeout.coalition_pids(123)
+
+
+class ReleaseGateTests(unittest.TestCase):
+    def test_manifest_created_at_rejects_stale_malformed_and_future_values(self) -> None:
+        now = datetime.datetime(2026, 7, 13, 12, 0, tzinfo=datetime.timezone.utc)
+        self.assertEqual(
+            release_gate.created_at_errors("2026-07-13T11:00:00+00:00", now=now), []
+        )
+        self.assertIn(
+            "signed handoff manifest is stale",
+            release_gate.created_at_errors("2026-07-13T09:59:59+00:00", now=now),
+        )
+        self.assertTrue(release_gate.created_at_errors("not-a-date", now=now))
+        self.assertTrue(release_gate.created_at_errors("2026-07-13T12:06:00+00:00", now=now))
+        self.assertTrue(release_gate.created_at_errors("2026-07-13T11:00:00", now=now))
+
+    def test_completion_language(self) -> None:
+        self.assertTrue(release_gate.completion_claim("Implemented and verified."))
+        self.assertFalse(release_gate.completion_claim("Blocked; this is not verified."))
+        self.assertTrue(
+            release_gate.completion_claim(
+                "Should I stop now that the feature passes, even though the handoff is unverified?"
+            )
+        )
+
+    def test_hook_allows_only_structured_external_authority_blocker_without_evidence(self) -> None:
+        original = release_gate.guarded_changes
+        release_gate.guarded_changes = lambda _root: ["Sources/Harness/Feature.swift"]
+        try:
+            result = release_gate.hook(
+                Path("."),
+                {
+                    "last_assistant_message": (
+                        "BLOCKED: EXTERNAL_AUTHORITY_REQUIRED "
+                        "category=account-owner; reason=Adam must approve the external account action."
+                    )
+                },
+            )
+            self.assertEqual(result, {"continue": True})
+        finally:
+            release_gate.guarded_changes = original
+
+    def test_hook_rejects_blocked_message_with_mixed_completion_claims(self) -> None:
+        original = release_gate.guarded_changes
+        release_gate.guarded_changes = lambda _root: ["Sources/Harness/Feature.swift"]
+        try:
+            for message in (
+                "BLOCKED: missing external authority",
+                "BLOCKED: EXTERNAL_AUTHORITY_REQUIRED category=build-failure; reason=Tests failed.",
+                "BLOCKED: EXTERNAL_AUTHORITY_REQUIRED category=account-owner; reason=Build timed out and tests failed.",
+                "BLOCKED: implemented and verified; handoff evidence is absent",
+                "BLOCKED: tests pass but the manifest is missing",
+                "BLOCKED: the feature is working; release proof is unavailable",
+            ):
+                result = release_gate.hook(Path("."), {"last_assistant_message": message})
+                self.assertEqual(result["decision"], "block")
+            self.assertEqual(
+                release_gate.hook(
+                    Path("."),
+                    {
+                        "last_assistant_message": (
+                            "BLOCKED: EXTERNAL_AUTHORITY_REQUIRED "
+                            "category=physical-device; reason=Adam must perform the physical device gesture."
+                        )
+                    },
+                ),
+                {"continue": True},
+            )
+        finally:
+            release_gate.guarded_changes = original
+
+    def test_hook_allows_intermediate_non_completion_message(self) -> None:
+        original = release_gate.guarded_changes
+        release_gate.guarded_changes = lambda _root: ["Sources/Harness/Feature.swift"]
+        try:
+            result = release_gate.hook(Path("."), {"last_assistant_message": "Adam, should I use A or B?"})
+            self.assertEqual(result, {"continue": True})
+        finally:
+            release_gate.guarded_changes = original
+
+    def test_question_shaped_completion_claims_are_blocked(self) -> None:
+        original = release_gate.guarded_changes
+        release_gate.guarded_changes = lambda _root: ["Sources/Harness/Feature.swift"]
+        try:
+            for message in (
+                "Everything passes; does that look right?",
+                "The issue now works; anything else?",
+                "The repair was successful; should I stop?",
+            ):
+                result = release_gate.hook(Path("."), {"last_assistant_message": message})
+                self.assertEqual(result["decision"], "block")
+        finally:
+            release_gate.guarded_changes = original
+
+    def test_genuine_information_question_is_allowed(self) -> None:
+        original = release_gate.guarded_changes
+        release_gate.guarded_changes = lambda _root: ["Sources/Harness/Feature.swift"]
+        try:
+            result = release_gate.hook(
+                Path("."), {"last_assistant_message": "Adam, should I use the signed Debug or Release identity?"}
+            )
+            self.assertEqual(result, {"continue": True})
+        finally:
+            release_gate.guarded_changes = original
+
+    def test_hook_blocks_malformed_paraphrased_and_mixed_completion(self) -> None:
+        original = release_gate.guarded_changes
+        release_gate.guarded_changes = lambda _root: ["Sources/Harness/Feature.swift"]
+        try:
+            messages = (
+                "",
+                "The requirement now passes.",
+                "Implemented successfully, though an unrelated note is unverified.",
+            )
+            for message in messages:
+                result = release_gate.hook(Path("."), {"last_assistant_message": message})
+                self.assertEqual(result["decision"], "block")
+        finally:
+            release_gate.guarded_changes = original
+
+    def test_missing_base_fails_closed(self) -> None:
+        original = release_gate.run_git
+        release_gate.run_git = lambda _root, *args: (_ for _ in ()).throw(
+            release_gate.GitInspectionError(f"git {' '.join(args)} failed: missing base")
+        )
+        try:
+            with self.assertRaises(release_gate.GitInspectionError):
+                release_gate.changed_files(Path("."))
+        finally:
+            release_gate.run_git = original
+
+    def test_git_inspection_failure_blocks_completion(self) -> None:
+        original = release_gate.guarded_changes
+        release_gate.guarded_changes = lambda _root: (_ for _ in ()).throw(
+            release_gate.GitInspectionError("git status failed: repository unreadable")
+        )
+        try:
+            result = release_gate.hook(Path("."), {"last_assistant_message": "Implemented and verified."})
+            self.assertEqual(result["decision"], "block")
+            self.assertIn("repository unreadable", result["reason"])
+        finally:
+            release_gate.guarded_changes = original
+
+    def test_manifest_path_git_failure_blocks_completion(self) -> None:
+        original_changes = release_gate.guarded_changes
+        original_dirty = release_gate.working_tree_changes
+        original_manifest = release_gate.manifest_path
+        release_gate.guarded_changes = lambda _root: ["Sources/Harness/Feature.swift"]
+        release_gate.working_tree_changes = lambda _root: []
+        release_gate.manifest_path = lambda _root: (_ for _ in ()).throw(
+            release_gate.GitInspectionError("git rev-parse HEAD failed: repository unreadable")
+        )
+        try:
+            result = release_gate.hook(Path("."), {"last_assistant_message": "Implemented."})
+            self.assertEqual(result["decision"], "block")
+            self.assertIn("repository unreadable", result["reason"])
+        finally:
+            release_gate.guarded_changes = original_changes
+            release_gate.working_tree_changes = original_dirty
+            release_gate.manifest_path = original_manifest
+
+    def test_final_commit_read_failure_blocks_completion(self) -> None:
+        original_changes = release_gate.guarded_changes
+        original_manifest = release_gate.manifest_path
+        original_validate = release_gate.validate_manifest
+        original_commit = release_gate.current_commit
+        release_gate.guarded_changes = lambda _root: ["Sources/Harness/Feature.swift"]
+        release_gate.manifest_path = lambda _root: Path(__file__)
+        release_gate.validate_manifest = lambda *_args: ["handoff manifest is invalid"]
+        release_gate.current_commit = lambda _root: (_ for _ in ()).throw(
+            release_gate.GitInspectionError("git rev-parse HEAD failed: repository unreadable")
+        )
+        try:
+            result = release_gate.hook(Path("."), {"last_assistant_message": "Implemented."})
+            self.assertEqual(result["decision"], "block")
+            self.assertIn("repository unreadable", result["reason"])
+        finally:
+            release_gate.guarded_changes = original_changes
+            release_gate.manifest_path = original_manifest
+            release_gate.validate_manifest = original_validate
+            release_gate.current_commit = original_commit
+
+    def test_subprocess_timeout_returns_explicit_failure(self) -> None:
+        original = subprocess.run
+        subprocess.run = lambda *args, **kwargs: (_ for _ in ()).throw(
+            subprocess.TimeoutExpired(cmd=args[0], timeout=30)
+        )
+        try:
+            result = release_gate.run_command("stalled-verifier")
+            self.assertEqual(result.returncode, 124)
+            self.assertIn("timed out", result.stderr)
+        finally:
+            subprocess.run = original
+
+    def test_hook_explicitly_blocks_operational_validation_exception(self) -> None:
+        original_changes = release_gate.guarded_changes
+        original_dirty = release_gate.working_tree_changes
+        original_manifest = release_gate.manifest_path
+        original_validate = release_gate.validate_manifest
+        release_gate.guarded_changes = lambda _root: ["Sources/Harness/Feature.swift"]
+        release_gate.working_tree_changes = lambda _root: []
+        release_gate.manifest_path = lambda _root: Path(__file__)
+        release_gate.validate_manifest = lambda *_args: (_ for _ in ()).throw(TimeoutError("stalled"))
+        try:
+            result = release_gate.hook(Path("."), {"last_assistant_message": "Implemented."})
+            self.assertEqual(result["decision"], "block")
+            self.assertIn("could not complete", result["reason"])
+        finally:
+            release_gate.guarded_changes = original_changes
+            release_gate.working_tree_changes = original_dirty
+            release_gate.manifest_path = original_manifest
+            release_gate.validate_manifest = original_validate
+
+    def test_stale_release_proof_cannot_override_new_working_tree_changes(self) -> None:
+        originals = (
+            release_gate.guarded_changes,
+            release_gate.working_tree_changes,
+            release_gate.completion_evidence,
+            release_gate.validate_release_tree_completion,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "manifest.json"
+            manifest.write_text("{}\n", encoding="utf-8")
+            (manifest.parent / "release-tree-verification.json").write_text("{}\n", encoding="utf-8")
+            release_gate.guarded_changes = lambda _root: ["Sources/Harness/Feature.swift"]
+            release_gate.working_tree_changes = lambda _root: ["Sources/Harness/Feature.swift"]
+            release_gate.completion_evidence = lambda _root: (manifest, "a" * 40)
+            release_gate.validate_release_tree_completion = lambda *_args, **_kwargs: []
+            try:
+                result = release_gate.hook(Path("."), {"last_assistant_message": "Implemented."})
+            finally:
+                (
+                    release_gate.guarded_changes,
+                    release_gate.working_tree_changes,
+                    release_gate.completion_evidence,
+                    release_gate.validate_release_tree_completion,
+                ) = originals
+        self.assertEqual(result["decision"], "block")
+        self.assertIn("repository state changed after evidence capture", result["reason"])
+
+    def test_clean_completion_claim_requires_final_merged_tree_proof(self) -> None:
+        originals = (
+            release_gate.guarded_changes,
+            release_gate.working_tree_changes,
+            release_gate.completion_evidence,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "manifest.json"
+            release_gate.guarded_changes = lambda _root: []
+            release_gate.working_tree_changes = lambda _root: []
+            release_gate.completion_evidence = lambda _root: (manifest, "b" * 40)
+            try:
+                result = release_gate.hook(Path("."), {"last_assistant_message": "Everything passes."})
+            finally:
+                (
+                    release_gate.guarded_changes,
+                    release_gate.working_tree_changes,
+                    release_gate.completion_evidence,
+                ) = originals
+        self.assertEqual(result["decision"], "block")
+        self.assertIn("final merged-tree proof is absent", result["reason"])
+
+    def test_package_manifests_are_product_changes(self) -> None:
+        original = release_gate.changed_files
+        release_gate.changed_files = lambda _root: {
+            "Packages/OntologyKit/Package.swift",
+            "Packages/OntologyKit/Package.resolved",
+        }
+        try:
+            self.assertEqual(
+                release_gate.product_changes(Path(".")),
+                [
+                    "Packages/OntologyKit/Package.resolved",
+                    "Packages/OntologyKit/Package.swift",
+                ],
+            )
+        finally:
+            release_gate.changed_files = original
+
+    def test_missing_artifacts_fail_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path.cwd()
+            manifest_path = Path(directory) / "manifest.json"
+            manifest_path.write_text(json.dumps({"schema_version": 1, "status": "PASS"}), encoding="utf-8")
+            errors = release_gate.validate_manifest(root, manifest_path)
+            self.assertIn("manifest commit does not match HEAD", errors)
+            self.assertIn("artifact is missing: screenshot", errors)
+
+    def test_counterfeit_media_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake_png = root / "fake.png"
+            fake_video = root / "fake.mov"
+            fake_png.write_bytes(b"not an image" * 200)
+            fake_video.write_bytes(b"not a movie" * 20_000)
+            self.assertTrue(release_gate.validate_png(fake_png))
+            self.assertTrue(release_gate.validate_quicktime(fake_video))
+
+    def test_wrong_artifact_types_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            directory_png = root / "visible.png"
+            directory_png.mkdir()
+            directory_transcript = root / "unit.log"
+            directory_transcript.mkdir()
+            self.assertIn(
+                "artifact must be a regular file: screenshot",
+                release_gate.artifact_type_errors("screenshot", directory_png),
+            )
+            self.assertIn(
+                "artifact must be a regular file: unit_test_transcript",
+                release_gate.artifact_type_errors("unit_test_transcript", directory_transcript),
+            )
+
+    def test_missing_handoff_manifest_is_explicitly_invalid(self) -> None:
+        errors = release_gate.validate_manifest(Path.cwd(), Path("/definitely/missing/manifest.json"))
+        self.assertTrue(any("cannot read handoff manifest" in error for error in errors))
+
+    def test_every_repository_change_is_guarded(self) -> None:
+        original = release_gate.changed_files
+        release_gate.changed_files = lambda _root: {
+            "scripts/sync-ontology.sh",
+            ".codex/hooks.json",
+            ".periphery.yml",
+            ".swiftlint.yml",
+            "scripts/future_gate_helper.py",
+        }
+        try:
+            self.assertEqual(
+                release_gate.guarded_changes(Path(".")),
+                [
+                    ".codex/hooks.json",
+                    ".periphery.yml",
+                    ".swiftlint.yml",
+                    "scripts/future_gate_helper.py",
+                    "scripts/sync-ontology.sh",
+                ],
+            )
+        finally:
+            release_gate.changed_files = original
+
+
+class XCResultGateTests(unittest.TestCase):
+    def test_exact_passing_ui_test_is_required(self) -> None:
+        tree = {
+            "testNodes": [{
+                "nodeType": "Test Case",
+                "nodeIdentifier": "VisibleAnswerTests/testVisibleAnswer()",
+                "result": "Passed",
+                "durationInSeconds": 1.25,
+            }]
+        }
+        self.assertEqual(
+            validate_xcresult.validate_test_tree(
+                tree, "HarnessUITests/VisibleAnswerTests/testVisibleAnswer"
+            ),
+            [],
+        )
+        self.assertTrue(
+            validate_xcresult.validate_test_tree(
+                tree, "HarnessUITests/VisibleAnswerTests/testDifferentAnswer"
+            )
+        )
+
+    def test_unit_bundle_rejects_skips(self) -> None:
+        tree = {"children": [
+            {"name": "HarnessTests", "nodeType": "Unit test bundle", "result": "Passed"},
+            {"name": "testOne()", "nodeType": "Test Case", "result": "Skipped"},
+        ]}
+        self.assertIn(
+            "required test bundle HarnessTests skipped 1 test(s)",
+            validate_xcresult.validate_bundle_tree(tree, "HarnessTests"),
+        )
+
+    def test_unit_bundle_requires_every_protected_test(self) -> None:
+        tree = {"children": [
+            {"name": "HarnessTests", "nodeType": "Unit test bundle", "result": "Passed"},
+            {"name": "testOne()", "nodeType": "Test Case", "nodeIdentifier": "testOne()", "result": "Passed"},
+        ]}
+        errors = validate_xcresult.validate_bundle_tree(
+            tree, "HarnessTests", {"testOne", "testTwo"}
+        )
+        self.assertIn("required test bundle omitted 1 protected test(s): testTwo", errors)
+
+    def test_protected_swift_inventory_accepts_added_tests(self) -> None:
+        base = "@Test func protectedBaseTest() {}\n"
+        proposed = base + "@Test func newlyAddedTest() {}\n"
+        self.assertEqual(swift_test_inventory.identifiers(base), {"protectedBaseTest"})
+        self.assertEqual(
+            swift_test_inventory.identifiers(proposed),
+            {"protectedBaseTest", "newlyAddedTest"},
+        )
+        tree = {"children": [
+            {"name": "HarnessTests", "nodeType": "Unit test bundle", "result": "Passed"},
+            {"name": "protectedBaseTest()", "nodeType": "Test Case", "nodeIdentifier": "protectedBaseTest()", "result": "Passed"},
+            {"name": "newlyAddedTest()", "nodeType": "Test Case", "nodeIdentifier": "newlyAddedTest()", "result": "Passed"},
+        ]}
+        self.assertEqual(
+            validate_xcresult.validate_bundle_tree(tree, "HarnessTests", {"protectedBaseTest"}),
+            [],
+        )
+
+    def test_swift_inventory_handles_hostile_long_annotation_input_without_regex(self) -> None:
+        hostile = "@A(" + ") @A(" * 100_000 + "\n@Test @MainActor func protectedTest() {}"
+        self.assertEqual(swift_test_inventory.identifiers(hostile), {"protectedTest"})
+
+    def test_swift_inventory_tracks_multiline_test_annotations_without_parsing_strings(self) -> None:
+        source = '''
+        @Test(
+            "descriptive name"
+        )
+        @MainActor
+        func multilineTest() {}
+        let example = "func inventedTest()"
+        '''
+        self.assertEqual(swift_test_inventory.identifiers(source), {"multilineTest"})
+
+
+class DirectXCTestGateTests(unittest.TestCase):
+    def test_direct_transcript_requires_exact_protected_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            expected = root / "expected.json"
+            transcript = root / "unit.log"
+            expected.write_text(json.dumps(["firstTest", "secondTest"]), encoding="utf-8")
+            transcript.write_text(
+                "✔ Test firstTest() passed after 0.001 seconds.\n"
+                "✔ Test secondTest() passed after 0.001 seconds.\n"
+                "✔ Test run with 2 tests in 1 suite passed after 0.002 seconds.\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(validate_xctest_transcript.validate(expected, transcript), [])
+
+    def test_direct_transcript_rejects_missing_or_extra_tests(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            expected = root / "expected.json"
+            transcript = root / "unit.log"
+            expected.write_text(json.dumps(["firstTest", "secondTest"]), encoding="utf-8")
+            transcript.write_text(
+                "✔ Test firstTest() passed after 0.001 seconds.\n"
+                "✔ Test inventedTest() passed after 0.001 seconds.\n"
+                "✔ Test run with 2 tests in 1 suite passed after 0.002 seconds.\n",
+                encoding="utf-8",
+            )
+            errors = validate_xctest_transcript.validate(expected, transcript)
+            self.assertTrue(any("secondTest" in error for error in errors))
+            self.assertTrue(any("inventedTest" in error for error in errors))
+
+    def test_signed_ui_proof_rejects_pid_escape(self) -> None:
+        actions = [{"action": "wait_for", "identifier": "Delegation", "timeout_seconds": 10}]
+        bounds = {"x": 1.0, "y": 2.0, "width": 800.0, "height": 600.0}
+        proof = {
+            "schema_version": 2,
+            "status": "PASS",
+            "pid": 41,
+            "bundle_identifier": "com.adamblair.Harness",
+            "executable": "/proof/Harness.app/Contents/MacOS/Harness",
+            "window_id": 71,
+            "window_bounds": bounds,
+            "final_accessibility_identifier": "Delegation",
+            "contract_actions": actions,
+            "action_results": [
+                {
+                    "action": "wait_for",
+                    "identifier": "Delegation",
+                    "status": "PASS",
+                    "target_pid": 99,
+                    "target_window_id": 71,
+                    "target_window_bounds": bounds,
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ui.json"
+            path.write_text(json.dumps(proof), encoding="utf-8")
+            errors = release_gate.validate_ui_automation_proof(
+                path,
+                expected_pid=41,
+                expected_executable="/proof/Harness.app/Contents/MacOS/Harness",
+                expected_identifier="Delegation",
+                expected_actions=actions,
+            )
+        self.assertIn("signed Mac UI automation result 0 escaped the exact candidate PID", errors)
+
+
+class SwiftPMInventoryTests(unittest.TestCase):
+    def test_missing_or_skipped_protected_test_fails(self) -> None:
+        expected = ["OntologyKitTests.first()", "OntologyKitTests.second()"]
+        errors = validate_swiftpm_tests.validate(
+            expected,
+            "✔ Test first() passed after 0.1 seconds.\n↷ Test second() skipped",
+            set(),
+        )
+        self.assertTrue(any("omitted" in error for error in errors))
+        self.assertTrue(any("skipped" in error for error in errors))
+
+
+class ProtectedLiveOracleTests(unittest.TestCase):
+    def test_oracle_uses_direct_network_results_and_writes_required_markers(self) -> None:
+        original = live_satisfaction_oracle.request
+        def grounded_request(url, data=None, content_type=None):
+            if "3030" in url:
+                return {"results": {"bindings": [{
+                    "s": {"value": "accepted"},
+                    "p": {"value": "says"},
+                    "o": {"value": "capturing value matters"},
+                }]}}
+            if url.endswith("/api/tags"):
+                return {"models": [{"name": "fixture"}]}
+            prompt = json.loads(data)["prompt"]
+            authority_id = re.search(r'"id": "([0-9a-f]+)"', prompt).group(1)
+            return {"response": json.dumps({
+                "authority_ids": [authority_id],
+                "supporting_context": [],
+                "separation": "PASS",
+                "answer": "Capturing value matters because the supplied accepted authority says it preserves useful outcomes.",
+            })}
+        live_satisfaction_oracle.request = grounded_request
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                original_argv = sys.argv
+                sys.argv = ["oracle", "--commit", "a" * 40, "--output-dir", directory]
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(live_satisfaction_oracle.main(), 0)
+                text = next(Path(directory).glob("gate-*.md")).read_text()
+                self.assertIn("- Fuseki graph health: healthy", text)
+                self.assertIn("- Direct accepted-only Fuseki preflight hits: 1", text)
+        finally:
+            live_satisfaction_oracle.request = original
+            sys.argv = original_argv
+
+    def test_only_live_satisfaction_test_may_be_absent(self) -> None:
+        expected = ["OntologyKitTests.first()", "OntologyKitTests.satisfactionGate()"]
+        self.assertEqual(
+            validate_swiftpm_tests.validate(
+                expected,
+                "✔ Test first() passed after 0.1 seconds.",
+                {"OntologyKitTests.satisfactionGate"},
+            ),
+            [],
+        )
+
+    def test_oracle_rejects_unrelated_ungrounded_synthesis(self) -> None:
+        original = live_satisfaction_oracle.request
+        live_satisfaction_oracle.request = lambda url, data=None, content_type=None: (
+            {"results": {"bindings": [{"s": {"value": "accepted"}, "p": {"value": "says"}, "o": {"value": "capturing value matters"}}]}}
+            if "3030" in url else
+            ({"models": [{"name": "fixture"}]} if url.endswith("/api/tags") else {"response": "A long but unrelated answer that cites none of the accepted graph evidence supplied to it."})
+        )
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                original_argv = sys.argv
+                sys.argv = ["oracle", "--commit", "a" * 40, "--output-dir", directory]
+                with self.assertRaisesRegex(SystemExit, "grounded accepted authority"):
+                    live_satisfaction_oracle.main()
+        finally:
+            live_satisfaction_oracle.request = original
+            sys.argv = original_argv
+
+    def test_oracle_rejects_accepted_graph_snapshot_drift(self) -> None:
+        original = live_satisfaction_oracle.request
+        live_satisfaction_oracle.request = lambda url, data=None, content_type=None: {
+            "results": {"bindings": [{"s": {"value": "accepted"}, "p": {"value": "says"}, "o": {"value": "capturing value matters"}}]}
+        }
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                original_argv = sys.argv
+                sys.argv = [
+                    "oracle", "--commit", "a" * 40, "--output-dir", directory,
+                    "--expected-graph-digest", "0" * 64,
+                ]
+                with self.assertRaisesRegex(SystemExit, "accepted graph changed"):
+                    live_satisfaction_oracle.main()
+        finally:
+            live_satisfaction_oracle.request = original
+            sys.argv = original_argv
+
+
+class CommitStatusTests(unittest.TestCase):
+    def test_newest_failure_rejects_older_success(self) -> None:
+        payload = {"statuses": [
+            {"context": "GPT-5.6 Sol review", "state": "failure", "target_url": "new"},
+            {"context": "GPT-5.6 Sol review", "state": "success", "target_url": "old"},
+        ]}
+        errors, _ = require_latest_status.require_latest(payload, "GPT-5.6 Sol review")
+        self.assertEqual(errors, ["newest GPT-5.6 Sol review status is failure"])
+
+
+class CodexAuthorizationTests(unittest.TestCase):
+    def test_api_key_or_non_chatgpt_auth_is_rejected(self) -> None:
+        chatgpt = {
+            "auth_mode": "chatgpt",
+            "OPENAI_API_KEY": None,
+            "tokens": {"access_token": "token", "account_id": "account"},
+        }
+        self.assertEqual(verify_codex_auth.validate(chatgpt, {}), [])
+        self.assertIn("OPENAI_API_KEY must be absent", verify_codex_auth.validate(chatgpt, {"OPENAI_API_KEY": "key"}))
+        api = {"auth_mode": "apikey", "OPENAI_API_KEY": "key", "tokens": {}}
+        self.assertTrue(verify_codex_auth.validate(api, {}))
+
+    def test_effective_runtime_rejects_custom_provider(self) -> None:
+        log = """model: gpt-5.6-sol
+provider: custom-proxy
+sandbox: read-only
+reasoning effort: max
+"""
+        errors, _ = verify_codex_runtime.validate(log)
+        self.assertIn(
+            "effective Codex provider is custom-proxy, expected openai",
+            errors,
+        )
+        self.assertIn(
+            "ANTHROPIC_API_KEY must be absent",
+            verify_codex_auth.validate(
+                {"auth_mode": "chatgpt", "OPENAI_API_KEY": None, "tokens": {"access_token": "t", "account_id": "a"}},
+                {"ANTHROPIC_API_KEY": "unexpected"},
+            ),
+        )
+
+
+class RepositoryBindingTests(unittest.TestCase):
+    def test_github_remote_formats_resolve_to_harness(self) -> None:
+        for remote in (
+            "https://github.com/dblaira/Harness.git",
+            "git@github.com:dblaira/Harness.git",
+            "ssh://git@github.com/dblaira/Harness.git",
+        ):
+            self.assertEqual(resolve_harness_repo.repository_from_remote(remote), "dblaira/Harness")
+
+    def test_second_worktree_resolves_to_its_own_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory) / "Harness"
+            worktree = Path(directory) / "Harness-worktree"
+            subprocess.run(["git", "init", "-q", str(base)], check=True)
+            subprocess.run(["git", "-C", str(base), "config", "user.email", "test@example.com"], check=True)
+            subprocess.run(["git", "-C", str(base), "config", "user.name", "Gate Test"], check=True)
+            (base / "README.md").write_text("fixture\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(base), "add", "README.md"], check=True)
+            subprocess.run(["git", "-C", str(base), "commit", "-qm", "fixture"], check=True)
+            subprocess.run(
+                ["git", "-C", str(base), "remote", "add", "origin", "git@github.com:dblaira/Harness.git"],
+                check=True,
+            )
+            subprocess.run(["git", "-C", str(base), "worktree", "add", "-qb", "codex/probe", str(worktree)], check=True)
+            self.assertEqual(resolve_harness_repo.resolve(worktree), worktree.resolve())
+
+    def test_unpushed_local_main_commit_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            remote = root / "remote.git"
+            local = root / "local"
+            subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+            subprocess.run(["git", "init", "-q", "-b", "main", str(local)], check=True)
+            subprocess.run(["git", "-C", str(local), "config", "user.email", "test@example.com"], check=True)
+            subprocess.run(["git", "-C", str(local), "config", "user.name", "Gate Test"], check=True)
+            subprocess.run(["git", "-C", str(local), "remote", "add", "origin", str(remote)], check=True)
+            (local / "control.txt").write_text("reviewed\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(local), "add", "control.txt"], check=True)
+            subprocess.run(["git", "-C", str(local), "commit", "-qm", "reviewed"], check=True)
+            subprocess.run(["git", "-C", str(local), "push", "-q", "-u", "origin", "main"], check=True)
+            resolve_harness_repo.require_remote_ref(local, "refs/heads/main")
+            (local / "control.txt").write_text("unreviewed\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(local), "commit", "-qam", "unpushed"], check=True)
+            with self.assertRaisesRegex(ValueError, "does not equal protected origin"):
+                resolve_harness_repo.require_remote_ref(local, "refs/heads/main")
+
+    def test_stop_router_blocks_harness_checkout_with_missing_origin(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "Harness"
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            (root / ".github").mkdir()
+            (root / ".github/acceptance-contract.json").write_text("{}\n", encoding="utf-8")
+            (root / "project.yml").write_text("name: Harness\n", encoding="utf-8")
+            (root / "Sources/Harness").mkdir(parents=True)
+            with self.assertRaisesRegex(ValueError, "Stop gate stays closed"):
+                route_stop_gate.route(root, root)
+
+    def test_stop_router_allows_unrelated_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "Other"
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            self.assertIsNone(route_stop_gate.route(root, Path(directory) / "Harness"))
+
+    def test_stop_router_blocks_unreadable_git_inside_installed_harness_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "Harness"
+            root.mkdir()
+            with self.assertRaisesRegex(ValueError, "Git metadata is unreadable"):
+                route_stop_gate.route(root, root)
+
+    def test_stop_router_blocks_unreadable_secondary_harness_clone(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "secondary" / "Harness"
+            (root / ".github").mkdir(parents=True)
+            (root / ".github/acceptance-contract.json").write_text("{}\n", encoding="utf-8")
+            (root / "project.yml").write_text("name: Harness\n", encoding="utf-8")
+            (root / "Sources/Harness").mkdir(parents=True)
+            with self.assertRaisesRegex(ValueError, "Git metadata is unreadable"):
+                route_stop_gate.route(root / "Sources/Harness", Path(directory) / "installed" / "Harness")
+
+
+class EvidenceBindingTests(unittest.TestCase):
+    def test_binding_changes_for_pr_base_or_full_contract(self) -> None:
+        first = evidence_binding.binding_digest("dblaira/Harness", 19, "a" * 40, "b" * 40, "c" * 64)
+        self.assertNotEqual(
+            first,
+            evidence_binding.binding_digest("dblaira/Harness", 20, "a" * 40, "b" * 40, "c" * 64),
+        )
+        self.assertNotEqual(
+            first,
+            evidence_binding.binding_digest("dblaira/Harness", 19, "e" * 40, "b" * 40, "c" * 64),
+        )
+        self.assertNotEqual(
+            first,
+            evidence_binding.binding_digest("dblaira/Harness", 19, "a" * 40, "b" * 40, "f" * 64),
+        )
+
+    def test_two_open_pull_requests_sharing_a_sha_are_rejected(self) -> None:
+        sha = "b" * 40
+        pulls = [
+            {"state": "open", "number": 19, "base": {"ref": "main"}, "head": {"sha": sha}},
+            {"state": "open", "number": 20, "base": {"ref": "main"}, "head": {"sha": sha}},
+        ]
+        with self.assertRaisesRegex(ValueError, "exactly one open pull request"):
+            select_pull_request.select_pull_request(pulls, sha)
+
+    def test_non_main_pull_request_is_rejected(self) -> None:
+        sha = "b" * 40
+        pulls = [
+            {"state": "open", "number": 19, "base": {"ref": "release"}, "head": {"sha": sha}},
+        ]
+        with self.assertRaisesRegex(ValueError, "targeting main"):
+            select_pull_request.select_pull_request(pulls, sha)
+
+    def test_non_agent_branch_is_rejected(self) -> None:
+        sha = "b" * 40
+        pulls = [{
+            "state": "open", "number": 19,
+            "base": {"ref": "main"},
+            "head": {"sha": sha, "ref": "feature/manual"},
+        }]
+        with self.assertRaisesRegex(ValueError, "agent-owned codex/ branch"):
+            select_pull_request.select_pull_request(pulls, sha)
+
+
+class PeripheryChangedLineTests(unittest.TestCase):
+    def test_legacy_findings_are_ignored_but_changed_line_findings_block(self) -> None:
+        root = Path("/proposal")
+        diff = """diff --git a/Feature.swift b/Feature.swift
+--- a/Feature.swift
++++ b/Feature.swift
+@@ -9,0 +10,2 @@
++let changed = true
++let alsoChanged = true
+"""
+        changed = periphery_changed_gate.parse_changed_lines(diff, root)
+        findings = [
+            {"name": "legacy", "location": "/proposal/Feature.swift:3:1"},
+            {"name": "new", "location": "/proposal/Feature.swift:10:1"},
+        ]
+        self.assertEqual(
+            periphery_changed_gate.changed_findings(findings, changed, root),
+            [findings[1]],
+        )
+
+    def test_malformed_finding_location_fails_closed(self) -> None:
+        with self.assertRaisesRegex(ValueError, "no parseable location"):
+            periphery_changed_gate.changed_findings(
+                [{"name": "unknown schema"}],
+                {},
+                Path("/proposal"),
+            )
+
+    def test_relative_or_outside_location_fails_closed(self) -> None:
+        for location in ("Feature.swift:10:1", "/dependency/Feature.swift:10:1"):
+            with self.assertRaisesRegex(ValueError, "invalid location"):
+                periphery_changed_gate.changed_findings(
+                    [{"name": "bad", "location": location}],
+                    {},
+                    Path("/proposal"),
+                )
+
+    def test_deletion_only_hunk_has_no_head_lines_to_gate(self) -> None:
+        diff = """diff --git a/Feature.swift b/Feature.swift
+--- a/Feature.swift
++++ b/Feature.swift
+@@ -4,2 +4,0 @@
+-let deleted = true
+-let removed = true
+"""
+        changed = periphery_changed_gate.parse_changed_lines(diff, Path("/proposal"))
+        self.assertFalse(any(changed.values()))
+
+    def test_deleted_file_cannot_attach_hunks_to_previous_file(self) -> None:
+        diff = """diff --git a/Kept.swift b/Kept.swift
+--- a/Kept.swift
++++ b/Kept.swift
+@@ -1,0 +2,1 @@
++let kept = true
+diff --git a/Deleted.swift b/Deleted.swift
+--- a/Deleted.swift
++++ /dev/null
+@@ -1,1 +0,0 @@
+-let deleted = true
+"""
+        changed = periphery_changed_gate.parse_changed_lines(diff, Path("/proposal"))
+        self.assertEqual(changed[Path("/proposal/Kept.swift")], {2})
+
+    def test_unicode_swift_path_is_enumerated_without_git_header_quoting(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.email", "test@example.com"], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.name", "Gate Test"], check=True)
+            (root / "README.md").write_text("base\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "base"], check=True)
+            base = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+            path = root / "évidence.swift"
+            path.write_text("let unusedEvidence = true\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "unicode"], check=True)
+            changed = periphery_changed_gate.changed_swift_lines(root, base)
+            self.assertEqual(changed[path.resolve()], {1})
+            finding = {"name": "unusedEvidence", "location": f"{path.resolve()}:1:1"}
+            self.assertEqual(periphery_changed_gate.changed_findings([finding], changed, root), [finding])
+
+
+class AppIdentityTests(unittest.TestCase):
+    def test_wrong_bundle_identifier_is_rejected_before_launch(self) -> None:
+        entitlements = dict(verify_app_identity.REQUIRED_ENTITLEMENTS)
+        signature = "TeamIdentifier=7FKUS5M5QS\nCDHash=abc123\n"
+        requirement = 'designated => identifier "com.adamblair.Harness" and anchor apple generic'
+        errors, _ = verify_app_identity.validate_identity(
+            "com.attacker.Substitute", signature, requirement, entitlements
+        )
+        self.assertIn(
+            "bundle identifier is com.attacker.Substitute, expected com.adamblair.Harness",
+            errors,
+        )
+
+
+class MediaEvidenceTests(unittest.TestCase):
+    def test_valid_blank_png_and_video_are_rejected(self) -> None:
+        self.assertIsNotNone(shutil.which("ffmpeg"), "ffmpeg is a mandatory handoff dependency")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            png = root / "blank.png"
+            video = root / "blank.mov"
+            subprocess.run(
+                [
+                    "ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=black:s=320x240",
+                    "-frames:v", "1", "-update", "1", str(png),
+                ],
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=black:s=320x240:d=2",
+                    "-c:v", "mpeg4", "-pix_fmt", "yuv420p", str(video),
+                ],
+                check=True,
+            )
+            self.assertTrue(any("blank" in error or "black" in error for error in validate_media.validate_png_file(png)))
+            self.assertTrue(any("nonblank" in error for error in validate_media.validate_video_file(video)))
+
+
+class ReviewBundleSanitizationTests(unittest.TestCase):
+    def test_symlinked_agents_instruction_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "payload.txt").write_text("untrusted instructions", encoding="utf-8")
+            (root / "AGENTS.md").symlink_to(root / "payload.txt")
+            errors = sanitize_review_bundle.sanitize([root])
+            self.assertTrue(any("forbidden symlink" in error for error in errors))
+
+    def test_regular_nested_agents_file_is_removed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            nested = root / "nested"
+            nested.mkdir()
+            agents = nested / "AGENTS.md"
+            agents.write_text("untrusted instructions", encoding="utf-8")
+            self.assertEqual(sanitize_review_bundle.sanitize([root]), [])
+            self.assertFalse(agents.exists())
+
+
+class ProtectedVerifierTests(unittest.TestCase):
+    def test_zero_exit_without_full_inventory_is_rejected(self) -> None:
+        errors = run_gate_script_tests.validate_transcript("", {"test_one", "test_two"}, 0)
+        self.assertIn("protected gate test inventory did not complete", errors)
+        self.assertIn("protected gate tests did not report OK", errors)
+
+    def test_fresh_report_validator_rejects_incomplete_inventory(self) -> None:
+        errors = validate_gate_test_report.validate({
+            "status": "PASS",
+            "expected_test_count": 2,
+            "completed_test_count": 0,
+            "errors": [],
+            "transcript": "OK",
+        })
+        self.assertIn("gate test report has incomplete inventory", errors)
+
+
+class HostedAuthorityTests(unittest.TestCase):
+    def test_every_gate_authority_input_requires_the_bootstrap_path(self) -> None:
+        protected = (
+            "AGENTS.md",
+            "scripts/tests/test_gates.py",
+            ".swiftlint.yml",
+            ".periphery.yml",
+            "scripts/preflight_tcc.swift",
+            "Tests/HarnessUITests/HarnessCriticalFlowTests.swift",
+            "Tests/HarnessUITests/HarnessRequirementEvidence.swift",
+            "Packages/OntologyKit/Tests/OntologyKitTests/SatisfactionGateLiveTests.swift",
+        )
+        for relative in protected:
+            with self.subTest(path=relative), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True)
+                subprocess.run(["git", "-C", str(root), "config", "user.email", "test@example.com"], check=True)
+                subprocess.run(["git", "-C", str(root), "config", "user.name", "Gate Test"], check=True)
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("protected\n", encoding="utf-8")
+                subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+                subprocess.run(["git", "-C", str(root), "commit", "-qm", "base"], check=True)
+                base = subprocess.check_output(
+                    ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+                ).strip()
+                path.write_text("weakened\n", encoding="utf-8")
+                subprocess.run(["git", "-C", str(root), "commit", "-qam", "proposal"], check=True)
+                head = subprocess.check_output(
+                    ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+                ).strip()
+                self.assertTrue(verify_hosted_evidence.unchanged_protected_controls(root, base, head))
+
+    def test_only_the_named_infrastructure_bootstrap_may_change_protected_controls(self) -> None:
+        original = verify_hosted_evidence.subprocess.run
+        verify_hosted_evidence.subprocess.run = lambda *_args, **_kwargs: subprocess.CompletedProcess([], 1)
+        try:
+            self.assertEqual(
+                verify_hosted_evidence.unchanged_protected_controls(
+                    Path("."),
+                    "0ce97219a340d9a53f5afb2a773bb2c9eb81b807",
+                    "b" * 40,
+                    "dblaira/Harness",
+                    19,
+                ),
+                [],
+            )
+            self.assertTrue(
+                verify_hosted_evidence.unchanged_protected_controls(
+                    Path("."),
+                    "0ce97219a340d9a53f5afb2a773bb2c9eb81b807",
+                    "b" * 40,
+                    "dblaira/Harness",
+                    20,
+                )
+            )
+        finally:
+            verify_hosted_evidence.subprocess.run = original
+
+    def test_spoofed_status_workflow_event_is_rejected(self) -> None:
+        status = {"state": "success", "creator": {"login": "github-actions[bot]"}}
+        run = {
+            "path": ".github/workflows/acceptance-contract.yml",
+            "event": "pull_request",
+            "head_sha": "b" * 40,
+            "conclusion": "success",
+            "repository": {"full_name": "dblaira/Harness"},
+        }
+        errors = verify_hosted_evidence.validate_status(
+            "Acceptance contract", status, run, "dblaira/Harness", "b" * 40, "c" * 40, 20
+        )
+        self.assertIn("hosted status came from the wrong protected workflow: Acceptance contract", errors)
+
+    def test_hosted_status_run_must_name_the_exact_pull_request_and_head(self) -> None:
+        base = "b" * 40
+        head = "c" * 40
+        status = {"state": "success", "creator": {"login": "github-actions[bot]"}}
+        run = {
+            "path": ".github/workflows/acceptance-contract.yml",
+            "event": "pull_request_target",
+            "head_sha": base,
+            "conclusion": "success",
+            "repository": {"full_name": "dblaira/Harness"},
+            "pull_requests": [
+                {"number": 21, "base": {"sha": base}, "head": {"sha": head}}
+            ],
+        }
+        errors = verify_hosted_evidence.validate_status(
+            "Acceptance contract", status, run, "dblaira/Harness", base, head, 20
+        )
+        self.assertIn(
+            "protected workflow run is not bound to the exact pull request: Acceptance contract",
+            errors,
+        )
+
+    def test_exact_infrastructure_bootstrap_accepts_pull_request_workflow_run(self) -> None:
+        base = "0ce97219a340d9a53f5afb2a773bb2c9eb81b807"
+        head = "c" * 40
+        status = {"state": "success", "creator": {"login": "github-actions[bot]"}}
+        run = {
+            "path": ".github/workflows/acceptance-contract.yml",
+            "event": "pull_request",
+            "head_sha": head,
+            "conclusion": "success",
+            "repository": {"full_name": "dblaira/Harness"},
+            "pull_requests": [
+                {"number": 19, "base": {"sha": base}, "head": {"sha": head}}
+            ],
+        }
+        self.assertEqual(
+            verify_hosted_evidence.validate_status(
+                "Acceptance contract", status, run, "dblaira/Harness", base, head, 19
+            ),
+            [],
+        )
+
+    def test_spoofed_local_merge_status_creator_is_rejected(self) -> None:
+        marker = "pr:20 binding:abc"
+        payload = [
+            {
+                "context": context,
+                "state": "success",
+                "creator": {"login": "github-actions[bot]"},
+                "description": marker,
+                "target_url": "https://github.com/dblaira/Harness/pull/20",
+            }
+            for context in verify_merge_authority.REQUIRED
+        ]
+        self.assertTrue(any("wrong creator" in error for error in verify_merge_authority.validate(payload, marker)))
+
+    def test_newer_pending_or_failure_blocks_an_older_local_success(self) -> None:
+        marker = "pr:20 binding:abcdefghijklmnopqrstuvwx"
+        for newest_state in ("pending", "failure"):
+            payload = []
+            for context in verify_merge_authority.REQUIRED:
+                payload.extend([
+                    {
+                        "context": context,
+                        "state": newest_state if context == "Signed Mac handoff" else "success",
+                        "creator": {"login": "dblaira"},
+                        "description": marker,
+                        "target_url": "https://github.com/dblaira/Harness/pull/20",
+                    },
+                    {
+                        "context": context,
+                        "state": "success",
+                        "creator": {"login": "dblaira"},
+                        "description": marker,
+                        "target_url": "https://github.com/dblaira/Harness/pull/20",
+                    },
+                ])
+            errors = verify_merge_authority.validate(payload, marker)
+            self.assertIn(
+                "latest trusted merge status is not successful: Signed Mac handoff",
+                errors,
+            )
+
+
+class RepositoryGateStateTests(unittest.TestCase):
+    def test_each_drifted_repository_setting_fails_closed(self) -> None:
+        repository = {"allow_merge_commit": True, "allow_squash_merge": False, "allow_rebase_merge": False}
+        protection = {
+            "required_status_checks": {"strict": True, "contexts": sorted(verify_repository_gate_state.REQUIRED_CONTEXTS)},
+            "enforce_admins": {"enabled": True},
+            "required_pull_request_reviews": {"required_approving_review_count": 0},
+            "required_conversation_resolution": {"enabled": True},
+            "allow_force_pushes": {"enabled": False},
+            "allow_deletions": {"enabled": False},
+            "required_linear_history": {"enabled": False},
+        }
+        actions = {"enabled": True, "allowed_actions": "selected", "sha_pinning_required": True}
+        workflow = {"default_workflow_permissions": "read", "can_approve_pull_request_reviews": False}
+        selected = {"github_owned_allowed": True, "verified_allowed": False, "patterns_allowed": []}
+        runners = {"total_count": 0}
+        self.assertEqual(
+            verify_repository_gate_state.validate(repository, protection, actions, workflow, selected, runners),
+            [],
+        )
+        cases = []
+        drifted = copy.deepcopy(protection); drifted["required_status_checks"]["strict"] = False
+        cases.append((repository, drifted, actions, workflow, selected, runners))
+        drifted = copy.deepcopy(protection); drifted["enforce_admins"]["enabled"] = False
+        cases.append((repository, drifted, actions, workflow, selected, runners))
+        drifted = copy.deepcopy(protection); drifted["required_pull_request_reviews"] = None
+        cases.append((repository, drifted, actions, workflow, selected, runners))
+        drifted = copy.deepcopy(protection); drifted["required_conversation_resolution"]["enabled"] = False
+        cases.append((repository, drifted, actions, workflow, selected, runners))
+        drifted = copy.deepcopy(protection); drifted["allow_force_pushes"]["enabled"] = True
+        cases.append((repository, drifted, actions, workflow, selected, runners))
+        drifted = copy.deepcopy(protection); drifted["allow_deletions"]["enabled"] = True
+        cases.append((repository, drifted, actions, workflow, selected, runners))
+        drifted = copy.deepcopy(protection); drifted["required_linear_history"]["enabled"] = True
+        cases.append((repository, drifted, actions, workflow, selected, runners))
+        cases.append((repository | {"allow_squash_merge": True}, protection, actions, workflow, selected, runners))
+        cases.append((repository, protection, actions | {"allowed_actions": "all"}, workflow, selected, runners))
+        cases.append((repository, protection, actions | {"sha_pinning_required": False}, workflow, selected, runners))
+        cases.append((repository, protection, actions, workflow | {"default_workflow_permissions": "write"}, selected, runners))
+        cases.append((repository, protection, actions, workflow | {"can_approve_pull_request_reviews": True}, selected, runners))
+        cases.append((repository, protection, actions, workflow, selected | {"verified_allowed": True}, runners))
+        cases.append((repository, protection, actions, workflow, selected, {"total_count": 1}))
+        for case in cases:
+            self.assertTrue(verify_repository_gate_state.validate(*case))
+
+    def test_outdated_installed_control_bundle_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory) / "repo"
+            controls = Path(directory) / "controls"
+            subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.com"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "Gate Test"], check=True)
+            (repo / "scripts").mkdir()
+            (repo / "scripts/control.py").write_text("current\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "base"], check=True)
+            base = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+            (controls / "scripts").mkdir(parents=True)
+            (controls / "scripts/control.py").write_text("stale\n", encoding="utf-8")
+            manifest = {"files": {"scripts/control.py": verify_control_bundle.digest(b"stale\n")}}
+            errors = verify_control_bundle.validate(manifest, controls, repo, base)
+            self.assertIn("installed control is stale relative to protected base: scripts/control.py", errors)
+
+
+class SwiftLintGateTests(unittest.TestCase):
+    def test_changed_file_discovery_failure_cannot_report_success(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            fake_git = fake_bin / "git"
+            fake_git.write_text(
+                "#!/usr/bin/env bash\n"
+                "if [[ \"$1 $2\" == \"rev-parse --show-toplevel\" ]]; then pwd; exit 0; fi\n"
+                "if [[ \"$1\" == \"cat-file\" ]]; then exit 0; fi\n"
+                "if [[ \"$1\" == \"diff\" ]]; then echo 'sentinel diff failure' >&2; exit 7; fi\n"
+                "exit 1\n",
+                encoding="utf-8",
+            )
+            fake_git.chmod(0o755)
+            environment = dict(os.environ)
+            environment["PATH"] = f"{fake_bin}:{environment.get('PATH', '')}"
+            result = subprocess.run(
+                ["/bin/bash", str(SCRIPTS / "lint_changed_swift.sh"), "fixture-base"],
+                cwd=root,
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Unable to inspect Swift changes", result.stderr)
+
+
+class InstructionConsistencyTests(unittest.TestCase):
+    def test_swift_rules_require_agent_owned_pull_request(self) -> None:
+        root = Path.cwd()
+        combined = "\n".join(
+            (root / path).read_text(encoding="utf-8")
+            for path in (".cursor/rules/ios-main-only.mdc", ".cursor/rules/stack-ios.mdc")
+        )
+        self.assertIn("agent-owned", combined)
+        self.assertNotIn("push to **main**", combined)
+
+
+class GateStructureTests(unittest.TestCase):
+    def test_handoff_checks_sol_and_head_before_proposed_execution(self) -> None:
+        handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
+        self.assertLess(handoff.index("SOL_URL="), handoff.index("xcodegen generate"))
+        self.assertLess(handoff.index("PR_HEAD_SHA="), handoff.index("xcodegen generate"))
+        self.assertGreaterEqual(handoff.count("--jq .head.sha"), 1)
+        self.assertIn("FINAL_PR_HEAD=", handoff)
+        self.assertLess(handoff.index("preflight_tcc.swift"), handoff.index("xcodegen generate"))
+        preflight = (Path.cwd() / "scripts/preflight_tcc.swift").read_text(encoding="utf-8")
+        self.assertIn("CGSSessionScreenIsLocked", preflight)
+
+    def test_installed_stop_hook_has_validation_budget_and_replaces_stale_entry(self) -> None:
+        installer = (Path.cwd() / "script/install_local_gate_controls.sh").read_text(encoding="utf-8")
+        self.assertIn('"timeout": 300', installer)
+        self.assertIn("hooks[:] = [entry for entry in hooks", installer)
+
+    def test_merge_revalidates_hosted_evidence_immediately_before_status_authority(self) -> None:
+        merger = (Path.cwd() / "script/merge_verified_pr.sh").read_text(encoding="utf-8")
+        rerun = merger.index('if ! "$CONTROL_DIR/script/hosted_verification_gate.sh"')
+        failure_exit = merger.index('Fresh hosted evidence verification failed')
+        status_read = merger.index('gh api "repos/$REPO/commits/$SHA/statuses?per_page=100"')
+        manifest = merger.index('release_gate.py" validate --manifest')
+        merge = merger.index('gh pr merge')
+        self.assertLess(rerun, failure_exit)
+        self.assertLess(failure_exit, status_read)
+        self.assertLess(rerun, status_read)
+        self.assertLess(rerun, manifest)
+        self.assertLess(manifest, status_read)
+        self.assertLess(status_read, merge)
+
+    def test_every_proposal_process_is_denied_control_writes(self) -> None:
+        handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
+        self.assertGreaterEqual(handoff.count("(deny file-write* (require-not (require-any"), 2)
+        self.assertIn('/usr/bin/touch "$CONTROL_DIR/.proposal-write-probe"', handoff)
+        self.assertIn('/usr/bin/touch "$HOME/.local/bin/harness-handoff"', handoff)
+        self.assertIn('/usr/bin/touch "$HOME/.codex/hooks.json"', handoff)
+        self.assertIn('/usr/bin/touch "$ROOT_DIR/.proposal-write-probe"', handoff)
+        self.assertIn("CANDIDATE_OUTPUT_DIR=", handoff)
+        self.assertIn("BUILD_LABEL=confined-unit-build build_exec xcodebuild build-for-testing", handoff)
+        self.assertIn('proposal_exec "$XCTEST_BINARY" "$UNIT_TEST_BUNDLE"', handoff)
+        self.assertIn("BUILD_LABEL=confined-project-generation build_exec xcodegen generate", handoff)
+        self.assertIn("BUILD_LABEL=confined-app-build build_exec xcodebuild build", handoff)
+        self.assertIn('/usr/bin/sandbox-exec -p "$profile"', handoff)
+        self.assertIn("BUILD_SANDBOX=", handoff)
+        self.assertIn("DEPENDENCY_SANDBOX=", handoff)
+        self.assertIn("confined-build-phase-probe", handoff)
+        self.assertIn("build-sandbox-probe", handoff)
+        self.assertIn("configure_isolated_xcode_home.swift", handoff)
+        self.assertIn('CFFIXED_USER_HOME="$PROPOSAL_HOME"', handoff)
+        self.assertIn("swift package resolve --disable-sandbox", handoff)
+        self.assertIn("swift build --disable-sandbox --build-tests --only-use-versions-from-resolved-file", handoff)
+        self.assertIn('--package-path "$BUILD_PACKAGE_ROOT"', handoff)
+        self.assertIn("-disable-sandbox'", handoff)
+        self.assertIn("(deny process-fork)", handoff)
+        self.assertIn("(deny signal)", handoff)
+        self.assertIn("(allow signal (target children))", handoff)
+        self.assertGreaterEqual(handoff.count("--launchd-coalition"), 3)
+        process_wrapper = (Path.cwd() / "scripts/run_with_timeout.py").read_text(encoding="utf-8")
+        self.assertIn("coalition_info_pid_list", process_wrapper)
+        self.assertIn('"type": "launchd-service-coalition"', process_wrapper)
+        self.assertIn("git worktree add --detach", handoff)
+        self.assertIn('/usr/bin/env -i HOME="$PROPOSAL_HOME"', handoff)
+        self.assertIn('(deny network-outbound)', handoff)
+        self.assertIn('(subpath \\"$LIVE_ONTOLOGY_ROOT\\")', handoff)
+        self.assertIn('(deny file-read* (subpath \\"$OPERATOR_HOME\\")', handoff)
+        self.assertIn('(deny appleevent-send)', handoff)
+        self.assertIn('(global-name \\"com.apple.pboard\\")', handoff)
+        self.assertIn("readonly_sparql_proxy.py", handoff)
+        self.assertIn("snapshot_authority_state.py", handoff)
+        self.assertIn("proposal-processes.json", handoff)
+        self.assertIn("run_accessibility_contract.swift", handoff)
+        self.assertNotIn("test-without-building", handoff)
+        self.assertIn("validate_xctest_transcript.py", handoff)
+
+    def test_test_topology_is_part_of_the_protected_control_boundary(self) -> None:
+        self.assertIn("project.yml", verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
+        self.assertIn("Packages/OntologyKit/Package.swift", verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
+        self.assertIn("scripts/sync-ontology.sh", verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
+        self.assertIn("scripts/readonly_sparql_proxy.py", verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
+        self.assertIn("scripts/snapshot_authority_state.py", verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
+        self.assertIn("scripts/run_accessibility_contract.swift", verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
+        self.assertIn("scripts/validate_xctest_transcript.py", verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
+        self.assertIn("Sources/Harness/Harness.entitlements", verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
+        self.assertIn("Tests/HarnessUITests/HarnessHostedSmokeTests.swift", verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
+        self.assertIn(".github/codex", verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
+        store = (Path.cwd() / "Packages/OntologyKit/Sources/OntologyKit/ReviewQueueStore.swift").read_text()
+        self.assertIn('environment["HARNESS_ONTOLOGY_ROOT"]', store)
+
+    def test_signed_handoff_runs_and_validates_the_reserved_live_swift_test(self) -> None:
+        handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
+        self.assertIn("satisfactionGateAdamRealQuestionGetsCompleteAnswer", handoff)
+        self.assertIn("HARNESS_REQUIRE_LIVE_SATISFACTION=1", handoff)
+        self.assertIn("HARNESS_SATISFACTION_OUTPUT_DIR", handoff)
+        self.assertIn("swiftpm-testing-helper", handoff)
+        self.assertIn('--test-bundle-path "$LIVE_SWIFT_TEST_BINARY"', handoff)
+        self.assertNotIn('proposal_exec /usr/bin/xcrun swift test', handoff)
+        self.assertIn("validate_swiftpm_tests.py", handoff)
+        self.assertIn("LIVE_SWIFT_TRANSCRIPT", handoff)
+
+    def test_proposal_processes_stop_before_verifier_owned_live_evidence(self) -> None:
+        handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
+        terminated = handoff.rindex("terminate_proposal_processes")
+        final_inventory = handoff.rindex('swift_test_inventory.py"')
+        direct_oracle = handoff.rindex('live_satisfaction_oracle.py"')
+        manifest = handoff.index("MID_PR_HEAD=")
+        self.assertLess(terminated, final_inventory)
+        self.assertLess(terminated, direct_oracle)
+        self.assertLess(direct_oracle, manifest)
+        self.assertIn("--snapshot-output", handoff)
+        self.assertIn("--expected-graph-digest", handoff)
+
+    def test_video_is_bound_to_the_verified_candidate_window_not_main_display(self) -> None:
+        handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
+        self.assertIn('-l"$RECORDED_WINDOW_ID"', handoff)
+        self.assertNotIn("screencapture -v -V120 -m", handoff)
+        self.assertIn("recorded_running_app_proof", handoff)
+
+    def test_signed_ui_actions_are_scoped_to_exact_process_and_window(self) -> None:
+        driver = (Path.cwd() / "scripts/run_accessibility_contract.swift").read_text(encoding="utf-8")
+        handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
+        self.assertIn("AXUIElementCreateApplication(options.pid)", driver)
+        self.assertIn("keyDown.postToPid(pid)", driver)
+        self.assertIn('Set(["wait_for", "press", "set_value", "assert_not_present"])', driver)
+        self.assertNotIn("NSWorkspace.shared", driver)
+        self.assertEqual(handoff.count('run_accessibility_contract.swift"'), 5)
+        self.assertIn("--self-test-window-scope", handoff)
+        self.assertIn('[[ "$(jq -r .window_id "$INITIAL_RUNNING_APP_PROOF")" == "$RECORDED_WINDOW_ID" ]]', handoff)
+        self.assertNotIn("HarnessUITests-Runner", handoff)
+
+    def test_live_satisfaction_oracle_change_is_rejected_before_handoff_execution(self) -> None:
+        handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
+        protected = "Packages/OntologyKit/Tests/OntologyKitTests/SatisfactionGateLiveTests.swift"
+        self.assertIn(protected, verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
+        self.assertLess(handoff.index("hosted_verification_gate.sh"), handoff.index("live_satisfaction_oracle.py"))
+        oracle = (Path.cwd() / "scripts/live_satisfaction_oracle.py").read_text(encoding="utf-8")
+        for proposal_type in ("FusekiGraphHealthChecker", "HarnessRunService", "AgentRunnerBackendAdapter"):
+            self.assertNotIn(proposal_type, oracle)
+
+    def test_sol_authority_is_authenticated_before_first_proposal_execution(self) -> None:
+        handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
+        authority = handoff.index("verify_sol_authority.py")
+        first_proposal_execution = handoff.index("PROPOSAL_LABEL=expected-denial proposal_exec")
+        self.assertLess(authority, first_proposal_execution)
+        self.assertIn("$ROOT_DIR/.local-artifacts/sol-review/$SHA/sol-review.json", handoff)
+
+    def test_protected_test_bodies_replace_proposal_implementations(self) -> None:
+        handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
+        workflow = (Path.cwd() / ".github/workflows/verification.yml").read_text(encoding="utf-8")
+        for source in (handoff, workflow):
+            self.assertIn("prepare_protected_tests.py", source)
+        self.assertIn('--project-root "$BUILD_SOURCE_ROOT"', handoff)
+        self.assertIn('--package-path "$BUILD_PACKAGE_ROOT"', handoff)
+
+    def test_governance_instructions_are_part_of_protected_control_boundary(self) -> None:
+        self.assertIn("AGENTS.md", verify_hosted_evidence.PROTECTED_CONTROL_PATHS)
+
+    def test_proposal_writes_are_default_denied_and_model_access_is_mediated(self) -> None:
+        handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
+        self.assertGreaterEqual(handoff.count("(deny file-write* (require-not (require-any"), 2)
+        self.assertIn("readonly_ollama_proxy.py", handoff)
+        self.assertIn('HARNESS_OLLAMA_BASE_URL="http://localhost:$OLLAMA_PROXY_PORT"', handoff)
+        self.assertNotIn('(allow network-outbound (remote ip \\"localhost:11434\\"))', handoff)
+        self.assertIn('(deny network-outbound (remote ip \\"localhost:11434\\"))', handoff)
+        self.assertIn("snapshot_gate_dependencies.py", handoff)
+
+    def test_ui_actions_require_exact_window_binding_proof(self) -> None:
+        handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
+        self.assertEqual(handoff.count('--window-proof "$PREPARE_RUNNING_APP_PROOF"'), 1)
+        self.assertEqual(handoff.count('--window-proof "$FINAL_PREPARE_RUNNING_APP_PROOF"'), 1)
+        driver = (Path.cwd() / "scripts/run_accessibility_contract.swift").read_text(encoding="utf-8")
+        self.assertIn("window proof does not map to exactly one Accessibility window", driver)
+        self.assertIn("accessibility identifier is ambiguous inside the bound window", driver)
+        self.assertIn("--self-test-window-scope", driver)
+
+    def test_protected_test_inventory_is_rebuilt_after_proposal_execution(self) -> None:
+        handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
+        final_inventory = handoff.rindex('swift_test_inventory.py"')
+        final_app_test = handoff.rindex('validate_media.py"')
+        manifest = handoff.index("MID_PR_HEAD=")
+        self.assertLess(final_app_test, final_inventory)
+        self.assertLess(final_inventory, manifest)
+
+    def test_signature_identity_precedes_first_app_test_or_launch(self) -> None:
+        handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
+        identity = handoff.index("verify_app_identity.py")
+        unit_test = handoff.index('proposal_exec "$XCTEST_BINARY"')
+        ui_test = handoff.index("TRUSTED_LABEL=trusted-recorded-ui-prepare")
+        normal_launch = handoff.index('proposal_start "$APP_BUNDLE/Contents/MacOS/Harness"')
+        self.assertLess(identity, unit_test)
+        self.assertLess(identity, ui_test)
+        self.assertLess(identity, normal_launch)
+
+    def test_candidate_cannot_use_operator_signing_authority(self) -> None:
+        handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
+        confined_build = handoff.index("BUILD_LABEL=confined-app-build build_exec xcodebuild build")
+        trusted_signing = handoff.index("TRUSTED_LABEL=trusted-app-signing trusted_exec /usr/bin/codesign")
+        identity = handoff.index("verify_app_identity.py")
+        self.assertLess(confined_build, trusted_signing)
+        self.assertLess(trusted_signing, identity)
+        self.assertNotIn("trusted-ui-runner-signing", handoff)
+        self.assertNotIn("proposal_exec /usr/bin/codesign", handoff)
+        self.assertIn('(literal \\"/usr/bin/security\\")', handoff)
+
+    def test_hosted_ci_executes_and_freshly_revalidates_exact_ui_test(self) -> None:
+        verification = (Path.cwd() / ".github/workflows/verification.yml").read_text(encoding="utf-8")
+        acceptance = (Path.cwd() / ".github/workflows/acceptance-contract.yml").read_text(encoding="utf-8")
+        self.assertIn("HarnessHostedSmokeTests/testDelegationSurfaceAppears", verification)
+        self.assertIn('-only-testing:"$UI_TEST_IDENTIFIER"', verification)
+        self.assertIn("HarnessUITests.xcresult", verification)
+        self.assertIn('python3 -m venv "$RUNNER_TEMP/verification-venv"', verification)
+        self.assertIn("-m pip install pyshacl", verification)
+        self.assertIn('>> "$GITHUB_PATH"', verification)
+        self.assertIn('HARNESS_RDFLIB_PYTHON=$RUNNER_TEMP/verification-venv/bin/python', verification)
+        self.assertGreaterEqual(verification.count("--required-test \"$"), 2)
+        self.assertIn("fresh-hosted-ui-visible-result.png", verification)
+        self.assertIn("cmp \"$RUNNER_TEMP/fresh-hosted-ui-visible-result.png\"", verification)
+        for workflow in (verification, acceptance):
+            self.assertIn("pull_request:", workflow)
+            self.assertIn("github.event.pull_request.number == 19", workflow)
+            self.assertIn("0ce97219a340d9a53f5afb2a773bb2c9eb81b807", workflow)
+
+    def test_protected_gate_script_tests_run_on_the_mac_they_govern(self) -> None:
+        workflow = (Path.cwd() / ".github/workflows/verification.yml").read_text(encoding="utf-8")
+        gate_job = workflow.split("  gate-script-tests:", 1)[1].split(
+            "  validate-gate-script-evidence:", 1
+        )[0]
+        self.assertIn("runs-on: macos-latest", gate_job)
+        self.assertIn("brew install ffmpeg", gate_job)
+
+    def test_merge_waits_for_exact_release_tree_artifact(self) -> None:
+        merger = (Path.cwd() / "script/merge_verified_pr.sh").read_text(encoding="utf-8")
+        merge = merger.index('gh pr merge')
+        merge_sha = merger.index('MERGE_SHA=')
+        attestation = merger.index('verify_release_tree_run.py')
+        self.assertLess(merge, merge_sha)
+        self.assertLess(merge_sha, attestation)
+        self.assertIn("release-tree-verification.json", merger)
+
+    def test_permanent_installer_has_no_mutable_pr_bootstrap(self) -> None:
+        installer = (Path.cwd() / "script/install_local_gate_controls.sh").read_text(encoding="utf-8")
+        merge_gate = (Path.cwd() / "script/install_merge_gate.sh").read_text(encoding="utf-8")
+        self.assertNotIn("--bootstrap-pr", installer)
+        self.assertNotIn("--bootstrap", merge_gate)
+        self.assertIn("verify_repository_gate_state.py", installer)
+        self.assertIn("--require-ref refs/heads/main", installer)
+
+    def test_hosted_evidence_is_exact_head_bound_and_forks_are_rejected(self) -> None:
+        verification = (Path.cwd() / ".github/workflows/verification.yml").read_text(encoding="utf-8")
+        acceptance = (Path.cwd() / ".github/workflows/acceptance-contract.yml").read_text(encoding="utf-8")
+        self.assertIn("github.event.pull_request.head.sha", verification)
+        self.assertIn("run_gate_script_tests.py", verification)
+        self.assertIn("Fresh protected gate evidence verifier", verification)
+        self.assertIn("Fresh protected macOS evidence verifier", verification)
+        self.assertIn("Fork pull requests are not accepted", acceptance)
+
+    def test_periphery_uses_protected_configuration(self) -> None:
+        verification = (Path.cwd() / ".github/workflows/verification.yml").read_text(encoding="utf-8")
+        periphery = (Path.cwd() / "scripts/periphery_changed_gate.py").read_text(encoding="utf-8")
+        self.assertIn("trusted-base/.periphery.yml", verification)
+        self.assertIn('--config", str(config)', periphery)
+        protected = Path("/trusted/periphery.yml")
+        arguments = periphery_changed_gate.scan_arguments(
+            protected, Path("/tmp/findings.json")
+        )
+        self.assertEqual(arguments[arguments.index("--config") + 1], str(protected))
+        self.assertNotIn("/proposal/.periphery.yml", arguments)
+        self.assertNotIn("--report-include", arguments)
+        self.assertNotIn("--strict", arguments)
+
+    def test_local_statuses_include_pr_specific_evidence_binding(self) -> None:
+        sol = (Path.cwd() / "script/sol_review_gate.sh").read_text(encoding="utf-8")
+        handoff = (Path.cwd() / "script/handoff_gate.sh").read_text(encoding="utf-8")
+        for source in (sol, handoff):
+            self.assertIn("select_pull_request.py", source)
+            self.assertIn("EVIDENCE_BINDING", source)
+            self.assertIn("pr:$PR_NUMBER binding:", source)
+
+    def test_acceptance_authority_is_fully_commit_bound(self) -> None:
+        contract = json.loads((Path.cwd() / ".github/acceptance-contract.json").read_text(encoding="utf-8"))
+        self.assertEqual(validate_acceptance_contract.validate_handoff_contract(
+            contract,
+            repo=validate_acceptance_contract.BOOTSTRAP_REPO,
+            pr_number=validate_acceptance_contract.BOOTSTRAP_PR,
+            base_sha=validate_acceptance_contract.BOOTSTRAP_BASE,
+        ), [])
+        acceptance_workflow = (Path.cwd() / ".github/workflows/acceptance-contract.yml").read_text(encoding="utf-8")
+        sol_workflow = (Path.cwd() / ".github/workflows/sol-review.yml").read_text(encoding="utf-8")
+        validator = (Path.cwd() / "scripts/validate_acceptance_contract.py").read_text(encoding="utf-8")
+        self.assertNotIn("PR_BODY", acceptance_workflow)
+        self.assertNotIn("edited", acceptance_workflow)
+        self.assertNotIn("edited", sol_workflow)
+        self.assertNotIn("--pr-body-file", validator)
+        self.assertNotIn("pr_contract_digest", validator)
+
+    def test_sol_runtime_is_pinned_to_official_provider(self) -> None:
+        reviewer = (Path.cwd() / "script/sol_review_gate.sh").read_text(encoding="utf-8")
+        self.assertIn("--ignore-user-config", reviewer)
+        self.assertIn('model_provider="openai"', reviewer)
+        self.assertIn("verify_codex_runtime.py", reviewer)
+
+    def test_review_diff_is_direct_base_to_head_on_diverged_history(self) -> None:
+        reviewer = (Path.cwd() / "script/sol_review_gate.sh").read_text(encoding="utf-8")
+        self.assertIn('git diff --binary --find-renames "$BASE_SHA" "$HEAD_SHA"', reviewer)
+        self.assertNotIn('$BASE_SHA...$HEAD_SHA', reviewer)
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.com"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "Gate Test"], check=True)
+            (repo / "shared.txt").write_text("base\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "base"], check=True)
+            base = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+            subprocess.run(["git", "-C", str(repo), "switch", "-qc", "feature"], check=True)
+            (repo / "feature.txt").write_text("feature-only\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "feature"], check=True)
+            head = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+            subprocess.run(["git", "-C", str(repo), "switch", "-q", "main"], check=True)
+            (repo / "main.txt").write_text("main-only\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "advanced base"], check=True)
+            advanced_base = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+            direct = subprocess.check_output(["git", "-C", str(repo), "diff", advanced_base, head], text=True)
+            triple = subprocess.check_output(["git", "-C", str(repo), "diff", f"{advanced_base}...{head}"], text=True)
+            self.assertIn("main.txt", direct)
+            self.assertIn("feature.txt", direct)
+            self.assertNotIn("main.txt", triple)
+            self.assertNotEqual(base, advanced_base)
+
+    def test_rejection_probe_never_pushes_to_production_main(self) -> None:
+        probe = (Path.cwd() / "script/prove_merge_gate.sh").read_text(encoding="utf-8")
+        self.assertNotIn("HEAD:main", probe)
+        self.assertIn("$PROBE_SHA:refs/heads/$PROBE_BASE", probe)
+        self.assertIn("Production main changed", probe)
+        self.assertIn("git push --force git@github.com:dblaira/Harness.git", probe)
+        self.assertNotIn("--force-with-lease", probe)
+        self.assertIn("merges? are not allowed", probe)
+
+
+class ReleaseTreeTests(unittest.TestCase):
+    def test_read_only_proxy_rejects_every_update_form(self) -> None:
+        self.assertTrue(readonly_sparql_proxy.is_read_only_query("PREFIX ex: <x> SELECT * WHERE { ?s ?p ?o }"))
+        self.assertTrue(readonly_sparql_proxy.is_read_only_query("ASK { ?s ?p ?o }"))
+        for query in (
+            "INSERT DATA { <a> <b> <c> }",
+            "DELETE WHERE { ?s ?p ?o }",
+            "WITH <g> DELETE { ?s ?p ?o } WHERE { ?s ?p ?o }",
+            "LOAD <https://example.com/data>",
+        ):
+            self.assertFalse(readonly_sparql_proxy.is_read_only_query(query))
+
+    def test_process_group_wrapper_kills_a_child_left_by_successful_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            child_pid_path = root / "child.pid"
+            report_path = root / "report.json"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "run_with_timeout.py"),
+                    "--seconds", "10",
+                    "--process-report", str(report_path),
+                    "--",
+                    "/bin/sh", "-c", f"sleep 30 & echo $! > '{child_pid_path}'",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["retained_pids"], [])
+            self.assertEqual(report["status"], "PASS")
+            child_pid = child_pid_path.read_text(encoding="utf-8").strip()
+            self.assertNotEqual(
+                subprocess.run(["/bin/kill", "-0", child_pid], capture_output=True, check=False).returncode,
+                0,
+            )
+
+    @unittest.skipUnless(sys.platform == "darwin", "launchd coalitions are macOS-only")
+    def test_process_job_wrapper_kills_an_identity_cleared_setsid_child(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            child_pid_path = root / "setsid-child.pid"
+            report_path = root / "setsid-report.json"
+            program = (
+                "import subprocess,sys; "
+                "child=subprocess.Popen(['/usr/bin/env','-i',sys.executable,'-c',"
+                "'import time; time.sleep(30)'], "
+                "start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); "
+                "open(sys.argv[1],'w').write(str(child.pid))"
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "run_with_timeout.py"),
+                    "--seconds", "10",
+                    "--process-report", str(report_path),
+                    "--launchd-coalition",
+                    "--",
+                    sys.executable, "-c", program, str(child_pid_path),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["schema_version"], 3)
+            self.assertEqual(report["retained_pids"], [])
+            self.assertEqual(report["status"], "PASS")
+            self.assertEqual(report["job_boundary"]["type"], "launchd-service-coalition")
+            self.assertTrue(report["job_boundary"]["removed"])
+            child_pid = child_pid_path.read_text(encoding="utf-8").strip()
+            self.assertIn(int(child_pid), report["tracked_pids"])
+            self.assertNotEqual(
+                subprocess.run(["/bin/kill", "-0", child_pid], capture_output=True, check=False).returncode,
+                0,
+            )
+
+    @unittest.skipUnless(sys.platform == "darwin", "launchd coalitions are macOS-only")
+    def test_coalition_query_failure_fails_closed_after_removing_service(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            report_path = Path(directory) / "coalition-query-failure.json"
+            environment = dict(os.environ)
+            environment["HARNESS_TEST_FORCE_COALITION_QUERY_FAILURE"] = "1"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "run_with_timeout.py"),
+                    "--seconds", "10",
+                    "--process-report", str(report_path),
+                    "--launchd-coalition",
+                    "--",
+                    "/bin/sh", "-c", "sleep 30 & exit 0",
+                ],
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 125, result.stderr)
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "FAIL")
+            self.assertFalse(report["job_boundary"]["removed"])
+            self.assertTrue(any("coalition" in item for item in report["tracking_errors"]))
+
+    @unittest.skipUnless(sys.platform == "darwin", "sandbox-exec is macOS-only")
+    def test_proposal_sandbox_rejects_fork_before_a_child_can_detach(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            child_pid_path = root / "forbidden-child.pid"
+            report_path = root / "fork-denial-report.json"
+            program = (
+                "import subprocess,sys; "
+                "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)'], "
+                "start_new_session=True); open(sys.argv[1],'w').write(str(child.pid))"
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "run_with_timeout.py"),
+                    "--seconds", "10",
+                    "--process-report", str(report_path),
+                    "--",
+                    "/usr/bin/sandbox-exec", "-p",
+                    "(version 1)(allow default)(deny process-fork)",
+                    "--", sys.executable, "-c", program, str(child_pid_path),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(child_pid_path.exists())
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["retained_pids"], [])
+            self.assertEqual(report["status"], "FAIL")
+
+    @unittest.skipUnless(sys.platform == "darwin", "sandbox-exec is macOS-only")
+    def test_write_allow_list_denies_every_path_outside_scratch_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            scratch = root / "scratch"
+            scratch.mkdir()
+            allowed = scratch / "allowed"
+            denied = root / "denied"
+            profile = (
+                "(version 1)(allow default)"
+                f'(deny file-write* (require-not (require-any (subpath "{scratch}"))))'
+            )
+            allowed_result = subprocess.run(
+                ["/usr/bin/sandbox-exec", "-p", profile, "/usr/bin/touch", str(allowed)],
+                capture_output=True,
+                check=False,
+            )
+            denied_result = subprocess.run(
+                ["/usr/bin/sandbox-exec", "-p", profile, "/usr/bin/touch", str(denied)],
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(allowed_result.returncode, 0)
+            self.assertTrue(allowed.is_file())
+            self.assertNotEqual(denied_result.returncode, 0)
+            self.assertFalse(denied.exists())
+
+    @unittest.skipUnless(sys.platform == "darwin", "launchd coalitions are macOS-only")
+    def test_launchd_coalition_preserves_the_outer_sandbox(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            forbidden = root / "forbidden-write"
+            report_path = root / "coalition-sandbox-report.json"
+            profile = (
+                "(version 1)(allow default)"
+                f'(deny file-write* (subpath "{root}"))'
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "run_with_timeout.py"),
+                    "--seconds", "10",
+                    "--process-report", str(report_path),
+                    "--launchd-coalition",
+                    "--",
+                    "/usr/bin/sandbox-exec", "-p", profile,
+                    "--", "/usr/bin/touch", str(forbidden),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(forbidden.exists())
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["schema_version"], 3)
+            self.assertEqual(report["retained_pids"], [])
+            self.assertTrue(report["job_boundary"]["removed"])
+
+    def test_process_group_permission_error_falls_back_to_owned_members(self) -> None:
+        original_killpg = run_with_timeout.os.killpg
+        original_kill = run_with_timeout.os.kill
+        original_members = run_with_timeout.group_members
+        calls: list[tuple[int, int]] = []
+        run_with_timeout.os.killpg = lambda *_args: (_ for _ in ()).throw(PermissionError())
+        run_with_timeout.os.kill = lambda pid, signum: calls.append((pid, int(signum)))
+        run_with_timeout.group_members = lambda _pgid: [
+            {"pid": 101, "uid": os.getuid(), "command": "owned"},
+            {"pid": 202, "uid": os.getuid() + 1, "command": "protected"},
+        ]
+        try:
+            run_with_timeout.signal_group(99, run_with_timeout.signal.SIGTERM)
+        finally:
+            run_with_timeout.os.killpg = original_killpg
+            run_with_timeout.os.kill = original_kill
+            run_with_timeout.group_members = original_members
+        self.assertEqual(calls, [(101, int(run_with_timeout.signal.SIGTERM))])
+
+    def test_release_run_rejects_wrong_workflow_identity(self) -> None:
+        errors = verify_release_tree_run.validate_run(
+            {
+                "path": ".github/workflows/untrusted.yml",
+                "event": "workflow_dispatch",
+                "head_sha": "a" * 40,
+                "conclusion": "success",
+                "repository": {"full_name": "dblaira/Harness"},
+            },
+            "dblaira/Harness",
+            "a" * 40,
+        )
+        self.assertIn("release attestation came from the wrong workflow or event", errors)
+
+    def test_merge_commit_attests_exact_verified_tree_and_checks(self) -> None:
+        merge, first, head, tree = "m" * 40, "a" * 40, "b" * 40, "t" * 40
+        status_contexts = set(verify_release_tree.REQUIRED_STATUS_CONTEXTS)
+        statuses = [{
+            "context": context,
+            "state": "success",
+            "target_url": f"https://github.com/dblaira/Harness/pull/19#{context}",
+            "creator": {"login": verify_release_tree.REQUIRED_STATUS_CONTEXTS[context]},
+            "description": f"success pr:19 binding:{'a' * 24}",
+        } for context in status_contexts]
+        checks = {"check_runs": [
+            {
+                "name": context,
+                "status": "completed",
+                "conclusion": "success",
+                "html_url": f"https://example/{context}",
+                "app": {"slug": "github-actions"},
+            }
+            for context in verify_release_tree.REQUIRED_CONTEXTS
+            if context not in status_contexts
+        ]}
+        errors, attestation = verify_release_tree.validate(
+            merge,
+            f"{merge} {first} {head}",
+            tree,
+            tree,
+            statuses,
+            checks,
+        )
+        self.assertEqual(errors, [])
+        self.assertEqual(attestation["verified_head"], head)
+
+    def test_release_tree_rejects_a_different_main_tree(self) -> None:
+        errors, _ = verify_release_tree.validate(
+            "m" * 40,
+            f"{'m' * 40} {'a' * 40} {'b' * 40}",
+            "x" * 40,
+            "y" * 40,
+            {"statuses": []},
+            {"check_runs": []},
+        )
+        self.assertIn(
+            "main merge tree does not exactly match the verified pull-request head tree",
+            errors,
+        )
+
+    def test_unbound_local_status_is_rejected(self) -> None:
+        context = "Trusted hosted verification"
+        statuses = [{
+            "context": context,
+            "state": "success",
+            "creator": {"login": "dblaira"},
+            "target_url": "https://example/status",
+            "description": "success without contract binding",
+        }]
+        errors, _ = verify_release_tree.validate(
+            "m" * 40,
+            f"{'m' * 40} {'a' * 40} {'b' * 40}",
+            "t" * 40,
+            "t" * 40,
+            statuses,
+            {"check_runs": []},
+        )
+        self.assertIn(
+            "required status lacks PR and contract binding: Trusted hosted verification",
+            errors,
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

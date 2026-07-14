@@ -461,6 +461,11 @@ public struct AgentRunner: Sendable {
 
     static let hermesStopSequences = ["\nUser:", "\n\nUser:", "\n---\nUser:"]
 
+    static func hermesBaseURL(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL? {
+        let configured = environment["HARNESS_OLLAMA_BASE_URL"] ?? "http://127.0.0.1:11434"
+        return URL(string: configured.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+    }
+
     static func hermesGeneratePayload(
         system: String,
         history: [ConversationTurn],
@@ -523,9 +528,10 @@ public struct AgentRunner: Sendable {
 
     /// Local Ollama server, no network egress, no subscription or key.
     private func runHermesLocal(system: String, history: [ConversationTurn], user: String) async throws -> String {
-        guard let url = URL(string: "http://127.0.0.1:11434/api/generate") else {
+        guard let baseURL = Self.hermesBaseURL() else {
             throw RunError.notFound("Ollama endpoint")
         }
+        let url = baseURL.appendingPathComponent("api/generate")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -538,7 +544,7 @@ public struct AgentRunner: Sendable {
         )
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            throw RunError.failed("Ollama not reachable on 127.0.0.1:11434. Is `ollama serve` running?")
+            throw RunError.failed("The configured Ollama generation endpoint is unavailable.")
         }
         guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let text = obj["response"] as? String else {

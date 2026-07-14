@@ -1,0 +1,20 @@
+included:
+  - Sources
+  - Tests
+  - Packages/OntologyKit/Sources
+  - Packages/OntologyKit/Tests
+
+excluded:
+  - .build
+  - build
+  - Generated
+
+only_rules:
+  - duplicate_imports
+  - empty_count
+  - force_cast
+  - force_try
+  - implicitly_unwrapped_optional
+  - unneeded_parentheses_in_closure_argument
+
+reporter: xcode

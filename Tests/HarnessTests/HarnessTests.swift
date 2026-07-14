@@ -83,12 +83,41 @@ import OntologyKit
     #expect(codex.provenance == "Backend metadata records \(Backend.codex.invocationMethod) invocation.")
 }
 
-@Test func communicationWorkbenchToolsSurfaceAdamSkills() {
-    let capabilities = HarnessCapabilityRegistry.defaultCapabilities()
+@Test func communicationWorkbenchToolsSurfaceAdamSkills() throws {
+    let home = FileManager.default.temporaryDirectory
+        .appendingPathComponent("HarnessCommunicationSkillTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+
+    let skillsRoot = home.appendingPathComponent(
+        "Developer/GitHub/Harness/Docs/skills",
+        isDirectory: true
+    )
+    for name in HarnessCapabilityRegistry.adamCommunicationSkillNames {
+        let skillFile = skillsRoot
+            .appendingPathComponent(name, isDirectory: true)
+            .appendingPathComponent("SKILL.md")
+        try FileManager.default.createDirectory(
+            at: skillFile.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        ---
+        name: \(name)
+        description: Test fixture for \(name).
+        ---
+        # \(name)
+        """.write(to: skillFile, atomically: true, encoding: .utf8)
+    }
+
+    let capabilities = HarnessCapabilityRegistry.defaultCapabilities(
+        homeDirectory: home,
+        includeProtectedUserFolders: false
+    )
     let group = WorkbenchToolGroup.communicationSkills(from: capabilities)
 
     #expect(group.title == "Communication")
     #expect(group.tools.count == HarnessCapabilityRegistry.adamCommunicationSkillNames.count)
+    #expect(Set(group.tools.compactMap(\.skillName)) == HarnessCapabilityRegistry.adamCommunicationSkillNames)
     #expect(group.tools.contains { $0.title == "Pyramid chapters" && $0.skillName == "articulate-leadership-communication" })
     #expect(group.tools.contains { $0.title == "Adam's words" && $0.skillName == "adams-words" })
 }

@@ -77,6 +77,19 @@ targets:
         "TEST_HOST[sdk=macosx*]": "$(BUILT_PRODUCTS_DIR)/Harness.app/Contents/MacOS/Harness"
         "BUNDLE_LOADER[sdk=macosx*]": "$(TEST_HOST)"
 
+  HarnessUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - Tests/HarnessUITests
+    dependencies:
+      - target: Harness
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Harness
+
 schemes:
   Harness:
     build:
@@ -88,3 +101,24 @@ schemes:
     test:
       targets:
         - HarnessTests
+
+  HarnessUnitVerification:
+    build:
+      targets:
+        Harness: all
+    test:
+      targets:
+        - HarnessTests
+
+  HarnessUIVerification:
+    build:
+      targets:
+        Harness: all
+    test:
+      targets:
+        - HarnessUITests
+      environmentVariables:
+        HARNESS_EXPECTED_PID: ${HARNESS_EXPECTED_PID}
+        HARNESS_EXPECTED_WINDOW_BOUNDS: ${HARNESS_EXPECTED_WINDOW_BOUNDS}
+        HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER: ${HARNESS_FINAL_ACCESSIBILITY_IDENTIFIER}
+        HARNESS_ATTACH_EXISTING_APP: ${HARNESS_ATTACH_EXISTING_APP}

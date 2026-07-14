@@ -35,7 +35,14 @@ for source_file in "${source_files[@]}"; do
   destination_file="$RESOURCE_DIR/$(basename "$source_file")"
   {
     printf '%s\n\n' "$HEADER"
-    cat "$source_file"
+    IFS= read -r first_line < "$source_file" || true
+    if [[ "${first_line:-}" == "$HEADER" ]]; then
+      # Canonical files may themselves be generated exports. Keep this sync
+      # idempotent instead of adding another generated-copy header per build.
+      tail -n +2 "$source_file" | sed '1{/^$/d;}'
+    else
+      cat "$source_file"
+    fi
   } > "$destination_file"
 done
 

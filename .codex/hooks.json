@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/adamblair/.local/bin/harness-stop-gate",
+            "timeout": 300
+          }
+        ]
+      }
+    ]
+  }
+}
