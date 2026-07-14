@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import stat
 import sys
 from pathlib import Path
 
@@ -52,7 +53,7 @@ def copy_protected_tests(
                 continue
             proposed_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(protected_path, proposed_path, follow_symlinks=False)
-            os.chmod(proposed_path, 0o444)
+            os.chmod(proposed_path, stat.S_IRUSR)
     return errors
 
 

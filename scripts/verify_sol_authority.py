@@ -60,8 +60,8 @@ def main() -> int:
     try:
         payload = json.load(sys.stdin)
         review = json.loads(args.review.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        print(f"invalid Sol authority evidence: {error}", file=sys.stderr)
+    except (OSError, json.JSONDecodeError):
+        print("invalid Sol authority evidence", file=sys.stderr)
         return 1
     errors, target_url = verify(
         payload,
@@ -72,8 +72,7 @@ def main() -> int:
         args.repository,
     )
     if errors:
-        for error in errors:
-            print(error, file=sys.stderr)
+        print(f"Sol authority validation failed ({len(errors)} checks)", file=sys.stderr)
         return 1
     print(target_url)
     return 0
