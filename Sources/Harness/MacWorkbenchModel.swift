@@ -4,6 +4,7 @@ import CryptoKit
 import Foundation
 import OntologyKit
 import OSLog
+import Security
 import UniformTypeIdentifiers
 
 private let suiteCaptureLogger = Logger(
@@ -447,6 +448,15 @@ final class MacWorkbenchModel: ObservableObject {
     /// component allowed to form a proposal for Adam's review.
     func refreshSuiteCaptureInbox() {
         guard Self.shouldRunSuiteCaptureBackgroundWork() else { return }
+        // Shared iCloud/Documents capture folders are an installed-app
+        // capability. An ad-hoc copy launched from /tmp or DerivedData must
+        // never touch them: macOS quite correctly turns that copy into a new
+        // Documents-permission prompt. The signed installed app is the only
+        // runtime allowed to poll the suite inbox.
+        guard Self.canAccessExternalSuiteCaptureDirectories() else {
+            suiteCaptureLogger.info("Suite capture refresh skipped for an untrusted app copy.")
+            return
+        }
         guard suiteCaptureTask == nil else { return }
         let receiptStore = suiteCaptureReceiptStore
         let sources = Self.defaultSuiteCaptureInboxSources()
@@ -908,6 +918,11 @@ final class MacWorkbenchModel: ObservableObject {
             opportunityBoardLoadIssue = error.localizedDescription
         }
 
+        // Keep the app-owned board available in every build, but do not
+        // resolve the shared iCloud/Documents phone-drop container from an
+        // ad-hoc test copy.
+        guard Self.canAccessExternalSuiteCaptureDirectories() else { return }
+
         // Ubiquity container resolution, directory creation, and placeholder
         // materialization can all block on file-provider I/O. Never perform
         // them on the main actor: a disconnected provider previously froze
@@ -956,7 +971,33 @@ final class MacWorkbenchModel: ObservableObject {
         FileManager.default.url(forUbiquityContainerIdentifier: "iCloud.com.adamblair.harness")
     }()
 
+    /// Returns true only for the signed Harness runtime that owns the
+    /// iCloud entitlement. Temporary ad-hoc copies share the bundle ID but do
+    /// not carry a team identifier, and must not trigger a Documents prompt.
+    nonisolated static func canAccessExternalSuiteCaptureDirectories() -> Bool {
+        #if os(macOS)
+        var code: SecStaticCode?
+        let bundleURL = Bundle.main.bundleURL as CFURL
+        guard SecStaticCodeCreateWithPath(bundleURL, SecCSFlags(), &code) == errSecSuccess,
+              let code else { return false }
+        var signingInformation: CFDictionary?
+        guard SecCodeCopySigningInformation(
+            code,
+            SecCSFlags(rawValue: kSecCSSigningInformation),
+            &signingInformation
+        ) == errSecSuccess,
+              let signingInformation,
+              let values = signingInformation as? [String: Any],
+              let teamIdentifier = values[kSecCodeInfoTeamIdentifier as String] as? String
+        else { return false }
+        return teamIdentifier == "7FKUS5M5QS"
+        #else
+        return false
+        #endif
+    }
+
     nonisolated static func phoneCaptureDelegationsDirectory() -> URL? {
+        guard canAccessExternalSuiteCaptureDirectories() else { return nil }
         guard let container = phoneCaptureContainerURL else { return nil }
         let dir = container
             .appendingPathComponent("Documents", isDirectory: true)
