@@ -1959,7 +1959,7 @@ struct MacChatView: View {
         }
         .padding(12)
         .background(Theme.savyDeepNavy, in: RoundedRectangle(cornerRadius: 9))
-        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.macRed.opacity(isSelected ? 0.95 : 0.58), lineWidth: isSelected ? 2 : 1))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.savyPaper.opacity(isSelected ? 0.96 : 0.78), lineWidth: 1))
     }
 
     private func readinessIndicator(_ readiness: BackendReadiness) -> some View {
@@ -2016,7 +2016,7 @@ struct MacChatView: View {
         }
         .padding(12)
         .background(Theme.savyDeepNavy, in: RoundedRectangle(cornerRadius: 9))
-        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.macRed.opacity(0.72), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.savyPaper.opacity(0.82), lineWidth: 1))
     }
 
     private var centerViewTitle: String {
